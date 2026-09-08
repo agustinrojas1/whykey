@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {"adapter": "hyprland", "test": "inspect_accepts_an_explicit_hyprland_instance", "fixtures": ["../hyprland/instances.json", "../hyprland/binds-representative.json"]},
+    {"adapter": "sway", "test": "sway_adapter_reads_effective_bindings", "fixtures": ["swaymsg-bindings.sh"]},
+    {"adapter": "i3", "test": "i3_adapter_reads_effective_bindings", "fixtures": ["i3-msg-bindings.sh"]},
+    {"adapter": "gnome", "test": "gnome_adapter_reads_media_key_bindings", "fixtures": ["gsettings-gnome.sh"]},
+    {"adapter": "kde", "test": "kde_adapter_reads_global_shortcut_configuration", "fixtures": ["kglobalshortcutsrc"]},
+    {"adapter": "xfce", "test": "xfce_adapter_reads_effective_channel_shortcuts", "fixtures": ["xfconf-query-shortcuts.sh"]},
+    {"adapter": "cinnamon", "test": "cinnamon_adapter_reads_gsettings_bindings", "fixtures": ["gsettings-cinnamon.sh"]},
+    {"adapter": "mate", "test": "mate_adapter_reads_marco_global_keybindings", "fixtures": ["gsettings-mate.sh"]},
+    {"adapter": "niri", "test": "niri_adapter_reads_literal_kdl_bindings", "fixtures": ["niri-config.kdl"]},
+    {"adapter": "river", "test": "river_adapter_reads_literal_init_map_commands", "fixtures": ["river-init"]},
+    {"adapter": "wayfire", "test": "wayfire_adapter_reads_literal_ini_bindings", "fixtures": ["wayfire.ini"]},
+    {"adapter": "labwc", "test": "labwc_adapter_reads_openbox_compatible_keybinds", "fixtures": ["labwc-rc.xml"]},
+    {"adapter": "bspwm-sxhkd", "test": "sxhkd_adapter_reads_static_binding_with_conditional_runtime", "fixtures": ["sxhkdrc"]},
+    {"adapter": "openbox", "test": "openbox_adapter_reads_xml_keybinds_conditionally", "fixtures": ["openbox-rc.xml"]},
+    {"adapter": "x11.xbindkeys", "test": "x11_adapter_reads_literal_xbindkeys_configuration", "fixtures": ["xbindkeysrc"]},
+    {"adapter": "awesome", "test": "programmable_x11_adapters_read_literal_bindings", "fixtures": ["awesome-rc.lua"]},
+    {"adapter": "qtile", "test": "programmable_x11_adapters_read_literal_bindings", "fixtures": ["qtile-config.py"]},
+    {"adapter": "xmonad", "test": "programmable_x11_adapters_read_literal_bindings", "fixtures": ["xmonad.hs"]},
+    {"adapter": "generic", "test": "generic_desktop_is_reported_without_a_hyprland_error", "fixtures": ["generic-wayland.env"]}
+  ]
+}

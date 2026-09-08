@@ -1,0 +1,2650 @@
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::{collections::HashSet, env, fs, path::PathBuf};
+
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::process::Stdio;
+
+fn binary() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_whykey"));
+    // CLI fixtures must not inherit the developer's live compositor, bus, or
+    // terminal identity. Individual tests opt into the context they model.
+    for variable in [
+        "HYPRLAND_INSTANCE_SIGNATURE",
+        "SWAYSOCK",
+        "I3SOCK",
+        "SSH_CONNECTION",
+        "SSH_TTY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
+        "WAYLAND_DISPLAY",
+        "DISPLAY",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "GTK_IM_MODULE",
+        "QT_IM_MODULE",
+        "XMODIFIERS",
+        "TERM_PROGRAM",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+    ] {
+        command.env_remove(variable);
+    }
+    command
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("whykey-{label}-{}-{id}", std::process::id()))
+}
+
+#[test]
+fn json_output_is_parseable_without_a_controlling_tty() {
+    let output = binary().args(["--json", "ctrl+z"]).output().unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["key"]["key"], "Z");
+    assert_eq!(value["key_display"], "CTRL + Z");
+    assert!(
+        value["layers"]
+            .as_array()
+            .is_some_and(|layers| !layers.is_empty())
+    );
+}
+
+#[test]
+fn json_v2_exposes_context_and_structured_evidence() {
+    let output = binary()
+        .args(["--json", "--schema-version", "2", "ctrl+z"])
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["operation"], "inspect");
+    assert_eq!(value["input"]["key_display"], "CTRL + Z");
+    assert!(value["context"].is_object());
+    assert!(
+        value["path"]
+            .as_array()
+            .is_some_and(|path| { path.iter().any(|layer| layer["evidence"].is_array()) })
+    );
+}
+
+#[test]
+fn json_v2_is_available_for_capabilities() {
+    let output = binary()
+        .args(["capabilities", "--json", "--schema-version", "2"])
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["operation"], "capabilities");
+    assert!(value["capabilities"].is_array());
+}
+
+#[test]
+fn inspect_sequence_json_is_parseable() {
+    let output = binary()
+        .args(["inspect", "ctrl+x", "ctrl+s", "--json"])
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["sequence_display"], "CTRL+X CTRL+S");
+    assert_eq!(value["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(value["steps"][0]["key_display"], "CTRL + X");
+    assert!(value["steps"][0]["layers"].is_array());
+}
+
+#[test]
+fn inspect_sequence_text_reports_each_step() {
+    let output = binary()
+        .args(["inspect", "ctrl+x", "ctrl+s"])
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Sequence: CTRL+X CTRL+S"));
+    assert!(text.contains("Step 1/2: CTRL + X"));
+    assert!(text.contains("Step 2/2: CTRL + S"));
+}
+
+#[test]
+fn inspect_rejects_an_invalid_sequence() {
+    let output = binary()
+        .args(["inspect", "ctrl+x", "ctrl+shift"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("step 2"));
+}
+
+#[test]
+fn inspect_reports_when_focused_window_is_unavailable() {
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--focused"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("focused-window"));
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_focused_uses_a_sway_tree_pid() {
+    let base = temp_dir("focused-sway");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let swaymsg = bin.join("swaymsg");
+    fs::write(
+        &swaymsg,
+        "#!/bin/sh\ncase \"$*\" in *get_tree*) printf '%s\\n' '{\"nodes\":[{\"focused\":true,\"pid\":1}]}' ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&swaymsg).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&swaymsg, permissions).unwrap();
+
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--focused", "--verbose"])
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("SWAYSOCK", "/tmp/whykey-sway.sock")
+        .env("XDG_CURRENT_DESKTOP", "sway")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("target pid: 1"));
+    assert!(text.contains("target selection source: Sway get_tree"));
+    assert!(text.contains("Interactive application"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_focused_uses_an_i3_tree_pid() {
+    let base = temp_dir("focused-i3");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let i3msg = bin.join("i3-msg");
+    fs::write(
+        &i3msg,
+        "#!/bin/sh\ncase \"$*\" in *get_tree*) printf '%s\\n' '{\"nodes\":[{\"focused\":true,\"pid\":1}]}' ;; *) exit 1 ;; esac\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&i3msg).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&i3msg, permissions).unwrap();
+
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--focused", "--verbose"])
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("I3SOCK", "/tmp/whykey-i3.sock")
+        .env("XDG_CURRENT_DESKTOP", "i3")
+        .env_remove("SWAYSOCK")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("target pid: 1"));
+    assert!(text.contains("target selection source: i3 get_tree"));
+    assert!(text.contains("Interactive application"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_focused_uses_a_hyprland_activewindow_pid() {
+    let base = temp_dir("focused-hyprland");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let hyprctl = bin.join("hyprctl");
+    fs::write(
+        &hyprctl,
+        "#!/bin/sh\ncase \"$*\" in *activewindow*) printf '%s\\n' '{\"pid\":1}' ;; *binds*) printf '%s\\n' '[]' ;; *submap*) printf '%s\\n' '\"default\"' ;; *devices*) printf '%s\\n' '{\"keyboards\":[]}' ;; *) exit 2 ;; esac\n",
+    )
+    .unwrap();
+    let ghostty = bin.join("ghostty");
+    fs::write(&ghostty, "#!/bin/sh\nexit 0\n").unwrap();
+    for command in [&hyprctl, &ghostty] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--focused", "--verbose"])
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "test")
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("target pid: 1"));
+    assert!(text.contains("target selection source: Hyprland activewindow"));
+    assert!(text.contains("Interactive application"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn inspect_rejects_conflicting_target_selectors() {
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--pid", "1", "--focused"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used together"));
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_accepts_an_explicit_hyprland_instance() {
+    let base = temp_dir("hyprland-instance");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let hyprctl = bin.join("hyprctl");
+    fs::write(
+        &hyprctl,
+        "#!/bin/sh\n[ \"$1\" = \"-i\" ] || exit 2\ninstance=$2\nshift 2\ncase \"$*\" in *binds*) printf '%s\\n' '[]' ;; *submap*) printf '%s\\n' '\"default\"' ;; *devices*) printf '%s\\n' '{\"keyboards\":[]}' ;; *) exit 2 ;; esac\n",
+    )
+    .unwrap();
+    let ghostty = bin.join("ghostty");
+    fs::write(&ghostty, "#!/bin/sh\nexit 0\n").unwrap();
+    for command in [&hyprctl, &ghostty] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--instance", "second", "--verbose"])
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("TERM_PROGRAM", "ghostty")
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("selected Hyprland instance: second"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_discovers_a_valid_instance_beside_a_malformed_inventory_entry() {
+    let base = temp_dir("hyprland-instance-discovery");
+    let bin = base.join("bin");
+    let log = base.join("hyprctl.log");
+    fs::create_dir_all(&bin).unwrap();
+    let hyprctl = bin.join("hyprctl");
+    fs::write(
+        &hyprctl,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HYPRCTL_LOG\"\nif [ \"$1\" = instances ]; then printf '%s\\n' '[{\"instance\":\"first\",\"wl_socket\":\"wayland-1\"},{\"instance\":42,\"wl_socket\":\"wayland-invalid\"},{\"instance\":\"second\",\"wl_socket\":\"wayland-2\"}]'; exit 0; fi\n[ \"$1\" = -i ] || exit 2\n[ \"$2\" = second ] || exit 2\nshift 2\ncase \"$*\" in *binds*) printf '%s\\n' '[]' ;; *submap*) printf '%s\\n' '\"default\"' ;; *devices*) printf '%s\\n' '{\"keyboards\":[]}' ;; *) exit 2 ;; esac\n",
+    )
+    .unwrap();
+    let ghostty = bin.join("ghostty");
+    fs::write(&ghostty, "#!/bin/sh\nexit 0\n").unwrap();
+    for command in [&hyprctl, &ghostty] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let output = binary()
+        .args(["inspect", "ctrl+x"])
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HYPRCTL_LOG", log.to_string_lossy().into_owned())
+        .env("WAYLAND_DISPLAY", "wayland-2")
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .output()
+        .unwrap();
+
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "inspection output: {output:?}"
+    );
+    let calls = fs::read_to_string(log).unwrap();
+    assert!(calls.lines().any(|call| call == "-i second binds -j"));
+    assert!(calls.lines().any(|call| call == "-i second submap -j"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn inspect_accepts_a_process_target() {
+    let pid = std::process::id().to_string();
+    let output = binary()
+        .args(["inspect", "ctrl+x", "--pid", "--verbose"])
+        .arg(pid.clone())
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains(&format!("target pid: {pid}")));
+}
+
+#[test]
+fn inspect_reports_a_missing_process_target() {
+    let output = binary()
+        .args(["inspect", "--json", "ctrl+x", "--pid", "4294967295"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value["steps"][0]["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["layer"] == "Interactive application")
+            .and_then(|layer| layer["status"].as_str()),
+        Some("Unavailable")
+    );
+}
+
+#[test]
+fn invalid_combinations_have_a_cli_error_status() {
+    let output = binary().arg("ctrl+shift").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("non-modifier key"));
+}
+
+#[cfg(unix)]
+#[test]
+fn extension_command_uses_the_versioned_stdin_stdout_protocol() {
+    let base = temp_dir("extension");
+    fs::create_dir_all(&base).unwrap();
+    let extension = base.join("inspect-key");
+    fs::write(
+        &extension,
+        r##"#!/bin/sh
+read request
+printf '%s\n' '{"schema_version":1,"capabilities":["identify_action"],"result":{"status":"handled","propagation":"stops","summary":"editor handled the key","details":["mode: normal"]}}'
+"##,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&extension).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&extension, permissions).unwrap();
+
+    let output = binary()
+        .args(["extension", extension.to_str().unwrap(), "ctrl+x", "--json"])
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["key_display"], "CTRL + X");
+    assert_eq!(value["extension"]["capabilities"][0], "identify_action");
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn doctor_returns_structured_json() {
+    let output = binary().args(["--json", "doctor"]).output().unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert!(value["tty"]["available"].is_boolean());
+    assert!(value["hyprland"]["ipc"].is_boolean());
+    assert!(value["hyprland"]["applicable"].is_boolean());
+    assert!(value["sway"]["ipc"].is_boolean());
+    assert!(value["i3"]["ipc"].is_boolean());
+    assert!(value["gnome"]["ipc"].is_boolean());
+    assert!(value["kde"]["ipc"].is_boolean());
+    assert!(value["xfce"]["ipc"].is_boolean());
+    assert!(value["cinnamon"]["ipc"].is_boolean());
+    assert!(value["mate"]["ipc"].is_boolean());
+    assert!(value["niri"]["ipc"].is_boolean());
+    assert!(value["river"]["ipc"].is_boolean());
+    assert!(value["wayfire"]["ipc"].is_boolean());
+    assert!(value["labwc"]["ipc"].is_boolean());
+    assert!(value["bspwm_sxhkd"]["ipc"].is_boolean());
+    assert!(value["openbox"]["ipc"].is_boolean());
+    assert!(value["compositor"]["applicable"].is_boolean());
+    assert!(value["ghostty"]["effective_keybinds"].is_boolean());
+    assert!(value["evdev"]["available"].is_boolean());
+    assert!(value["evdev"]["devices"].is_array());
+    assert!(value["remappers"].is_array());
+    assert!(value["ime"].is_array());
+    assert!(value["shell_snapshot"].is_boolean());
+    assert!(value.get("terminal_adapter").is_some());
+}
+
+#[test]
+fn doctor_reports_a_keyd_configuration_as_remapper_evidence() {
+    let base = temp_dir("doctor-keyd");
+    fs::create_dir_all(&base).unwrap();
+    let config = base.join("keyd.conf");
+    fs::write(&config, "[main]\ncapslock = overload(control, esc)\n").unwrap();
+
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("WHYKEY_KEYD_CONFIG", &config)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let keyd = value["remappers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "keyd")
+        .unwrap();
+    assert!(
+        keyd["transformations"][0]
+            .as_str()
+            .is_some_and(|value| value.contains("capslock -> overload"))
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn ime_runtime_query_reports_the_active_fcitx5_engine_without_changing_it() {
+    let base = temp_dir("doctor-ime-runtime");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = base.join("fcitx5-remote-ran");
+    let remote = bin.join("fcitx5-remote");
+    fs::write(
+        &remote,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > '{}'\nexit 134\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let dbus_send = bin.join("dbus-send");
+    fs::write(
+        &dbus_send,
+        "#!/bin/sh\ncase \"$5\" in\n  org.freedesktop.DBus.ListNames) printf '%s\\n' 'org.fcitx.Fcitx5' ;;\n  org.fcitx.Fcitx.Controller1.CurrentInputMethod) printf '%s\\n' '   keyboard-us' ;;\n  org.fcitx.Fcitx.Controller1.State) printf '%s\\n' 'int32 2' ;;\n  *) exit 1 ;;\nesac\nexit 0\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&remote).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&remote, permissions.clone()).unwrap();
+    fs::set_permissions(&dbus_send, permissions).unwrap();
+
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", &bin)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let fcitx = value["ime"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["engine"] == "fcitx5")
+        .unwrap();
+    assert_eq!(fcitx["active_engine"], "keyboard-us");
+    assert_eq!(fcitx["state"], "active");
+    assert!(fcitx.get("query_error").is_none());
+    assert!(!marker.exists(), "fcitx5-remote must not be launched");
+
+    let inspection = binary()
+        .args(["--json", "ctrl+a"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", &bin)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+    let inspection: serde_json::Value = serde_json::from_slice(&inspection.stdout).unwrap();
+    let ime_layer = inspection["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layer| layer["layer"] == "Input method")
+        .unwrap();
+    assert_eq!(ime_layer["status"], "Indeterminate");
+    assert!(
+        ime_layer["details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|detail| detail == "active engine: keyboard-us")
+    );
+    assert!(!marker.exists(), "fcitx5-remote must not be launched");
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn inspection_includes_detected_remapper_as_conditional_evidence() {
+    let base = temp_dir("inspect-keyd");
+    fs::create_dir_all(&base).unwrap();
+    let config = base.join("keyd.conf");
+    fs::write(&config, "[main]\ncapslock = overload(control, esc)\n").unwrap();
+
+    let output = binary()
+        .args(["ctrl+c"])
+        .env("WHYKEY_KEYD_CONFIG", &config)
+        .env("XDG_CURRENT_DESKTOP", "XFCE")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Input remapper"));
+    assert!(text.contains("capslock -> overload(control, esc)"));
+    assert!(text.contains("remapper may transform"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn capabilities_expose_implemented_and_planned_entries() {
+    let output = binary().args(["--json", "capabilities"]).output().unwrap();
+
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    let capabilities = value["capabilities"].as_array().unwrap();
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "cli.inspect.sequence"
+            && capability["implemented"] == true
+            && capability["availability"] == "available"
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "cli.replay"
+            && capability["implemented"] == true
+            && capability["availability"] == "available"
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "cli.bindings"
+            && capability["implemented"] == true
+            && capability["availability"] == "available"
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "cli.conflicts"
+            && capability["implemented"] == true
+            && capability["availability"] == "available"
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "cli.extensions"
+            && capability["implemented"] == true
+            && capability["availability"] == "available"
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "input.ime-context" && capability["implemented"] == true
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "compositor.x11.xbindkeys" && capability["implemented"] == true
+    }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["id"] == "compositor.programmable-x11" && capability["implemented"] == true
+    }));
+}
+
+#[test]
+fn capabilities_text_is_human_readable() {
+    let output = binary().arg("capabilities").output().unwrap();
+
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("whykey capabilities"));
+    assert!(text.contains("whykey extension"));
+    assert!(text.contains("cli.inspect.sequence"));
+}
+
+#[test]
+fn replay_renders_a_saved_json_report_without_injecting_input() {
+    let base = temp_dir("replay");
+    fs::create_dir_all(&base).unwrap();
+    let source = binary().args(["--json", "ctrl+z"]).output().unwrap();
+    let path = base.join("capture.json");
+    fs::write(&path, source.stdout).unwrap();
+
+    let output = binary()
+        .args(["replay", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("whykey replay"));
+    assert!(text.contains("no input was injected"));
+    assert!(text.contains("CTRL + Z"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn replay_preserves_json_documents() {
+    let base = temp_dir("replay-json");
+    fs::create_dir_all(&base).unwrap();
+    let source = binary().args(["--json", "ctrl+z"]).output().unwrap();
+    let path = base.join("capture.json");
+    fs::write(&path, source.stdout).unwrap();
+
+    let output = binary()
+        .args(["--json", "replay", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["key_display"], "CTRL + Z");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn replay_can_upgrade_a_saved_v1_document_to_schema_v2() {
+    let base = temp_dir("replay-upgrade-v2");
+    fs::create_dir_all(&base).unwrap();
+    let source = binary().args(["--json", "ctrl+z"]).output().unwrap();
+    let path = base.join("capture.json");
+    fs::write(&path, source.stdout).unwrap();
+
+    let output = binary()
+        .args([
+            "--json",
+            "--schema-version",
+            "2",
+            "replay",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["operation"], "inspect");
+    assert!(value["path"].is_array());
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn replay_renders_a_schema_v2_document() {
+    let base = temp_dir("replay-v2");
+    fs::create_dir_all(&base).unwrap();
+    let source = binary()
+        .args(["--json", "--schema-version", "2", "ctrl+z"])
+        .output()
+        .unwrap();
+    let path = base.join("capture.json");
+    fs::write(&path, source.stdout).unwrap();
+
+    let output = binary()
+        .args(["replay", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("CTRL + Z"));
+    assert!(text.contains("whykey replay"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn replay_rejects_an_invalid_file() {
+    let base = temp_dir("replay-invalid");
+    fs::create_dir_all(&base).unwrap();
+    let path = base.join("invalid.json");
+    fs::write(&path, r#"{"schema_version":3}"#).unwrap();
+
+    let output = binary()
+        .args(["replay", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("schema_version 1 or 2"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn doctor_detects_gnu_screen_context() {
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("STY", "1234.pts-0.host")
+        .env_remove("TMUX")
+        .env_remove("ZELLIJ")
+        .env_remove("ZELLIJ_SESSION_NAME")
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["multiplexer"], "screen");
+}
+
+#[test]
+fn doctor_reports_nested_multiplexers() {
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("TMUX", "/tmp/tmux-1000/default,1,0")
+        .env("STY", "1234.pts-0.host")
+        .env_remove("ZELLIJ")
+        .env_remove("ZELLIJ_SESSION_NAME")
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["multiplexer"], "tmux + screen");
+}
+
+#[test]
+fn remote_ssh_sessions_skip_local_hyprland_inspection() {
+    let base = temp_dir("remote-ssh");
+    fs::create_dir_all(&base).unwrap();
+    let output = binary()
+        .args(["--verbose", "ctrl+z"])
+        .env("SSH_TTY", "/dev/pts/99")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SSH_CONNECTION")
+        .env("PATH", &base)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("not applicable in this remote session"));
+    assert!(!text.contains("failed to run hyprctl"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn ime_runtime_query_skips_fcitx_remote_when_session_bus_is_unavailable() {
+    let base = temp_dir("doctor-ime-no-bus");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = base.join("fcitx5-remote-ran");
+    let remote = bin.join("fcitx5-remote");
+    fs::write(
+        &remote,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > '{}'\nexit 134\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let dbus_send = bin.join("dbus-send");
+    fs::write(&dbus_send, "#!/bin/sh\nexit 1\n").unwrap();
+    for command in [&remote, &dbus_send] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", &bin)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    assert!(!marker.exists(), "fcitx5-remote must not be launched");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let fcitx = value["ime"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["engine"] == "fcitx5")
+        .unwrap();
+    assert!(
+        fcitx["query_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("skipped Fcitx5 runtime query"))
+    );
+
+    let inspection = binary()
+        .args(["--json", "ctrl+a"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", &bin)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+    assert_ne!(inspection.status.code(), Some(2));
+    assert!(!marker.exists(), "inspect must not launch fcitx5-remote");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn ime_runtime_query_reports_malformed_reply_without_launching_fcitx_remote() {
+    let base = temp_dir("doctor-ime-dbus-runtime");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = base.join("fcitx5-remote-ran");
+    let remote = bin.join("fcitx5-remote");
+    fs::write(
+        &remote,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > '{}'\nexit 134\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let dbus_send = bin.join("dbus-send");
+    fs::write(
+        &dbus_send,
+        "#!/bin/sh\ncase \"$5\" in\n  org.freedesktop.DBus.ListNames) printf '%s\\n' 'org.fcitx.Fcitx5' ;;\n  org.fcitx.Fcitx.Controller1.CurrentInputMethod) printf '%s\\n' 'int32 2' ;;\n  org.fcitx.Fcitx.Controller1.State) printf '%s\\n' 'int32 2' ;;\n  *) exit 1 ;;\nesac\nexit 0\n",
+    )
+    .unwrap();
+    for command in [&remote, &dbus_send] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", &bin)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    assert!(!marker.exists(), "fcitx5-remote must not be launched");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let fcitx = value["ime"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["engine"] == "fcitx5")
+        .unwrap();
+    assert!(fcitx.get("active_engine").is_none());
+    assert!(fcitx.get("state").is_none());
+    assert!(
+        fcitx["query_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("no D-Bus string value"))
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn ime_runtime_query_times_out_without_launching_fcitx_remote() {
+    let base = temp_dir("doctor-ime-timeout");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = base.join("fcitx5-remote-ran");
+    let remote = bin.join("fcitx5-remote");
+    fs::write(
+        &remote,
+        format!(
+            "#!/bin/sh\nprintf '%s' ran > '{}'\nexit 134\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    let dbus_send = bin.join("dbus-send");
+    fs::write(&dbus_send, "#!/bin/sh\nexec sleep 2\n").unwrap();
+    for command in [&remote, &dbus_send] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let mut path = vec![bin.clone()];
+    path.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+    let path = env::join_paths(path).unwrap();
+
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", path)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("WHYKEY_COMMAND_TIMEOUT_MS", "50")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_ne!(output.status.code(), Some(2));
+    assert!(!marker.exists(), "fcitx5-remote must not be launched");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let fcitx = value["ime"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["engine"] == "fcitx5")
+        .unwrap();
+    assert!(
+        fcitx["query_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("timed out")),
+        "unexpected Fcitx5 timeout evidence: {}",
+        fcitx["query_error"]
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_hyprland_ipc_keeps_the_report_conditional_and_continues() {
+    let base = temp_dir("hyprland-stale-ipc");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+
+    let hyprctl = bin.join("hyprctl");
+    let stale_error = include_str!("fixtures/hyprland/hyprctl-stale.stderr").trim();
+    fs::write(
+        &hyprctl,
+        format!("#!/bin/sh\nprintf '%s\\n' '{stale_error}' >&2\nexit 1\n"),
+    )
+    .unwrap();
+    let ghostty = bin.join("ghostty");
+    fs::write(&ghostty, "#!/bin/sh\nexit 0\n").unwrap();
+    for command in [&hyprctl, &ghostty] {
+        let mut permissions = fs::metadata(command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(command, permissions).unwrap();
+    }
+
+    let output = binary()
+        .args(["--verbose", "ctrl+left"])
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HOME", &base)
+        .env("TERM_PROGRAM", "ghostty")
+        .env("XDG_CURRENT_DESKTOP", "Hyprland")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "stale-instance")
+        // The shell layer is ambient-sensitive (SHELL/inputrc); pin a Bash
+        // snapshot so this Hyprland-conditional test stays deterministic.
+        .env("SHELL", "/bin/bash")
+        .env(
+            "WHYKEY_READLINE_BINDINGS",
+            "backward-word can be found on \"\\e[1;5D\".\n",
+        )
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(text.contains("Hyprland IPC is unavailable"));
+    assert!(text.contains("Ghostty"));
+    assert!(text.contains("Bash / Readline"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn doctor_marks_hyprland_not_applicable_for_remote_ssh() {
+    let output = binary()
+        .args(["--json", "doctor"])
+        .env("SSH_TTY", "/dev/pts/99")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ssh"], true);
+    assert_eq!(value["hyprland"]["ipc"], false);
+    assert_eq!(value["hyprland"]["applicable"], false);
+}
+
+#[test]
+fn evdev_requires_a_device_path_when_device_option_is_used() {
+    let output = binary().args(["listen", "--device"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--device requires a path"));
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_without_a_controlling_tty_is_an_operational_failure() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let output = Command::new("setsid")
+        .args(["--wait", executable, "listen", "--json", "--timeout", "0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("util-linux setsid must be available for the no-TTY test");
+    assert_eq!(output.status.code(), Some(1), "output: {output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no controlling terminal"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn listen_rejects_invalid_capture_limits() {
+    for (arguments, message) in [
+        (
+            &["listen", "--timeout", "0"][..],
+            "--timeout must be a positive",
+        ),
+        (
+            &["listen", "--count", "0"][..],
+            "--count must be a positive",
+        ),
+        (
+            &["listen", "--events", "press"][..],
+            "unsupported event mode",
+        ),
+        (
+            &["listen", "--events", "all"][..],
+            "--events all requires --evdev",
+        ),
+        (
+            &["listen", "--timeout", "1e308"][..],
+            "outside the supported duration range",
+        ),
+        (&["listen", "--output"][..], "--output requires a path"),
+        (
+            &["listen", "--output", "capture.json"][..],
+            "--output requires --json or --ndjson",
+        ),
+    ] {
+        let output = binary().args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "args: {arguments:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "args: {arguments:?} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn listen_help_documents_capture_limits_and_detailed_events() {
+    let output = binary().args(["listen", "--help"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("--timeout"));
+    assert!(text.contains("--count"));
+    assert!(text.contains("--events all"));
+    assert!(text.contains("--ndjson"));
+    assert!(text.contains("--output PATH"));
+}
+
+#[test]
+fn ndjson_is_reserved_for_capture_streams() {
+    let output = binary().args(["--ndjson", "ctrl+z"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only supported by `whykey listen`"));
+}
+
+#[test]
+fn no_arguments_prints_help_instead_of_entering_capture_mode() {
+    let output = binary().output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("whykey inspect"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Waiting for input"));
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_exits_through_a_pty_after_kitty_escape() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --json --schema-version 2 --timeout 2",
+        executable.replace('\'', "'\\''")
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    child
+        .stdin
+        .take()
+        .expect("script stdin")
+        .write_all(b"\x1b[27;1u")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(transcript.contains("whykey listen"));
+    assert!(
+        transcript.contains("Stopped."),
+        "transcript: {transcript:?}"
+    );
+    assert!(
+        transcript.contains("\x1b[<u"),
+        "listener did not restore the Kitty protocol: {transcript:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_exits_through_a_pty_after_kitty_ctrl_c() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --json --timeout 2",
+        executable.replace('\'', "'\\''")
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    child
+        .stdin
+        .take()
+        .expect("script stdin")
+        .write_all(b"\x1b[99;5u")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        transcript.contains("Stopped."),
+        "transcript: {transcript:?}"
+    );
+    assert!(transcript.contains("\x1b[<u"));
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_captures_kitty_ctrl_z_through_a_pty() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --json --timeout 2",
+        executable.replace('\'', "'\\''")
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    child
+        .stdin
+        .take()
+        .expect("script stdin")
+        // A real Kitty chord starts with a physical modifier event. It must
+        // not be reported instead of the chord itself.
+        .write_all(b"\x1b[57442;5u\x1b[122;5u")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        transcript.contains("\"key_display\": \"CTRL + Z\""),
+        "transcript: {transcript:?}"
+    );
+    assert!(transcript.contains("Kitty keyboard protocol"));
+    assert!(transcript.contains("\x1b[<u"));
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_ignores_a_kitty_release_before_the_next_press() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --json --schema-version 2 --timeout 2",
+        executable.replace('\'', "'\\''")
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    child
+        .stdin
+        .take()
+        .expect("script stdin")
+        .write_all(b"\x1b[13;1:3u\x1b[122;5u")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(transcript.contains("\"key_display\": \"CTRL + Z\""));
+    assert!(!transcript.contains("\"key_display\": \"RETURN\""));
+    assert!(transcript.contains("\"operation\": \"listen\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_ndjson_writes_one_compact_v2_record_to_stdout() {
+    let base = temp_dir("listen-ndjson");
+    fs::create_dir_all(&base).unwrap();
+    let stream = base.join("events.ndjson");
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --ndjson --timeout 2 > '{}'",
+        executable.replace('\'', "'\\''"),
+        stream.display()
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    child
+        .stdin
+        .take()
+        .expect("script stdin")
+        .write_all(b"\x1b[122;5u")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+
+    let records = fs::read_to_string(&stream).unwrap();
+    let lines: Vec<_> = records.lines().collect();
+    assert_eq!(lines.len(), 1, "records: {records:?}");
+    let record: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(record["schema_version"], 2);
+    assert_eq!(record["operation"], "listen");
+    assert_eq!(record["input"]["key_display"], "CTRL + Z");
+    assert!(record["observation"].is_object());
+    assert!(record["path"].is_array());
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_output_exports_a_replayable_capture_without_stdout_records() {
+    let base = temp_dir("listen-output");
+    fs::create_dir_all(&base).unwrap();
+    let export = base.join("capture.ndjson");
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --ndjson --output '{}' --timeout 2",
+        executable.replace('\'', "'\\''"),
+        export.display()
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    child
+        .stdin
+        .take()
+        .expect("script stdin")
+        .write_all(b"\x1b[122;5u")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+
+    let records = fs::read_to_string(&export).unwrap();
+    let line = records.lines().next().expect("one exported record");
+    let record: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!(record["schema_version"], 2);
+    assert_eq!(record["operation"], "listen");
+    assert_eq!(record["input"]["key_display"], "CTRL + Z");
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!transcript.contains("\"key_display\""));
+
+    let replay = binary()
+        .args(["replay", export.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(replay.status.success(), "replay output: {replay:?}");
+    assert!(String::from_utf8_lossy(&replay.stdout).contains("CTRL + Z"));
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_repeat_restores_between_reports() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --json --repeat --count 2 --timeout 3",
+        executable.replace('\'', "'\\''")
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let mut stdin = child.stdin.take().expect("script stdin");
+    stdin.write_all(b"\x1b[122;5u").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    stdin.write_all(b"\x1b[122;5u").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "script output: {output:?}");
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        transcript.matches("\"key_display\": \"CTRL + Z\"").count(),
+        2,
+        "transcript: {transcript:?}"
+    );
+    assert_eq!(
+        transcript.matches("Waiting for input...").count(),
+        2,
+        "each report must start a fresh, restored capture cycle: {transcript:?}"
+    );
+    assert_eq!(transcript.matches("\x1b[<u").count(), 2);
+}
+
+#[cfg(unix)]
+fn high_rate_capture_records(event_count: usize) -> Result<String, String> {
+    let base = temp_dir("listen-high-rate");
+    fs::create_dir_all(&base).unwrap();
+    let stream = base.join("events.ndjson");
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --ndjson --repeat --count {event_count} --timeout 90 > '{}'",
+        executable.replace('\'', "'\\''"),
+        stream.display()
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the high-rate listener test");
+    // Give `script` and whykey time to create the PTY and enter raw capture
+    // mode before injecting a burst. Without this, the shell can echo the
+    // first bytes instead of delivering them to the listener.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let mut stdin = child.stdin.take().expect("script stdin");
+    let writer = std::thread::spawn(move || {
+        let event = b"\x1b[122;5u";
+        let chunk_size = 100;
+        let mut remaining = event_count;
+        let mut error = None;
+        while remaining > 0 {
+            let count = remaining.min(chunk_size);
+            let mut chunk = Vec::with_capacity(count * event.len());
+            for _ in 0..count {
+                chunk.extend_from_slice(event);
+            }
+            if let Err(write_error) = stdin.write_all(&chunk) {
+                error = Some(write_error.to_string());
+                break;
+            }
+            remaining -= count;
+        }
+        error
+    });
+    let output = child.wait_with_output().unwrap();
+    let writer_error = writer.join().expect("high-rate writer thread");
+
+    let records = fs::read_to_string(&stream).unwrap();
+    let _ = fs::remove_dir_all(base);
+    if output.status.success() {
+        Ok(records)
+    } else {
+        Err(format!(
+            "script output: {output:?}; writer: {writer_error:?}; records: {}",
+            records.lines().count()
+        ))
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "interactive capture restores after every report; bulk streaming is not a release capability"]
+fn listen_sustains_a_bounded_high_rate_stream() {
+    let event_count = 1_000;
+    let records = high_rate_capture_records(event_count).unwrap();
+    let lines: Vec<_> = records.lines().collect();
+    assert_eq!(
+        lines.len(),
+        event_count,
+        "captured records: {}",
+        lines.len()
+    );
+    for line in lines {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(record["operation"], "listen");
+        assert_eq!(record["input"]["key_display"], "CTRL + Z");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "sustained capture gate; run explicitly when validating throughput"]
+fn listen_sustains_60000_events() {
+    let event_count = 60_000;
+    let records = high_rate_capture_records(event_count).unwrap();
+    assert_eq!(records.lines().count(), event_count);
+}
+
+#[cfg(unix)]
+fn paced_capture_latencies(event_count: usize) -> Vec<std::time::Duration> {
+    let base = temp_dir("listen-latency");
+    fs::create_dir_all(&base).unwrap();
+    let stream = base.join("events.ndjson");
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --ndjson --repeat --count {event_count} --timeout 10 > '{}'",
+        executable.replace('\'', "'\\''"),
+        stream.display()
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the latency gate");
+
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(event_count)));
+    let reader_stream = stream.clone();
+    let reader_sent = std::sync::Arc::clone(&sent);
+    let reader = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut offset = 0;
+        let mut latencies = Vec::with_capacity(event_count);
+        while latencies.len() < event_count && std::time::Instant::now() < deadline {
+            if let Ok(bytes) = fs::read(&reader_stream) {
+                if bytes.len() > offset {
+                    let new_bytes = &bytes[offset..];
+                    if let Some(last_newline) = new_bytes.iter().rposition(|byte| *byte == b'\n') {
+                        let complete_end = offset + last_newline + 1;
+                        let records = new_bytes[..=last_newline]
+                            .iter()
+                            .filter(|byte| **byte == b'\n')
+                            .count();
+                        let now = std::time::Instant::now();
+                        let sent = reader_sent.lock().unwrap();
+                        let first = latencies.len();
+                        let last = (first + records).min(sent.len());
+                        latencies
+                            .extend(sent[first..last].iter().map(|timestamp| now - *timestamp));
+                        offset = complete_end;
+                    }
+                }
+            }
+            if latencies.len() < event_count {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        latencies
+    });
+
+    let mut stdin = child.stdin.take().expect("script stdin");
+    let writer_sent = std::sync::Arc::clone(&sent);
+    let writer = std::thread::spawn(move || {
+        let event = b"\x1b[122;5u";
+        let chunk_size = 10;
+        let mut remaining = event_count;
+        while remaining > 0 {
+            let count = remaining.min(chunk_size);
+            let mut chunk = Vec::with_capacity(count * event.len());
+            for _ in 0..count {
+                chunk.extend_from_slice(event);
+            }
+            let timestamp = std::time::Instant::now();
+            writer_sent
+                .lock()
+                .unwrap()
+                .extend(std::iter::repeat_n(timestamp, count));
+            stdin
+                .write_all(&chunk)
+                .expect("latency writer must reach the listener");
+            remaining -= count;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+
+    let output = child.wait_with_output().unwrap();
+    writer.join().expect("latency writer thread");
+    let latencies = reader.join().expect("latency reader thread");
+    assert!(output.status.success(), "script output: {output:?}");
+    let _ = fs::remove_dir_all(base);
+    latencies
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "capture latency measurement; run explicitly when validating scheduling"]
+fn listen_capture_p95_latency_is_measured() {
+    let mut latencies = paced_capture_latencies(1_000);
+    assert_eq!(latencies.len(), 1_000);
+    latencies.sort_unstable();
+    let p95_index = (latencies.len() * 95).div_ceil(100) - 1;
+    let p95 = latencies[p95_index];
+    let p50 = latencies[latencies.len() / 2];
+    assert!(
+        p95 < std::time::Duration::from_secs(1),
+        "capture p95 latency measurement exceeded the sanity bound: {p95:?}"
+    );
+    println!("capture p50 latency: {p50:?}; p95 latency: {p95:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_timeout_restores_the_pty_protocol() {
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --json --timeout 0.2",
+        executable.replace('\'', "'\\''")
+    );
+    let mut child = Command::new("script")
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    let _stdin = child.stdin.take().expect("script stdin");
+    let output = child.wait_with_output().unwrap();
+    let transcript = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        transcript.contains("capture timed out"),
+        "transcript: {transcript:?}"
+    );
+    assert!(
+        transcript.contains("\x1b[<u"),
+        "listener did not restore the Kitty protocol: {transcript:?}"
+    );
+}
+
+#[cfg(unix)]
+fn listener_transcript_after_signal(signal: libc::c_int) -> String {
+    use std::os::unix::process::CommandExt;
+
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "exec '{}' listen --json --timeout 2",
+        executable.replace('\'', "'\\''")
+    );
+    let mut command = Command::new("script");
+    command
+        .args(["-qfec", &command_line, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Keep the signal scoped to script and the listener it launches; the
+        // test runner must not receive the synthetic Ctrl+C.
+        .process_group(0);
+    let mut child = command
+        .spawn()
+        .expect("util-linux script must provide a PTY for the listener test");
+    let _stdin = child.stdin.take().expect("script stdin");
+    let script_pid = child.id();
+    let listener_pid = (0..20).find_map(|_| {
+        let pid = fs::read_to_string(format!("/proc/{script_pid}/task/{script_pid}/children"))
+            .ok()
+            .and_then(|children| {
+                children
+                    .split_whitespace()
+                    .next()
+                    .and_then(|child| child.parse().ok())
+            });
+        if pid.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        pid
+    });
+    let Some(listener_pid) = listener_pid else {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("script must expose the listener child");
+    };
+    // Let the listener finish termios/protocol setup before delivering the
+    // signal; otherwise the interrupt can legitimately occur during startup.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    // SAFETY: the PID comes from the script process's kernel-maintained child
+    // list and identifies the listener, not the test runner.
+    let result = unsafe { libc::kill(listener_pid, signal) };
+    assert_eq!(result, 0, "failed to interrupt listener");
+    let output = child.wait_with_output().unwrap();
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_sigint_restores_the_pty_protocol() {
+    let transcript = listener_transcript_after_signal(libc::SIGINT);
+    assert!(
+        transcript.contains("terminal settings restored"),
+        "transcript: {transcript:?}"
+    );
+    assert!(
+        transcript.contains("\x1b[<u"),
+        "listener did not restore the Kitty protocol: {transcript:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_sigterm_restores_the_pty_protocol() {
+    let transcript = listener_transcript_after_signal(libc::SIGTERM);
+    assert!(
+        transcript.contains("terminal settings restored"),
+        "transcript: {transcript:?}"
+    );
+    assert!(
+        transcript.contains("\x1b[<u"),
+        "listener did not restore the Kitty protocol: {transcript:?}"
+    );
+}
+
+#[test]
+fn completions_emit_a_shell_script() {
+    for shell in ["bash", "zsh", "fish"] {
+        let output = binary().args(["completions", shell]).output().unwrap();
+        assert!(output.status.success(), "completion shell: {shell}");
+        let text = String::from_utf8_lossy(&output.stdout);
+        for command in [
+            "inspect",
+            "listen",
+            "doctor",
+            "capabilities",
+            "bindings",
+            "conflicts",
+            "extension",
+            "replay",
+            "shell-init",
+            "completions",
+        ] {
+            assert!(
+                text.contains(command),
+                "{shell} completion missing {command}"
+            );
+        }
+        assert!(
+            text.contains("ndjson"),
+            "{shell} completion missing ndjson: {text}"
+        );
+        for placeholder in [
+            "__COMMANDS__",
+            "__SHELLS__",
+            "__EXAMPLES__",
+            "__COMMON_OPTIONS__",
+            "__INSPECT_OPTIONS__",
+            "__LISTEN_OPTIONS__",
+        ] {
+            assert!(
+                !text.contains(placeholder),
+                "{shell} completion has unresolved {placeholder}"
+            );
+        }
+    }
+}
+
+#[test]
+fn help_advertises_sequence_inspection() {
+    let output = binary().arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("whykey inspect"));
+    assert!(text.contains("--pid PID"));
+    assert!(text.contains("--focused"));
+    assert!(text.contains("whykey capabilities"));
+    assert!(text.contains("whykey replay"));
+    assert!(text.contains("ctrl+x ctrl+s"));
+}
+
+#[test]
+fn fish_shell_init_captures_the_active_mode() {
+    let output = binary().args(["shell-init", "fish"]).output().unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("bind --all"));
+    assert!(text.contains("WHYKEY_FISH_MODE $fish_bind_mode"));
+}
+
+#[test]
+fn kitty_adapter_is_used_when_terminal_is_kitty() {
+    let base = temp_dir("kitty-cli");
+    let kitty = base.join("kitty");
+    fs::create_dir_all(&kitty).unwrap();
+    fs::write(
+        kitty.join("kitty.conf"),
+        "map ctrl+insert copy_to_clipboard\n",
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["ctrl+insert"])
+        .env("TERM_PROGRAM", "kitty")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("HOME", PathBuf::from(&base))
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Kitty consumes the key"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn alacritty_yaml_adapter_is_used_when_configured() {
+    let base = temp_dir("alacritty-cli");
+    fs::create_dir_all(&base).unwrap();
+    let config = base.join("alacritty.yml");
+    fs::write(
+        &config,
+        "key_bindings:\n  - { key: Left, mods: Control, chars: \"\\e[1;5D\" }\n",
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["ctrl+left"])
+        .env("TERM_PROGRAM", "alacritty")
+        .env("ALACRITTY_CONFIG_FILE", &config)
+        .env("XDG_CONFIG_HOME", &base)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Alacritty sends a sequence to the PTY"));
+    assert!(text.contains("sequence: ESC [ 1 ; 5 D"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn wezterm_adapter_uses_effective_key_command() {
+    let base = temp_dir("wezterm-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let wezterm = bin.join("wezterm");
+    fs::write(
+        &wezterm,
+        "#!/bin/sh\nprintf '%s\\n' 'Default key table' '-----------------' '    CTRL                 c                ->   CopyTo=\"Clipboard\"'",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&wezterm).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wezterm, permissions).unwrap();
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = format!("{}:{}", bin.display(), path.to_string_lossy());
+    let output = binary()
+        .args(["ctrl+c"])
+        .env("TERM_PROGRAM", "WezTerm")
+        .env("PATH", path)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("WezTerm consumes the key"));
+    assert!(text.contains("CopyTo=\"Clipboard\""));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn sway_adapter_reads_effective_bindings() {
+    let base = temp_dir("sway-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let swaymsg = bin.join("swaymsg");
+    fs::write(
+        &swaymsg,
+        include_str!("fixtures/sessions/swaymsg-bindings.sh"),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&swaymsg).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&swaymsg, permissions).unwrap();
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = format!("{}:{}", bin.display(), path.to_string_lossy());
+    let output = binary()
+        .args(["ctrl+c"])
+        .env("SWAYSOCK", "/tmp/whykey-test-sway.sock")
+        .env("XDG_CURRENT_DESKTOP", "sway")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("PATH", path)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Sway"));
+    assert!(text.contains("active binding found"));
+    assert!(text.contains("exec copy"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn i3_adapter_reads_effective_bindings() {
+    let base = temp_dir("i3-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let i3msg = bin.join("i3-msg");
+    fs::write(&i3msg, include_str!("fixtures/sessions/i3-msg-bindings.sh")).unwrap();
+    let mut permissions = fs::metadata(&i3msg).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&i3msg, permissions).unwrap();
+
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = format!("{}:{}", bin.display(), path.to_string_lossy());
+    let output = binary()
+        .args(["ctrl+c"])
+        .env("I3SOCK", "/tmp/whykey-test-i3.sock")
+        .env("XDG_CURRENT_DESKTOP", "i3")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env("PATH", path)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("i3"));
+    assert!(text.contains("active binding found"));
+    assert!(text.contains("exec copy"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn generic_desktop_is_reported_without_a_hyprland_error() {
+    let base = temp_dir("desktop-context-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let path = bin.to_string_lossy().into_owned();
+    let output = binary()
+        .args(["ctrl+c"])
+        .env("XDG_CURRENT_DESKTOP", "LXQt")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env("PATH", path)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Desktop compositor"));
+    assert!(text.contains("LXQt (wayland) detected"));
+    assert!(!text.contains("failed to run hyprctl"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn virtual_session_matrix_covers_supported_desktop_adapters() {
+    let value: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/sessions/matrix.json")).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    let entries = value["entries"].as_array().unwrap();
+    let expected = [
+        "hyprland",
+        "sway",
+        "i3",
+        "gnome",
+        "kde",
+        "xfce",
+        "cinnamon",
+        "mate",
+        "niri",
+        "river",
+        "wayfire",
+        "labwc",
+        "bspwm-sxhkd",
+        "openbox",
+        "x11.xbindkeys",
+        "awesome",
+        "qtile",
+        "xmonad",
+        "generic",
+    ];
+    let source = include_str!("cli.rs");
+    let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sessions");
+    let mut seen = HashSet::new();
+
+    for entry in entries {
+        let adapter = entry["adapter"].as_str().unwrap();
+        assert!(
+            expected.contains(&adapter),
+            "fixture matrix contains unknown adapter {adapter}"
+        );
+        assert!(
+            seen.insert(adapter),
+            "duplicate fixture entry for {adapter}"
+        );
+        let test_name = entry["test"].as_str().unwrap();
+        assert!(
+            source.contains(&format!("fn {test_name}(")),
+            "fixture matrix test {test_name} is not present in tests/cli.rs"
+        );
+        for fixture in entry["fixtures"].as_array().unwrap() {
+            let fixture = fixture.as_str().unwrap();
+            let path = fixture_root.join(fixture);
+            assert!(path.is_file(), "missing virtual-session fixture {fixture}");
+        }
+    }
+
+    assert_eq!(seen.len(), expected.len());
+    for adapter in expected {
+        assert!(
+            seen.contains(adapter),
+            "missing fixture entry for {adapter}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn xfce_adapter_reads_effective_channel_shortcuts() {
+    let base = temp_dir("xfce-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let xfconf = bin.join("xfconf-query");
+    fs::write(
+        &xfconf,
+        include_str!("fixtures/sessions/xfconf-query-shortcuts.sh"),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&xfconf).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&xfconf, permissions).unwrap();
+
+    let output = binary()
+        .args(["super+r"])
+        .env("XDG_CURRENT_DESKTOP", "XFCE")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Xfce"));
+    assert!(text.contains("global shortcut consumes the key"));
+    assert!(text.contains("xfrun4"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn niri_adapter_reads_literal_kdl_bindings() {
+    let base = temp_dir("niri-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let config_dir = base.join("niri");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("config.kdl");
+    fs::write(&config, include_str!("fixtures/sessions/niri-config.kdl")).unwrap();
+
+    let output = binary()
+        .args(["super+return"])
+        .env("XDG_CURRENT_DESKTOP", "niri")
+        .env("XDG_SESSION_DESKTOP", "niri")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("PATH", &bin)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Niri"));
+    assert!(text.contains("config contains a matching binding"));
+    assert!(text.contains("spawn"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn river_adapter_reads_literal_init_map_commands() {
+    let base = temp_dir("river-cli");
+    let config_dir = base.join("river");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("init");
+    fs::write(&config, include_str!("fixtures/sessions/river-init")).unwrap();
+
+    let output = binary()
+        .args(["super+return"])
+        .env("XDG_CURRENT_DESKTOP", "river")
+        .env("XDG_SESSION_DESKTOP", "river")
+        .env("PATH", "/nonexistent")
+        .env("XDG_CONFIG_HOME", &base)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("River"));
+    assert!(text.contains("matching map command"));
+    assert!(text.contains("spawn foot"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn wayfire_adapter_reads_literal_ini_bindings() {
+    let base = temp_dir("wayfire-cli");
+    fs::create_dir_all(&base).unwrap();
+    let config = base.join("wayfire.ini");
+    fs::write(&config, include_str!("fixtures/sessions/wayfire.ini")).unwrap();
+
+    let output = binary()
+        .args(["super+shift+t"])
+        .env("XDG_CURRENT_DESKTOP", "wayfire")
+        .env("XDG_SESSION_DESKTOP", "wayfire")
+        .env("PATH", "/nonexistent")
+        .env("XDG_CONFIG_HOME", &base)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Wayfire"));
+    assert!(text.contains("matching binding"));
+    assert!(text.contains("terminal"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn labwc_adapter_reads_openbox_compatible_keybinds() {
+    let base = temp_dir("labwc-cli");
+    let config_dir = base.join("labwc");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("rc.xml");
+    fs::write(&config, include_str!("fixtures/sessions/labwc-rc.xml")).unwrap();
+
+    let output = binary()
+        .args(["super+ctrl+t"])
+        .env("XDG_CURRENT_DESKTOP", "labwc")
+        .env("XDG_SESSION_DESKTOP", "labwc")
+        .env("PATH", "/nonexistent")
+        .env("XDG_CONFIG_HOME", &base)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("labwc"));
+    assert!(text.contains("matching labwc keybind"));
+    assert!(text.contains("Execute: foot"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn xfce_bindings_inventory_is_versioned() {
+    let base = temp_dir("bindings-xfce-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let xfconf = bin.join("xfconf-query");
+    fs::write(
+        &xfconf,
+        include_str!("fixtures/sessions/xfconf-query-inventory.sh"),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&xfconf).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&xfconf, permissions).unwrap();
+
+    let output = binary()
+        .args(["--json", "bindings"])
+        .env("XDG_CURRENT_DESKTOP", "XFCE")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("GNOME_DESKTOP_SESSION_ID")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["bindings"][0]["source"], "Xfce");
+    assert_eq!(value["bindings"][0]["key"], "CTRL+ALT+T");
+    assert_eq!(value["bindings"][0]["action"], "xfce4-terminal");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn gnome_adapter_reads_media_key_bindings() {
+    let base = temp_dir("gnome-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let gsettings = bin.join("gsettings");
+    fs::write(
+        &gsettings,
+        include_str!("fixtures/sessions/gsettings-gnome.sh"),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&gsettings).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gsettings, permissions).unwrap();
+
+    let output = binary()
+        .args(["super+l"])
+        .env("XDG_CURRENT_DESKTOP", "GNOME")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("GNOME"));
+    assert!(text.contains("global shortcut consumes the key"));
+    assert!(text.contains("screensaver"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn cinnamon_adapter_reads_gsettings_bindings() {
+    let base = temp_dir("cinnamon-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let gsettings = bin.join("gsettings");
+    fs::write(
+        &gsettings,
+        include_str!("fixtures/sessions/gsettings-cinnamon.sh"),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&gsettings).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gsettings, permissions).unwrap();
+
+    let output = binary()
+        .args(["super+1"])
+        .env("XDG_CURRENT_DESKTOP", "Cinnamon")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Cinnamon"));
+    assert!(text.contains("global shortcut consumes the key"));
+    assert!(text.contains("switch-to-workspace-1"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn mate_adapter_reads_marco_global_keybindings() {
+    let base = temp_dir("mate-cli");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let gsettings = bin.join("gsettings");
+    fs::write(
+        &gsettings,
+        include_str!("fixtures/sessions/gsettings-mate.sh"),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&gsettings).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&gsettings, permissions).unwrap();
+
+    let output = binary()
+        .args(["alt+f2"])
+        .env("XDG_CURRENT_DESKTOP", "MATE")
+        .env("XDG_SESSION_TYPE", "x11")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("MATE"));
+    assert!(text.contains("global shortcut consumes the key"));
+    assert!(text.contains("run-command-1"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn sxhkd_adapter_reads_static_binding_with_conditional_runtime() {
+    let base = temp_dir("sxhkd-cli");
+    let config_dir = base.join("sxhkd");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("sxhkdrc");
+    fs::write(&config, include_str!("fixtures/sessions/sxhkdrc")).unwrap();
+
+    let output = binary()
+        .args(["super+return"])
+        .env("XDG_CURRENT_DESKTOP", "bspwm")
+        .env("XDG_SESSION_DESKTOP", "bspwm")
+        .env("XDG_SESSION_TYPE", "x11")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("PATH", "/nonexistent")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("sxhkd"));
+    assert!(text.contains("sxhkd handled"));
+    assert!(text.contains("alacritty"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn openbox_adapter_reads_xml_keybinds_conditionally() {
+    let base = temp_dir("openbox-cli");
+    let config_dir = base.join("openbox");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("rc.xml");
+    fs::write(&config, include_str!("fixtures/sessions/openbox-rc.xml")).unwrap();
+
+    let output = binary()
+        .args(["super+ctrl+t"])
+        .env("XDG_CURRENT_DESKTOP", "Openbox")
+        .env("XDG_SESSION_DESKTOP", "Openbox")
+        .env("XDG_SESSION_TYPE", "x11")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("PATH", "/nonexistent")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Openbox"));
+    assert!(text.contains("Openbox handled"));
+    assert!(text.contains("Execute: alacritty"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn kde_adapter_reads_global_shortcut_configuration() {
+    let base = temp_dir("kde-cli");
+    fs::create_dir_all(&base).unwrap();
+    let config = base.join("kglobalshortcutsrc");
+    fs::write(
+        &config,
+        include_str!("fixtures/sessions/kglobalshortcutsrc"),
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["alt+f2"])
+        .env("XDG_CURRENT_DESKTOP", "KDE")
+        .env("XDG_SESSION_DESKTOP", "KDE")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("PATH", "/nonexistent")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("KDE Plasma"));
+    assert!(text.contains("matching KDE global shortcut configured"));
+    assert!(text.contains("Run Command"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn x11_adapter_reads_literal_xbindkeys_configuration() {
+    let base = temp_dir("x11-xbindkeys-cli");
+    fs::create_dir_all(&base).unwrap();
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let config = base.join(".xbindkeysrc");
+    fs::write(&config, include_str!("fixtures/sessions/xbindkeysrc")).unwrap();
+
+    let output = binary()
+        .args(["ctrl+alt+t"])
+        .env("PATH", &bin)
+        .env("XBINDKEYSRC", &config)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "x11")
+        .env("DISPLAY", ":0")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("X11 xbindkeys"));
+    assert!(text.contains("matching xbindkeys shortcut configured"));
+    assert!(text.contains("alacritty"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn programmable_x11_adapters_read_literal_bindings() {
+    let cases = [
+        (
+            "awesome",
+            "AWESOME_CONFIG",
+            "rc.lua",
+            include_str!("fixtures/sessions/awesome-rc.lua"),
+            "super+c",
+            "AwesomeWM",
+        ),
+        (
+            "qtile",
+            "QTILE_CONFIG",
+            "config.py",
+            include_str!("fixtures/sessions/qtile-config.py"),
+            "super+shift+h",
+            "Qtile",
+        ),
+        (
+            "xmonad",
+            "XMONAD_CONFIG",
+            "xmonad.hs",
+            include_str!("fixtures/sessions/xmonad.hs"),
+            "super+shift+c",
+            "XMonad",
+        ),
+    ];
+    for (desktop, config_var, file_name, content, key, label) in cases {
+        let base = temp_dir(&format!("programmable-{desktop}"));
+        fs::create_dir_all(base.join("bin")).unwrap();
+        let config = base.join(file_name);
+        fs::write(&config, content).unwrap();
+        let output = binary()
+            .args([key])
+            .env("PATH", base.join("bin"))
+            .env("XDG_CURRENT_DESKTOP", desktop)
+            .env("XDG_SESSION_DESKTOP", desktop)
+            .env("XDG_SESSION_TYPE", "x11")
+            .env("DISPLAY", ":0")
+            .env(config_var, &config)
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+            .env_remove("SWAYSOCK")
+            .env_remove("I3SOCK")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_TTY")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains(label), "{desktop}: {text}");
+        assert!(text.contains("matching"), "{desktop}: {text}");
+        let _ = fs::remove_dir_all(base);
+    }
+}
+
+#[test]
+fn bindings_command_emits_a_versioned_kde_inventory() {
+    let base = temp_dir("bindings-kde-cli");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join("kglobalshortcutsrc"),
+        "[org.kde.krunner.desktop]\n_launch=Alt+F2,none,Run Command\n",
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["--json", "bindings"])
+        .env("XDG_CURRENT_DESKTOP", "KDE")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("XDG_CONFIG_HOME", &base)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("GNOME_DESKTOP_SESSION_ID")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["complete"], false);
+    assert_eq!(value["bindings"][0]["source"], "KDE Plasma");
+    assert_eq!(value["bindings"][0]["key"], "ALT+F2");
+    assert!(
+        value["bindings"][0]["action"]
+            .as_str()
+            .is_some_and(|action| action.contains("Run Command"))
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn conflicts_command_keeps_same_context_collisions_explicit() {
+    let base = temp_dir("conflicts-kde-cli");
+    fs::create_dir_all(&base).unwrap();
+    fs::write(
+        base.join("kglobalshortcutsrc"),
+        "[component.one]\naction_one=Alt+F2,none,First\naction_two=Alt+F2,none,Second\n",
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["--json", "conflicts"])
+        .env("XDG_CURRENT_DESKTOP", "KDE")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("XDG_CONFIG_HOME", &base)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("GNOME_DESKTOP_SESSION_ID")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["conflicts"].as_array().unwrap().len(), 1);
+    assert_eq!(value["conflicts"][0]["key"], "ALT+F2");
+    assert_eq!(
+        value["conflicts"][0]["classification"],
+        "possible; runtime activation or precedence is unknown"
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn konsole_adapter_reads_explicit_keytab() {
+    let base = temp_dir("konsole-cli");
+    fs::create_dir_all(&base).unwrap();
+    let keytab = base.join("custom.keytab");
+    fs::write(
+        &keytab,
+        "keyboard \"custom\"\nkey Left +Ctrl : \"\\E[1;5D\"\n",
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["ctrl+left"])
+        .env("TERM_PROGRAM", "konsole")
+        .env("KONSOLE_KEYTAB", &keytab)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Konsole sends a sequence to the PTY"));
+    assert!(text.contains("sequence: ESC [ 1 ; 5 D"));
+    let _ = fs::remove_dir_all(base);
+}

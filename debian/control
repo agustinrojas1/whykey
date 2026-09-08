@@ -1,0 +1,16 @@
+Source: whykey
+Section: utils
+Priority: optional
+Maintainer: Agustín Rojas <agustinrojas1@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), cargo (>= 1.85), rustc (>= 1.85)
+Standards-Version: 4.6.2
+Homepage: https://github.com/agustinrojas1/whykey
+Rules-Requires-Root: no
+
+Package: whykey
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: explain where a Linux key combination is handled
+ Whykey diagnoses the path of a keyboard event through Linux desktops,
+ terminals, TTYs, multiplexers, shells, and supported applications.
+ It is read-only and never executes the shortcut under investigation.

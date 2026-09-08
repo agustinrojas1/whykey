@@ -1,0 +1,34 @@
+[
+  {
+    "modmask": 64,
+    "key": "C",
+    "submap": "",
+    "submap_universal": "false",
+    "non_consuming": false,
+    "auto_consuming": false,
+    "description": "Universal copy",
+    "dispatcher": "__lua",
+    "arg": "61"
+  },
+  {
+    "modmask": 4,
+    "key": "LEFT",
+    "submap": "resize",
+    "submap_universal": false,
+    "non_consuming": true,
+    "auto_consuming": false,
+    "dispatcher": "resizeactive",
+    "arg": "-10 0"
+  },
+  {
+    "modmask": 4,
+    "key": "Z",
+    "submap": "media",
+    "submap_universal": "true",
+    "non_consuming": false,
+    "auto_consuming": true,
+    "description": "Always suspend",
+    "dispatcher": "exec",
+    "arg": "kill -TSTP"
+  }
+]

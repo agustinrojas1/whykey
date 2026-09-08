@@ -1,0 +1,16 @@
+{
+  "keyboards": [
+    {
+      "name": "at-translated-set-2-keyboard",
+      "active_keymap": "English (US)",
+      "active_layout_index": 0,
+      "main": true
+    },
+    {
+      "name": "rk68-consumer",
+      "active_keymap": "English (US)",
+      "active_layout_index": 0,
+      "main": false
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+[
+  {"instance": "first", "wl_socket": "wayland-0"},
+  {"instance": "second", "wl_socket": "wayland-2"}
+]

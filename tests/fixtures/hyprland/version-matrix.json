@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "description": "Sanitized Hyprland wire-shape matrix; labels describe response eras, not claimed package versions.",
+  "entries": [
+    {
+      "era": "legacy-string-device",
+      "binds": "binds-representative.json",
+      "devices": "devices-keyboards.json"
+    },
+    {
+      "era": "structured-device-scope",
+      "binds": "binds-structured-device.json",
+      "devices": "devices-layout-groups.json"
+    },
+    {
+      "era": "malformed-entry-preserves-valid-data",
+      "binds": "binds-malformed-entry.json",
+      "devices": "devices-keyboards.json"
+    },
+    {
+      "era": "invalid-top-level-shape",
+      "binds": "binds-invalid-object.json",
+      "devices": "devices-keyboards.json"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+[
+  {
+    "modmask": 4,
+    "key": "C",
+    "device": {"inclusive": true, "list": ["example-keyboard"]},
+    "dispatcher": "exec"
+  }
+]

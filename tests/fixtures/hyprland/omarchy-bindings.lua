@@ -1,0 +1,5 @@
+o.bind("SUPER + RETURN", "Terminal", { omarchy = "terminal" })
+o.bind("ALT + PRINT", "Recording", "capture --stop-recording || capture --start")
+o.bind("SUPER + ALT + RETURN", "Tmux", { omarchy = "terminal-tmux" })
+o.bind("SUPER + CTRL + RETURN", "Herdr", { omarchy = "terminal-herdr" })
+o.bind("SUPER + SHIFT + C", "Calendar", { webapp = "https://example.com" })

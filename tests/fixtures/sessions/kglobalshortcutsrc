@@ -1,0 +1,3 @@
+[org.kde.krunner.desktop]
+_launch=Alt+F2,none,Run Command
+_disabled=none,none,Disabled

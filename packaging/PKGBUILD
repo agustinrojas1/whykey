@@ -1,0 +1,40 @@
+pkgname=whykey
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='Explain where a Linux key combination is handled'
+arch=('x86_64' 'aarch64')
+url='https://github.com/agustinrojas1/whykey'
+license=('MIT')
+depends=()
+makedepends=('cargo')
+# The upstream source archive contains Cargo's locked vendor directory.  Keep
+# this as SKIP in the upstream repository because an embedded checksum would
+# make the archive contain its own hash.  An AUR package should replace SKIP
+# with the matching release checksum.
+source=("${pkgname}-${pkgver}-source.tar.gz::${url}/releases/download/v${pkgver}/${pkgname}-${pkgver}-source.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  cargo build --release --locked --offline
+}
+
+check() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  cargo test --all-targets --locked --offline
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  install -Dm755 target/release/whykey "${pkgdir}/usr/bin/whykey"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 whykey.1 "${pkgdir}/usr/share/man/man1/whykey.1"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 SPEC.md "${pkgdir}/usr/share/doc/${pkgname}/SPEC.md"
+  install -Dm644 CHANGELOG.md "${pkgdir}/usr/share/doc/${pkgname}/CHANGELOG.md"
+  install -Dm644 SUPPORT_MATRIX.md "${pkgdir}/usr/share/doc/${pkgname}/SUPPORT_MATRIX.md"
+  install -Dm644 ADAPTER_INVENTORY.md "${pkgdir}/usr/share/doc/${pkgname}/ADAPTER_INVENTORY.md"
+  install -Dm644 DEPENDENCY_PROVENANCE.md "${pkgdir}/usr/share/doc/${pkgname}/DEPENDENCY_PROVENANCE.md"
+  install -Dm644 DEFECT_REGISTER.md "${pkgdir}/usr/share/doc/${pkgname}/DEFECT_REGISTER.md"
+  install -Dm644 support-matrix.json "${pkgdir}/usr/share/doc/${pkgname}/support-matrix.json"
+}

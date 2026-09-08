@@ -1,0 +1,44 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: whykey
+Source: https://github.com/agustinrojas1/whykey
+
+Files: *
+Copyright: 2026 whykey contributors
+License: MIT
+
+Files: vendor/itoa/* vendor/libc/* vendor/proc-macro2/* vendor/quote/*
+ vendor/serde/* vendor/serde_core/* vendor/serde_derive/*
+ vendor/serde_json/* vendor/syn/*
+Copyright: respective upstream contributors
+License: MIT OR Apache-2.0
+
+Files: vendor/memchr/*
+Copyright: respective upstream contributors
+License: MIT OR Unlicense
+
+Files: vendor/unicode-ident/*
+Copyright: respective upstream contributors
+License: (MIT OR Apache-2.0) AND Unicode-3.0
+
+Files: vendor/zmij/*
+Copyright: respective upstream contributors
+License: MIT
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files, to deal in the Software
+ without restriction, including without limitation the rights to use, copy,
+ modify, merge, publish, distribute, sublicense, and/or sell copies of the
+ Software, and to permit persons to whom the Software is furnished to do so,
+ subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.

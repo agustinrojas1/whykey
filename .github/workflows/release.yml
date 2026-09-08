@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Verify Git tag matches Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [[ "$tag_version" != "$cargo_version" ]]; then
+            echo "Git tag version ($tag_version) does not match Cargo.toml version ($cargo_version)" >&2
+            exit 1
+          fi
+      - name: Check generated release documentation
+        run: |
+          python3 tools/generate_support_matrix.py --check
+          python3 tools/generate_dependency_provenance.py --check
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Assemble release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          tools/assemble_source_archive.sh "$GITHUB_WORKSPACE"
+          root="whykey-${version}-x86_64-unknown-linux-gnu"
+          mkdir -p "$root"
+          install -m 0755 target/release/whykey "$root/whykey"
+          install -m 0644 README.md SPEC.md CHANGELOG.md SUPPORT_MATRIX.md ADAPTER_INVENTORY.md DEPENDENCY_PROVENANCE.md support-matrix.json DEFECT_REGISTER.md LICENSE whykey.1 "$root/"
+          cp -a packaging tools "$root/"
+          tar -czf "${root}.tar.gz" "$root"
+          sha256sum "${root}.tar.gz" > "${root}.tar.gz.sha256"
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            whykey-*.tar.gz
+            whykey-*.tar.gz.sha256

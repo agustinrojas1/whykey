@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked --offline
+
+override_dh_auto_test:
+	cargo test --all-targets --locked --offline
+
+override_dh_clean:
+	dh_clean -Xvendor
+
+override_dh_auto_install:
+	install -D -m 0755 target/release/whykey debian/whykey/usr/bin/whykey
+	install -D -m 0644 whykey.1 debian/whykey/usr/share/man/man1/whykey.1
+	install -D -m 0644 README.md debian/whykey/usr/share/doc/whykey/README.md
+	install -D -m 0644 SPEC.md debian/whykey/usr/share/doc/whykey/SPEC.md
+	install -D -m 0644 CHANGELOG.md debian/whykey/usr/share/doc/whykey/changelog
+	install -D -m 0644 SUPPORT_MATRIX.md debian/whykey/usr/share/doc/whykey/SUPPORT_MATRIX.md
+	install -D -m 0644 ADAPTER_INVENTORY.md debian/whykey/usr/share/doc/whykey/ADAPTER_INVENTORY.md
+	install -D -m 0644 DEPENDENCY_PROVENANCE.md debian/whykey/usr/share/doc/whykey/DEPENDENCY_PROVENANCE.md
+	install -D -m 0644 DEFECT_REGISTER.md debian/whykey/usr/share/doc/whykey/DEFECT_REGISTER.md
+	install -D -m 0644 support-matrix.json debian/whykey/usr/share/doc/whykey/support-matrix.json

@@ -1,0 +1,4 @@
+[
+  {"modmask": true, "key": "BROKEN", "dispatcher": "exec"},
+  {"modmask": 4, "key": "C", "dispatcher": "exec"}
+]

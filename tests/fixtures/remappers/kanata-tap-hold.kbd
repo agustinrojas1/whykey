@@ -1,0 +1,3 @@
+(defcfg process-unmapped-keys yes)
+(defalias caps (tap-hold 200 200 esc lctl))
+(deflayer base @caps a)

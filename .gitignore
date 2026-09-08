@@ -1,0 +1,4 @@
+/target/
+nvim.log
+/whykey-*.tar.gz
+/whykey-*.tar.gz.sha256

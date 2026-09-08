@@ -1,0 +1,17 @@
+[
+  {
+    "instance": "first",
+    "wl_socket": "wayland-1",
+    "time": 100,
+    "extra_release_field": true
+  },
+  {
+    "instance": 42,
+    "wl_socket": "wayland-invalid"
+  },
+  {
+    "instance": "second",
+    "wl_socket": "wayland-2",
+    "time": 200
+  }
+]

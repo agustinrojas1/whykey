@@ -1,0 +1,6 @@
+{
+  "keyboards": [
+    {"name": "other", "active_layout_index": 0, "main": false},
+    {"name": "main", "active_layout_index": 2, "main": true}
+  ]
+}

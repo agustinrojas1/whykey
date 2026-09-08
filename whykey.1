@@ -1,0 +1,259 @@
+.TH WHYKEY 1 "September 2026" "whykey 1.0.0" "User Commands"
+.SH NAME
+whykey \- explain which layer handles a keyboard shortcut
+.B whykey
+.RB [ --verbose ] [ --json ] [ --schema-version\ 2 ]
+.I combination
+.br
+.B whykey inspect
+.RB [ --pid pid ] [ --focused ] [ --instance id ] [ --verbose ] [ --json ] [ --schema-version\ 2 ]
+.I combination-or-sequence
+.br
+.B whykey listen
+.RB [ --json ] [ --ndjson ] [ --repeat ] [ --timeout seconds ] [ --count n ]
+.RB [ --events all ] [ --evdev ] [ --device path ] [ --verbose ]
+.br
+.B whykey doctor
+.RB [ --json ] [ --schema-version\ 2 ]
+.br
+.B whykey capabilities
+.RB [ --all ] [ --json ] [ --schema-version\ 2 ]
+.br
+.B whykey bindings
+.RB [ --json ]
+.br
+.B whykey conflicts
+.RB [ --json ]
+.br
+.B whykey extension
+.I program combination
+.RB [ --json ]
+.br
+.B whykey replay
+.I file
+.RB [ --json ]
+.br
+.B whykey shell-init
+.RB { bash | zsh | fish }
+.br
+.B whykey completions
+.RB { bash | zsh | fish }
+.SH DESCRIPTION
+.B whykey
+inspects a key combination through the typed input chain: an optional
+remapper, the selected compositor, one terminal layer, input-method context,
+the TTY driver, an optional tmux, GNU Screen, or Zellij session,
+.PP
+Uncertainty is reported explicitly, with a text assessment or JSON
+.B confidence
+of configured, confirmed, or conditional. A captured key in
+.B listen
+in its default mode proves that the event reached the current terminal, but
+cannot prove what a compositor binding that captured the key would have done.
+.B listen --evdev
+proves only that a physical input event was generated before compositor
+processing.
+.B doctor
+also lists candidate keyboard event paths, device names, and read errors so
+that input-group permission problems can be diagnosed without changing device
+state.
+In an SSH session without local Hyprland IPC, Hyprland is reported as not
+applicable and the remote terminal path remains a valid doctor target.
+.PP
+The desktop adapters also cover GNOME, KDE Plasma, Xfce, Cinnamon, MATE,
+Niri, River, Wayfire, labwc, bspwm/sxhkd, Openbox, X11 xbindkeys, AwesomeWM, Qtile, and XMonad.
+Xfce is queried through the live
+.B xfce4-keyboard-shortcuts
+channel; Cinnamon and MATE are queried through their GSettings schemas. These
+queries are read-only and only report accelerator values exposed by the active
+session.
+.PP
+External integration commands use a two-second timeout and a one-megabyte
+stdout/stderr limit. Set
+.B WHYKEY_COMMAND_TIMEOUT_MS
+or
+.B WHYKEY_COMMAND_MAX_OUTPUT
+to override those limits for one session.
+Static inspections also share a ten-second wall-clock budget across all
+layers and sequence steps. Set
+.B WHYKEY_DIAGNOSTIC_TIMEOUT_MS
+to override it.
+.PP
+Literal Hyprland Lua helper calls provide source evidence and can resolve a
+literal modifier-insensitivity option; Lua is never executed. Same-key
+bindings in inactive submaps are listed as inactive,
+while dynamic configuration, unknown application modes, and
+device-specific physical origins remain conditional unless an evdev capture
+provides a matching device and keycode; layout-dependent mappings are still
+shown with their possible XKB offset. Malformed individual
+Hyprland binding entries are reported and lower confidence rather than
+discarding valid entries.
+.SH COMMANDS
+.TP
+.BI combination
+Inspect a normalized combination such as
+.BR ctrl+left ", " ctrl+z ", or " super+c .
+.TP
+.B inspect combination-or-sequence
+Inspect one or more whitespace-separated combinations, such as
+.B ctrl+x ctrl+s .
+Each step is analyzed independently and keeps its own evidence and
+uncertainty. Prefix state and temporal precedence between steps are not
+inferred yet; use the separate
+.B conflicts
+command for enumerated binding collisions. Focused-window discovery is supported by Hyprland, Sway, and i3; other
+desktops report the missing API.
+.B --pid pid
+selects the process whose ancestry is used for interactive-application
+discovery. A missing process is reported as unavailable.
+.TP
+.B --instance id
+selects a Hyprland instance explicitly when more than one instance is
+running. The selection is scoped to this inspection and does not change the
+user's environment.
+.TP
+.B listen
+Capture the next key reaching the terminal and inspect it. Press Escape twice
+within 300 milliseconds to exit. Use
+.B --repeat
+to capture more than one event.
+.B --timeout seconds
+sets a wall-clock deadline for the capture.
+.B --count n
+stops after n captured reports.
+.B --events all
+includes modifier-only and release events in evdev mode.
+.TP
+.B listen --evdev [--device path]
+On Linux, capture readable EV_KEY events from input devices before the
+compositor. This mode is read-only and does not grab devices; without
+.B --device
+it scans
+.IR /dev/input/event* .
+.TP
+.B doctor
+Check read-only prerequisites and report which integrations are available.
+It also reports detected keyd, kanata, kmonad, input-remapper, and xremap
+processes or configuration files; transformations that cannot be observed
+remain conditional.
+.TP
+.B capabilities
+Report the versioned support matrix for the current binary and environment.
+Text output shows applicable and available entries by default;
+.B --all
+lists the complete adapter inventory.
+The JSON form distinguishes implemented capabilities from planned ones and
+from integrations unavailable in the current session.
+.B bindings
+Enumerate effective bindings exposed by detected compositor adapters. The
+versioned output marks the inventory incomplete when application, plugin,
+inhibitor, or firmware state is not observable.
+.TP
+.B conflicts
+Compare the enumerated bindings for duplicate actions in the same source,
+key, and context. Precedence and runtime activation that cannot be observed
+are reported as possible conflicts.
+.TP
+.BI extension\ program\ combination
+Run one explicitly selected application extension through the versioned JSON
+stdin/stdout protocol. The response must declare supported evidence
+capabilities and a validated result layer. Unknown capability and status
+values are rejected; oversized responses are covered by the normal
+timeout/output limits; whykey never discovers extensions or sends
+the investigated key to them.
+.TP
+.B replay file
+Read and render one or more concatenated schema-v1 or schema-v2 JSON reports
+saved from a previous inspection or capture. Replay is read-only: it does not open input
+devices, execute actions, or inject keys. Files are limited to 16 MiB.
+.TP
+.B shell-init bash|zsh|fish
+Print an optional shell wrapper that supplies live binding snapshots to
+.B whykey .
+Evaluate it in the current shell; it does not modify shell startup files.
+.TP
+.B completions bash|zsh|fish
+Print a completion script for the selected shell.
+.SH OPTIONS
+.TP
+.B --json
+Emit a machine-readable report. In listen mode, diagnostics go to stderr and
+one JSON document is emitted for each captured event.
+.TP
+.B --ndjson
+Only valid with
+.BR listen .
+Emit one compact schema-v2 JSON record per captured event on stdout. This
+implies
+.BR --json ;
+.TP
+.BI --schema-version 2
+Select the opt-in JSON v2 shape. Version 1 remains the default for compatibility;
+.B --json-v2
+is an equivalent shorthand.
+.TP
+.B --verbose
+Show every route layer in human-readable reports. By default only matching,
+consuming, unavailable, or uncertain layers are shown, with the conclusion
+first; JSON output always keeps full structured evidence.
+.TP
+.B --all
+List the complete adapter inventory with
+.BR capabilities .
+By default only applicable and available entries are shown.
+.TP
+.B --repeat
+Keep listening after each captured event. Only valid with
+.B listen .
+.TP
+.BI --timeout seconds
+Stop waiting after the given positive number of seconds. The deadline is
+shared by all reports in a repeated capture.
+.TP
+.BI --count n
+Stop after the given positive number of captured reports. A count greater
+than one implies repeated capture.
+.TP
+.B --events all
+Include modifier-only and release events when using evdev. Normal capture
+reports completed key presses.
+.TP
+.B --evdev
+Use the Linux evdev pre-compositor capture backend. It requires read access
+to keyboard event devices and is optional.
+.TP
+.BI --device path
+Read one explicit Linux input event device. This implies
+.BR --evdev .
+.TP
+.B --instance id
+Select a Hyprland instance for
+.B inspect
+when automatic selection is ambiguous.
+.SH EXIT STATUS
+.TP
+.B 0
+The inspection completed successfully. For
+.B doctor,
+all required prerequisites were available.
+.TP
+.B 1
+An unavailable prerequisite or inspection error.
+.TP
+.B 2
+Invalid command-line usage or key combination.
+.SH EXAMPLES
+.EX
+whykey ctrl+left
+whykey ctrl+z
+whykey listen
+whykey --json ctrl+left
+eval "$(whykey shell-init bash)"
+.EE
+.SH SEE ALSO
+.BR hyprctl (1),
+.BR stty (1),
+.BR tmux (1),
+.BR screen (1),
+.BR zellij (1),
+.BR bash (1)

@@ -1,0 +1,7 @@
+<openbox_config>
+<keyboard>
+  <keybind key="W-C-t">
+    <action name="Execute"><command>alacritty</command></action>
+  </keybind>
+</keyboard>
+</openbox_config>
