@@ -118,6 +118,26 @@ pub fn symbols_for_evdev_keycode(keymap: &str, evdev_keycode: u16, group: usize)
 /// Select one symbol level for a physical key while retaining XKB's declared
 /// level order. Callers can apply their observed Shift/Caps/AltGr state
 /// without losing the distinction between unshifted and shifted symbols.
+pub fn preferred_symbol_for_xkb_keycode(
+    keymap: &str,
+    xkb_keycode: u32,
+    group: usize,
+    level: usize,
+) -> Option<String> {
+    let (keycodes, symbols) = parse_keymap(keymap);
+    keycodes.into_iter().find_map(|(name, codes)| {
+        if !codes.contains(&xkb_keycode) {
+            return None;
+        }
+        let levels = symbols.get(&name)?.get(&group)?;
+        levels
+            .get(level)
+            .or_else(|| levels.first())
+            .cloned()
+            .filter(|symbol| !symbol.is_empty())
+    })
+}
+
 pub fn preferred_symbol_for_evdev_keycode(
     keymap: &str,
     evdev_keycode: u16,

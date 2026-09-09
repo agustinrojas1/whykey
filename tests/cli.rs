@@ -1117,8 +1117,12 @@ fn listen_rejects_invalid_capture_limits() {
             "unsupported event mode",
         ),
         (
-            &["listen", "--events", "all"][..],
-            "--events all requires --evdev",
+            &["listen", "--terminal", "--events", "all"][..],
+            "--events all is not supported with --terminal",
+        ),
+        (
+            &["listen", "--terminal", "--evdev"][..],
+            "--terminal and --evdev cannot be used together",
         ),
         (
             &["listen", "--timeout", "1e308"][..],
@@ -1148,6 +1152,7 @@ fn listen_help_documents_capture_limits_and_detailed_events() {
     assert!(text.contains("--timeout"));
     assert!(text.contains("--count"));
     assert!(text.contains("--events all"));
+    assert!(text.contains("--terminal"));
     assert!(text.contains("--ndjson"));
     assert!(text.contains("--output PATH"));
 }
@@ -1168,34 +1173,107 @@ fn no_arguments_prints_help_instead_of_entering_capture_mode() {
 }
 
 #[cfg(unix)]
+fn script_command(command_line: &str) -> Command {
+    let mut command = Command::new("script");
+    command.args(["-qfec", command_line, "/dev/null"]);
+    command.env_remove("HYPRLAND_INSTANCE_SIGNATURE");
+    command
+}
+
+#[cfg(unix)]
+struct PtySession {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    prefix_output: Vec<u8>,
+}
+
+#[cfg(unix)]
+impl PtySession {
+    fn spawn(command_line: &str) -> Self {
+        let mut child = script_command(command_line)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("util-linux script must provide a PTY for the listener test");
+
+        let stdin = child.stdin.take().expect("script stdin");
+        let mut session = Self {
+            child,
+            stdin,
+            prefix_output: Vec::new(),
+        };
+        session.wait_for_ready();
+        session
+    }
+
+    fn wait_for_ready(&mut self) {
+        use std::os::unix::io::AsRawFd as _;
+
+        let stdout_fd = self.child.stdout.as_ref().unwrap().as_raw_fd();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut chunk = [0u8; 512];
+        let initial_len = self.prefix_output.len();
+
+        let mut ready = false;
+        while std::time::Instant::now() < deadline {
+            let mut pfd = libc::pollfd {
+                fd: stdout_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let res = unsafe { libc::poll(&mut pfd, 1, 50) };
+            if res > 0 && pfd.revents & libc::POLLIN != 0 {
+                let n = unsafe { libc::read(stdout_fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+                if n > 0 {
+                    self.prefix_output.extend_from_slice(&chunk[..n as usize]);
+                    let slice = &self.prefix_output[initial_len..];
+                    if slice.windows(18).any(|w| w == b"Waiting for input.") {
+                        ready = true;
+                        break;
+                    }
+                } else if n <= 0 {
+                    break;
+                }
+            }
+        }
+        assert!(
+            ready,
+            "PTY listener failed to reach 'Waiting for input.' within deadline. Output received: {}",
+            String::from_utf8_lossy(&self.prefix_output[initial_len..])
+        );
+    }
+
+    fn write_input(&mut self, bytes: &[u8]) {
+        self.stdin.write_all(bytes).unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn wait(self) -> (std::process::Output, String) {
+        let output = self.child.wait_with_output().unwrap();
+        let mut combined_stdout = self.prefix_output;
+        combined_stdout.extend_from_slice(&output.stdout);
+        let transcript = format!(
+            "{}{}",
+            String::from_utf8_lossy(&combined_stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (output, transcript)
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn listen_exits_through_a_pty_after_kitty_escape() {
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --json --schema-version 2 --timeout 2",
+        "'{}' listen --terminal --json --schema-version 2 --timeout 2",
         executable.replace('\'', "'\\''")
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    child
-        .stdin
-        .take()
-        .expect("script stdin")
-        .write_all(b"\x1b[27;1u")
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[27;1u");
+    let (output, transcript) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
-    let transcript = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert!(transcript.contains("whykey listen"));
     assert!(
         transcript.contains("Stopped."),
@@ -1212,30 +1290,19 @@ fn listen_exits_through_a_pty_after_kitty_escape() {
 fn listen_exits_through_a_pty_after_kitty_ctrl_c() {
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --json --timeout 2",
+        "'{}' listen --terminal --json --timeout 2",
         executable.replace('\'', "'\\''")
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    child
-        .stdin
-        .take()
-        .expect("script stdin")
-        .write_all(b"\x1b[99;5u")
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[99;5u");
+    let (output, transcript) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
-    let transcript = format!(
+    let transcript_out = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let _ = transcript_out;
     assert!(
         transcript.contains("Stopped."),
         "transcript: {transcript:?}"
@@ -1248,32 +1315,13 @@ fn listen_exits_through_a_pty_after_kitty_ctrl_c() {
 fn listen_captures_kitty_ctrl_z_through_a_pty() {
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --json --timeout 2",
+        "'{}' listen --terminal --json --timeout 2",
         executable.replace('\'', "'\\''")
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    child
-        .stdin
-        .take()
-        .expect("script stdin")
-        // A real Kitty chord starts with a physical modifier event. It must
-        // not be reported instead of the chord itself.
-        .write_all(b"\x1b[57442;5u\x1b[122;5u")
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[57442;5u\x1b[122;5u");
+    let (output, transcript) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
-    let transcript = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert!(
         transcript.contains("\"key_display\": \"CTRL + Z\""),
         "transcript: {transcript:?}"
@@ -1287,30 +1335,13 @@ fn listen_captures_kitty_ctrl_z_through_a_pty() {
 fn listen_ignores_a_kitty_release_before_the_next_press() {
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --json --schema-version 2 --timeout 2",
+        "'{}' listen --terminal --json --schema-version 2 --timeout 2",
         executable.replace('\'', "'\\''")
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    child
-        .stdin
-        .take()
-        .expect("script stdin")
-        .write_all(b"\x1b[13;1:3u\x1b[122;5u")
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[13;1:3u\x1b[122;5u");
+    let (output, transcript) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
-    let transcript = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert!(transcript.contains("\"key_display\": \"CTRL + Z\""));
     assert!(!transcript.contains("\"key_display\": \"RETURN\""));
     assert!(transcript.contains("\"operation\": \"listen\""));
@@ -1324,25 +1355,13 @@ fn listen_ndjson_writes_one_compact_v2_record_to_stdout() {
     let stream = base.join("events.ndjson");
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --ndjson --timeout 2 > '{}'",
+        "'{}' listen --terminal --ndjson --timeout 2 > '{}'",
         executable.replace('\'', "'\\''"),
         stream.display()
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    child
-        .stdin
-        .take()
-        .expect("script stdin")
-        .write_all(b"\x1b[122;5u")
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[122;5u");
+    let (output, _) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
 
     let records = fs::read_to_string(&stream).unwrap();
@@ -1366,25 +1385,13 @@ fn listen_output_exports_a_replayable_capture_without_stdout_records() {
     let export = base.join("capture.ndjson");
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --ndjson --output '{}' --timeout 2",
+        "'{}' listen --terminal --ndjson --output '{}' --timeout 2",
         executable.replace('\'', "'\\''"),
         export.display()
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    child
-        .stdin
-        .take()
-        .expect("script stdin")
-        .write_all(b"\x1b[122;5u")
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[122;5u");
+    let (output, transcript) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
 
     let records = fs::read_to_string(&export).unwrap();
@@ -1393,11 +1400,6 @@ fn listen_output_exports_a_replayable_capture_without_stdout_records() {
     assert_eq!(record["schema_version"], 2);
     assert_eq!(record["operation"], "listen");
     assert_eq!(record["input"]["key_display"], "CTRL + Z");
-    let transcript = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert!(!transcript.contains("\"key_display\""));
 
     let replay = binary()
@@ -1415,28 +1417,15 @@ fn listen_output_exports_a_replayable_capture_without_stdout_records() {
 fn listen_repeat_restores_between_reports() {
     let executable = env!("CARGO_BIN_EXE_whykey");
     let command_line = format!(
-        "'{}' listen --json --repeat --count 2 --timeout 3",
+        "'{}' listen --terminal --json --repeat --count 2 --timeout 3",
         executable.replace('\'', "'\\''")
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the listener test");
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    let mut stdin = child.stdin.take().expect("script stdin");
-    stdin.write_all(b"\x1b[122;5u").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    stdin.write_all(b"\x1b[122;5u").unwrap();
-    let output = child.wait_with_output().unwrap();
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[122;5u");
+    pty.wait_for_ready();
+    pty.write_input(b"\x1b[122;5u");
+    let (output, transcript) = pty.wait();
     assert!(output.status.success(), "script output: {output:?}");
-    let transcript = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
     assert_eq!(
         transcript.matches("\"key_display\": \"CTRL + Z\"").count(),
         2,
@@ -1461,8 +1450,7 @@ fn high_rate_capture_records(event_count: usize) -> Result<String, String> {
         executable.replace('\'', "'\\''"),
         stream.display()
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
+    let mut child = script_command(&command_line)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1547,8 +1535,7 @@ fn paced_capture_latencies(event_count: usize) -> Vec<std::time::Duration> {
         executable.replace('\'', "'\\''"),
         stream.display()
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
+    let mut child = script_command(&command_line)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1648,8 +1635,7 @@ fn listen_timeout_restores_the_pty_protocol() {
         "'{}' listen --json --timeout 0.2",
         executable.replace('\'', "'\\''")
     );
-    let mut child = Command::new("script")
-        .args(["-qfec", &command_line, "/dev/null"])
+    let mut child = script_command(&command_line)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1681,9 +1667,8 @@ fn listener_transcript_after_signal(signal: libc::c_int) -> String {
         "exec '{}' listen --json --timeout 2",
         executable.replace('\'', "'\\''")
     );
-    let mut command = Command::new("script");
+    let mut command = script_command(&command_line);
     command
-        .args(["-qfec", &command_line, "/dev/null"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2646,5 +2631,121 @@ fn konsole_adapter_reads_explicit_keytab() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("Konsole sends a sequence to the PTY"));
     assert!(text.contains("sequence: ESC [ 1 ; 5 D"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn default_source_selection_falls_back_to_terminal_without_hyprland() {
+    let output = binary()
+        .args(["listen", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("Global Hyprland capture is unavailable:"));
+    assert!(
+        combined.contains(
+            "Using terminal capture; shortcuts consumed by the compositor will not appear."
+        )
+    );
+}
+
+#[test]
+fn terminal_flag_suppresses_fallback_warning() {
+    let output = binary()
+        .args(["listen", "--terminal", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!combined.contains("Global Hyprland capture is unavailable"));
+}
+
+#[test]
+fn listen_events_all_fails_when_hyprland_unavailable() {
+    let output = binary()
+        .args(["listen", "--events", "all"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--events all requires Hyprland or evdev capture"));
+    assert!(stderr.contains("HYPRLAND_INSTANCE_SIGNATURE is not set"));
+}
+
+#[test]
+fn listen_json_fallback_warns_on_stderr_without_polluting_stdout() {
+    let output = binary()
+        .args(["listen", "--json", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Global Hyprland capture is unavailable"));
+    assert!(
+        stderr.contains(
+            "Using terminal capture; shortcuts consumed by the compositor will not appear."
+        )
+    );
+}
+
+#[test]
+fn hyprland_suppression_failure_fails_closed() {
+    let output = binary()
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent_fake_sig_12345")
+        .args(["listen", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("could not suppress Hyprland shortcuts"));
+    assert!(stderr.contains("No key was captured and no shortcut was executed."));
+    assert!(stderr.contains("Use --pass-through to capture without suppression."));
+}
+
+#[test]
+fn pass_through_flag_allows_fallback_when_hyprland_fails() {
+    let output = binary()
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent_fake_sig_12345")
+        .args(["listen", "--pass-through", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("Global Hyprland capture is unavailable"));
+    assert!(combined.contains("Using terminal capture"));
+}
+
+#[cfg(unix)]
+#[test]
+fn listen_terminal_mode_claims_observed_only_disposition() {
+    let base = temp_dir("listen-disposition");
+    fs::create_dir_all(&base).unwrap();
+    let stream = base.join("events.ndjson");
+    let executable = env!("CARGO_BIN_EXE_whykey");
+    let command_line = format!(
+        "'{}' listen --terminal --ndjson --timeout 2 > '{}'",
+        executable.replace('\'', "'\\''"),
+        stream.display()
+    );
+    let mut pty = PtySession::spawn(&command_line);
+    pty.write_input(b"\x1b[122;5u");
+    let (output, _) = pty.wait();
+    assert!(output.status.success(), "script output: {output:?}");
+
+    let records = fs::read_to_string(&stream).unwrap();
+    let lines: Vec<_> = records.lines().collect();
+    assert_eq!(lines.len(), 1, "records: {records:?}");
+    let record: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(record["observation"]["disposition"], "observed_only");
+
     let _ = fs::remove_dir_all(base);
 }

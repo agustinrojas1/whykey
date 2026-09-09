@@ -37,7 +37,7 @@ const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "listen",
-        usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
+        usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
         summary: "capture a key and explain its path",
         advanced: false,
     },
@@ -101,6 +101,8 @@ const LISTEN_COMPLETION_OPTIONS: &[&str] = &[
     "--timeout",
     "--count",
     "--events",
+    "--pass-through",
+    "--terminal",
     "--evdev",
     "--device",
     "--ndjson",
@@ -187,19 +189,23 @@ fn main() -> ExitCode {
     }
     if argument == "listen" {
         let mut repeat = false;
+        let mut terminal = false;
         let mut evdev = false;
         let mut device = None;
         let mut timeout = None;
         let mut count = None;
         let mut events_all = false;
         let mut output = None;
+        let mut capture_policy = listen::HyprlandCapturePolicy::Suppress;
         while let Some(option) = arguments.next() {
             match option.as_str() {
                 "--repeat" | "-r" => repeat = true,
+                "--pass-through" => capture_policy = listen::HyprlandCapturePolicy::PassThrough,
+                "--terminal" | "-t" => terminal = true,
                 "--evdev" | "-e" => evdev = true,
                 "-h" | "--help" => {
                     println!(
-                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. The default reads the terminal; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with --evdev to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --ndjson implies JSON and emits one compact schema-v2 record per event. --output writes JSON reports to a replayable file and requires --json or --ndjson."
+                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, captures and temporarily suppresses Hyprland shortcuts when available, falling back to the terminal. --pass-through captures via Hyprland without suppression; --terminal forces terminal capture; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with Hyprland or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -278,14 +284,19 @@ fn main() -> ExitCode {
             eprintln!("error: --output requires --json or --ndjson");
             return ExitCode::from(2);
         }
-        if events_all && !evdev {
-            eprintln!("error: --events all requires --evdev");
+        if terminal && (evdev || device.is_some()) {
+            eprintln!("error: --terminal and --evdev cannot be used together");
+            return ExitCode::from(2);
+        }
+        if events_all && terminal {
+            eprintln!("error: --events all is not supported with --terminal");
             return ExitCode::from(2);
         }
         return run_listen(listen::Options {
             repeat,
             json,
             ndjson,
+            terminal,
             evdev,
             device,
             timeout,
@@ -294,6 +305,7 @@ fn main() -> ExitCode {
             output,
             verbose,
             schema_version,
+            capture_policy,
         });
     }
     if argument == "doctor" {
@@ -481,6 +493,8 @@ _whykey() {
     '--timeout[stop after this many seconds]:seconds:' \
     '--count[stop after this many reports]:count:' \
     '--events[include modifier and release events]:mode:(all)' \
+    '--pass-through[capture without suppressing Hyprland shortcuts]' \
+    '--terminal[force terminal capture]' \
     '--evdev[capture Linux input events before the compositor]' \
     '--device[read one /dev/input/event device]:path:' \
     '--ndjson[emit one compact schema-v2 record per captured event]' \
@@ -503,6 +517,8 @@ complete -c whykey -s r -l repeat -d 'keep listening'
 complete -c whykey -l timeout -r -d 'stop after this many seconds'
 complete -c whykey -l count -r -d 'stop after this many reports'
 complete -c whykey -l events -r -a 'all' -d 'include modifier and release events'
+complete -c whykey -l pass-through -d 'capture without suppressing Hyprland shortcuts'
+complete -c whykey -s t -l terminal -d 'force terminal capture'
 complete -c whykey -s e -l evdev -d 'capture Linux input events before the compositor'
 complete -c whykey -l device -r -d 'read one /dev/input/event device'
 complete -c whykey -n '__fish_seen_subcommand_from listen' -l ndjson -d 'emit one compact schema-v2 JSON record per captured event'
@@ -775,24 +791,17 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     let evdev_devices = listen::evdev_devices();
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
-    let tmux = env::var_os("TMUX").is_some();
-    let zellij = env::var_os("ZELLIJ").is_some() || env::var_os("ZELLIJ_SESSION_NAME").is_some();
-    let screen = env::var_os("STY").is_some();
     let mut multiplexer_names = Vec::new();
-    if tmux {
+    if environment.tmux {
         multiplexer_names.push("tmux");
     }
-    if screen {
+    if environment.screen {
         multiplexer_names.push("screen");
     }
-    if zellij {
+    if environment.zellij {
         multiplexer_names.push("zellij");
     }
-    let multiplexer_display = if multiplexer_names.is_empty() {
-        "none".into()
-    } else {
-        multiplexer_names.join(" + ")
-    };
+    let multiplexer_display = &environment.multiplexer;
 
     if json {
         // Desktop detection and IPC status come from the registry; the

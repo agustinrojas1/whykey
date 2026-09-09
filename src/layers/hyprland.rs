@@ -201,11 +201,17 @@ fn inspect_system(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
 ) -> Result<LayerResult, String> {
-    let bindings_json = run_hyprctl(&["binds", "-j"])?;
+    let bindings_raw = run_hyprctl(&["binds", "-j"])?;
     let active_submap_json = run_hyprctl(&["submap", "-j"])?;
-    let active_submap: String = serde_json::from_str(&active_submap_json)
+    let mut active_submap: String = serde_json::from_str(&active_submap_json)
         .map_err(|error| format!("hyprctl returned an invalid submap: {error}"))?;
 
+    let bindings_json = if active_submap == "__whykey_capture" {
+        active_submap = query_previous_submap_from_lua().unwrap_or_else(|| "default".into());
+        filter_whykey_capture_bindings(&bindings_raw)
+    } else {
+        bindings_raw
+    };
     let devices_json = run_hyprctl(&["devices", "-j"]).ok();
     let keycodes = devices_json
         .as_deref()
@@ -1099,26 +1105,15 @@ fn xkb_keycodes_for_key(key: &KeyCombo, devices_json: &str) -> Vec<u32> {
 
 fn xkb_symbols_for_physical_key(evdev_keycode: u16, devices_json: &str) -> Option<Vec<String>> {
     let keymap = compile_main_xkb_keymap(devices_json)?;
-    let keycodes = parse_xkb_symbol_keycodes_for_group(
+    let group = main_keyboard_active_layout_index(devices_json)?;
+    Some(xkb::symbols_for_evdev_keycode(
         &keymap,
-        main_keyboard_active_layout_index(devices_json)?,
-    );
-    let candidates = [u32::from(evdev_keycode), u32::from(evdev_keycode) + 8];
-    let mut symbols = keycodes
-        .into_iter()
-        .filter_map(|(symbol, codes)| {
-            codes
-                .iter()
-                .any(|code| candidates.contains(code))
-                .then_some(symbol)
-        })
-        .collect::<Vec<_>>();
-    symbols.sort();
-    symbols.dedup();
-    Some(symbols)
+        evdev_keycode,
+        group,
+    ))
 }
 
-fn main_keyboard_active_layout_index(devices_json: &str) -> Option<usize> {
+pub(crate) fn main_keyboard_active_layout_index(devices_json: &str) -> Option<usize> {
     let devices = serde_json::from_str::<serde_json::Value>(devices_json).ok()?;
     let keyboards = devices
         .get("keyboards")
@@ -1133,7 +1128,7 @@ fn main_keyboard_active_layout_index(devices_json: &str) -> Option<usize> {
         .and_then(|index| usize::try_from(index).ok())
 }
 
-fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
+pub(crate) fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
     let Ok(devices) = serde_json::from_str::<serde_json::Value>(devices_json) else {
         return None;
     };
@@ -1428,7 +1423,7 @@ fn inspect_json_with_keycode(
         );
     }
     if has_possible_device {
-        if physical_input.is_some() {
+        if physical_input.and_then(|i| i.device.as_ref()).is_some() {
             details.push(
                 "device-specific binding could not be matched by name with certainty; it remains possible.".into(),
             );
@@ -1437,10 +1432,17 @@ fn inspect_json_with_keycode(
                 "device-specific binding found; the active keyboard device is unknown.".into(),
             );
         }
-    } else if physical_input.is_some() {
-        details.push(
-            "device-specific bindings were checked against the captured evdev device.".into(),
-        );
+    } else if let Some(input) = physical_input {
+        if input.device.is_some() {
+            details.push(
+                "device-specific bindings were checked against the captured evdev device.".into(),
+            );
+        } else {
+            details.push(
+                "The physical keycode was captured, but the source keyboard is unavailable.".into(),
+            );
+            details.push("Device-specific binding matching remains uncertain.".into());
+        }
     }
     if !inactive_bindings.is_empty() {
         details.push(format!(
@@ -1895,6 +1897,37 @@ fn boolish_value(value: &serde_json::Value) -> Option<bool> {
     }
 }
 
+fn query_previous_submap_from_lua() -> Option<String> {
+    let output = run_hyprctl(&[
+        "repl",
+        "return (_G.__whykey_capture and _G.__whykey_capture.previous_submap ~= \"\" and _G.__whykey_capture.previous_submap) or \"default\"",
+    ])
+    .ok()?;
+    let trimmed = output.trim().to_string();
+    if trimmed.is_empty()
+        || trimmed == "default"
+        || trimmed == "unknown request"
+        || trimmed == "none"
+        || trimmed == "\"default\""
+    {
+        Some("default".into())
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn filter_whykey_capture_bindings(bindings_json: &str) -> String {
+    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(bindings_json) {
+        if let Some(arr) = val.as_array_mut() {
+            arr.retain(|b| b.get("submap").and_then(|s| s.as_str()) != Some("__whykey_capture"));
+            if let Ok(filtered) = serde_json::to_string(&val) {
+                return filtered;
+            }
+        }
+    }
+    bindings_json.to_owned()
+}
+
 fn has_device_scope(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => false,
@@ -1903,12 +1936,43 @@ fn has_device_scope(value: &serde_json::Value) -> bool {
     }
 }
 
+pub(crate) fn main_keyboard_lock_state(devices_json: &str) -> (bool, bool) {
+    let Ok(devices) = serde_json::from_str::<serde_json::Value>(devices_json) else {
+        return (false, false);
+    };
+    let keyboards = devices
+        .get("keyboards")
+        .and_then(serde_json::Value::as_array);
+    let Some(keyboards) = keyboards else {
+        return (false, false);
+    };
+    let keyboard = keyboards
+        .iter()
+        .find(|keyboard| keyboard.get("main").and_then(serde_json::Value::as_bool) == Some(true))
+        .or_else(|| keyboards.first());
+    let Some(keyboard) = keyboard else {
+        return (false, false);
+    };
+    let caps = keyboard
+        .get("capsLock")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let num = keyboard
+        .get("numLock")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    (caps, num)
+}
+
 fn details_with_physical_input(
     mut details: Vec<String>,
     physical_input: Option<&PhysicalInput>,
 ) -> Vec<String> {
     if let Some(input) = physical_input {
-        details.push(format!("captured evdev device: {}", input.device));
+        match &input.device {
+            Some(device) => details.push(format!("captured evdev device: {device}")),
+            None => details.push("captured keyboard device: unavailable".into()),
+        }
         details.push(format!(
             "physical keycode: {} (XKB candidates {}, {})",
             input.keycode,
@@ -1933,8 +1997,11 @@ fn physical_device_match(
     let Some(physical_input) = physical_input else {
         return DeviceMatch::Unknown;
     };
+    let Some(device_name) = physical_input.device.as_deref() else {
+        return DeviceMatch::Unknown;
+    };
     match scope {
-        serde_json::Value::String(name) => device_name_match(name, &physical_input.device),
+        serde_json::Value::String(name) => device_name_match(name, device_name),
         serde_json::Value::Object(object) => {
             let inclusive = object
                 .get("inclusive")
@@ -1954,7 +2021,7 @@ fn physical_device_match(
             }
             let listed = names
                 .iter()
-                .map(|name| device_name_match(name, &physical_input.device))
+                .map(|name| device_name_match(name, device_name))
                 .fold(DeviceMatch::Unknown, |state, current| match current {
                     DeviceMatch::Match => DeviceMatch::Match,
                     DeviceMatch::NoMatch => state,
@@ -2343,7 +2410,7 @@ mod tests {
             "dispatcher": "exec"
         }]"#;
         let physical = PhysicalInput {
-            device: "Example-Keyboard".into(),
+            device: Some("Example-Keyboard".into()),
             keycode: 46,
         };
 
@@ -2378,7 +2445,7 @@ mod tests {
             "dispatcher": "exec"
         }]"#;
         let physical = PhysicalInput {
-            device: "example-keyboard".into(),
+            device: Some("example-keyboard".into()),
             keycode: 46,
         };
 
@@ -2413,7 +2480,7 @@ mod tests {
             "dispatcher": "exec"
         }]"#;
         let physical = PhysicalInput {
-            device: "keyboard".into(),
+            device: Some("keyboard".into()),
             keycode: 105,
         };
 
@@ -2442,7 +2509,7 @@ mod tests {
             "dispatcher": "exec"
         }]"#;
         let physical = PhysicalInput {
-            device: "keyboard".into(),
+            device: Some("keyboard".into()),
             keycode: 105,
         };
 

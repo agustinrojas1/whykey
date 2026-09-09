@@ -5,6 +5,7 @@ pub mod conflicts;
 pub mod environment;
 pub mod extensions;
 pub mod focus;
+pub mod hyprland_capture;
 pub mod ime;
 pub mod key;
 pub mod layers;

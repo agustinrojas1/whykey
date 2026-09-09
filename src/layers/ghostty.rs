@@ -494,11 +494,7 @@ fn parse_config_file(value: &str) -> (bool, PathBuf) {
     let (optional, value) = value
         .strip_prefix('?')
         .map_or((false, value), |value| (true, value));
-    (optional, unquote(value.trim()).into())
-}
-
-fn unquote(value: &str) -> &str {
-    crate::util::unquote(value)
+    (optional, crate::util::unquote(value.trim()).into())
 }
 
 fn resolve_include(parent: &Path, include: &Path) -> PathBuf {

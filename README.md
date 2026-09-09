@@ -41,8 +41,10 @@ publication follows the first release; see [`packaging/README.md`](packaging/REA
 whykey ctrl+left                    # inspect one combination
 whykey inspect ctrl+x ctrl+s        # inspect a sequence
 whykey inspect --focused ctrl+z     # inspect the focused application
-whykey listen                       # explain the next terminal key
-whykey listen --repeat              # inspect one deliberate key at a time
+whykey listen                       # explain the next shortcut (suppresses Hyprland bindings)
+whykey listen --pass-through        # explain the shortcut without suppressing its action
+whykey listen --repeat              # inspect one deliberate shortcut at a time
+whykey listen --terminal            # force terminal-only capture
 whykey listen --evdev               # observe a physical Linux input device
 whykey doctor                       # check available integrations
 whykey bindings                     # list detected desktop bindings
@@ -67,12 +69,19 @@ Each adapter uses read-only IPC or parses a small, known part of the relevant
 configuration. Missing tools and dynamic configuration are reported as
 uncertain evidence instead of guessed answers.
 
-`whykey listen` observes the next deliberate press that reaches the terminal.
-It temporarily enables terminal key capture only while waiting, then restores
-the terminal before explaining the result. Press Escape or Ctrl+C to exit.
-Its optional `--evdev` mode reads Linux input events before the compositor and
-may require permission to access `/dev/input/event*`. Whykey never grabs an
-input device.
+`whykey listen` captures the next deliberate shortcut to explain its path.
+When running inside a compatible Hyprland session, it defaults to capturing
+and temporarily suppressing ordinary Hyprland bindings via a private submap
+and runtime Lua event hook. Pass `--pass-through` to observe shortcuts while
+allowing their normal actions to run. Because Hyprland's key event does not
+identify the originating keyboard, device identity is reported as unavailable.
+
+If native Hyprland capture is unavailable, Whykey falls back to terminal capture,
+observing keys that reach the terminal. Pass `--terminal` to explicitly force
+terminal-only capture. Pass `--evdev` to read Linux input events before the
+compositor (may require permission to access `/dev/input/event*`). Whykey
+never grabs an input device and cleans up temporary hooks on exit. Press
+Escape or Ctrl+C to exit.
 
 ## Support
 

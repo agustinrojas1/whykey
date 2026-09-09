@@ -103,9 +103,10 @@ pub fn inspect_with_detections(
         );
     }
     if let Some(input) = physical_input {
+        let source_desc = input.device.as_deref().unwrap_or("compositor capture");
         details.push(format!(
-            "captured evdev input {} from {}; remapper routing remains unverified",
-            input.keycode, input.device
+            "captured evdev input {} from {source_desc}; remapper routing remains unverified",
+            input.keycode
         ));
     }
     details.push(
@@ -239,7 +240,7 @@ fn config_candidates(env_name: &str, defaults: &[&str]) -> Vec<PathBuf> {
 }
 
 fn parse_keyd_transformations(path: &Path) -> Vec<String> {
-    let Some(content) = read_config(path) else {
+    let Some(content) = crate::util::read_bounded(path, MAX_CONFIG_BYTES) else {
         return Vec::new();
     };
     let mut transformations = content
@@ -270,7 +271,7 @@ fn parse_keyd_transformations(path: &Path) -> Vec<String> {
 }
 
 fn parse_lisp_transformations(path: &Path) -> Vec<String> {
-    let Some(content) = read_config(path) else {
+    let Some(content) = crate::util::read_bounded(path, MAX_CONFIG_BYTES) else {
         return Vec::new();
     };
     let mut transformations = Vec::new();
@@ -310,7 +311,7 @@ fn parse_lisp_transformations(path: &Path) -> Vec<String> {
 }
 
 fn parse_input_remapper_transformations(path: &Path) -> Vec<String> {
-    let Some(content) = read_config(path) else {
+    let Some(content) = crate::util::read_bounded(path, MAX_CONFIG_BYTES) else {
         return Vec::new();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
@@ -352,7 +353,7 @@ fn display_json_value(value: &serde_json::Value) -> String {
 }
 
 fn parse_xremap_transformations(path: &Path) -> Vec<String> {
-    let Some(content) = read_config(path) else {
+    let Some(content) = crate::util::read_bounded(path, MAX_CONFIG_BYTES) else {
         return Vec::new();
     };
     let mut transformations = Vec::new();
@@ -387,14 +388,6 @@ fn parse_xremap_transformations(path: &Path) -> Vec<String> {
     }
     transformations.truncate(MAX_CONFIG_FILES);
     transformations
-}
-
-fn read_config(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    if bytes.len() > MAX_CONFIG_BYTES {
-        return None;
-    }
-    String::from_utf8(bytes).ok()
 }
 
 #[cfg(test)]

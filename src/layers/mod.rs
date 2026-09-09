@@ -218,7 +218,7 @@ impl Serialize for LayerResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalInput {
-    pub device: String,
+    pub device: Option<String>,
     pub keycode: u16,
 }
 
@@ -369,7 +369,30 @@ pub fn inspect_default_chain_evdev_with_session(
             protocol_flags: None,
             observed_bytes: None,
             physical_input: Some(PhysicalInput {
-                device: device.into(),
+                device: Some(device.into()),
+                keycode,
+            }),
+            termios: None,
+            application_pid: None,
+            application_source: None,
+        },
+        session,
+    )
+}
+
+pub fn inspect_default_chain_hyprland_with_session(
+    key: &KeyCombo,
+    keycode: u16,
+    session: &crate::environment::Environment,
+) -> Vec<LayerResult> {
+    inspect_with_request_and_session(
+        &InspectRequest {
+            key: Some(key),
+            force_continue: false,
+            protocol_flags: None,
+            observed_bytes: None,
+            physical_input: Some(PhysicalInput {
+                device: None,
                 keycode,
             }),
             termios: None,

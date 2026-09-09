@@ -6,6 +6,7 @@ use std::process::Command;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput, format_bytes};
+use crate::util::unquote;
 
 #[derive(Debug, Clone)]
 struct Binding {
@@ -620,7 +621,7 @@ fn parse_konsole(content: &str) -> Vec<Binding> {
             let trigger = parse_alacritty_key(key, &modifiers)?;
             let raw_output = output.trim();
             let decoded = if raw_output.starts_with('"') || raw_output.starts_with('\'') {
-                Some(decode_escape(&unquote(raw_output)))
+                Some(decode_escape(unquote(raw_output)))
             } else {
                 None
             };
@@ -847,7 +848,7 @@ fn yaml_inline_fields(value: &str) -> Vec<(String, String)> {
 
 fn yaml_field_pair(value: &str) -> Option<(String, String)> {
     let (name, value) = value.split_once(':')?;
-    Some((name.trim().to_owned(), unquote(value.trim())))
+    Some((name.trim().to_owned(), unquote(value.trim()).to_owned()))
 }
 
 fn yaml_field(
@@ -858,7 +859,7 @@ fn yaml_field(
     action: &mut Option<String>,
     chars: &mut Option<String>,
 ) {
-    let value = unquote(value.trim());
+    let value = unquote(value.trim()).to_owned();
     match name.trim() {
         "key" => *key = Some(value),
         "mods" => *mods = Some(value),
@@ -888,7 +889,7 @@ fn alacritty_block(lines: &[&str]) -> Option<Binding> {
 fn field_value(lines: &[&str], field: &str) -> Option<String> {
     lines.iter().find_map(|line| {
         let (name, value) = line.split_once('=')?;
-        (name.trim() == field).then(|| unquote(value.trim()))
+        (name.trim() == field).then(|| unquote(value.trim()).to_owned())
     })
 }
 
@@ -1018,10 +1019,6 @@ fn action_is_consuming(action: &str) -> bool {
             | "findnext"
             | "findprevious"
     ) || compact.starts_with("move")
-}
-
-fn unquote(value: &str) -> String {
-    crate::util::unquote(value).to_owned()
 }
 
 fn decode_escape(value: &str) -> Vec<u8> {

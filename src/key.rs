@@ -19,10 +19,10 @@ pub struct KeyCombo {
 }
 
 impl KeyCombo {
-    pub(crate) fn from_parts(modifiers: u32, key: impl Into<String>) -> Self {
+    pub(crate) fn from_parts(modifiers: u32, key: impl AsRef<str>) -> Self {
         Self {
             modifiers,
-            key: key.into().to_ascii_uppercase(),
+            key: normalize_key_str(key.as_ref()),
         }
     }
 
@@ -244,6 +244,69 @@ fn modifier_mask(value: &str) -> Option<u32> {
     }
 }
 
+pub(crate) fn normalize_key_str(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "arrowleft" | "arrow_left" | "leftarrow" | "left_arrow" => "LEFT".into(),
+        "arrowright" | "arrow_right" | "rightarrow" | "right_arrow" => "RIGHT".into(),
+        "arrowup" | "arrow_up" | "uparrow" | "up_arrow" => "UP".into(),
+        "arrowdown" | "arrow_down" | "downarrow" | "down_arrow" => "DOWN".into(),
+        "enter" | "return" | "kp_enter" | "kp_return" => "RETURN".into(),
+        "esc" | "escape" => "ESCAPE".into(),
+        "spacebar" | "space" => "SPACE".into(),
+        "pgup" | "pageup" | "page_up" | "prior" | "kp_prior" => "PAGE_UP".into(),
+        "pgdown" | "pagedown" | "page_down" | "next" | "kp_next" => "PAGE_DOWN".into(),
+        "backspace" => "BACKSPACE".into(),
+        "delete" | "del" => "DELETE".into(),
+        "insert" | "ins" => "INSERT".into(),
+        "home" | "kp_home" => "HOME".into(),
+        "end" | "kp_end" => "END".into(),
+        "tab" | "iso_left_tab" => "TAB".into(),
+        "exclam" => "!".into(),
+        "at" => "@".into(),
+        "numbersign" => "#".into(),
+        "dollar" => "$".into(),
+        "percent" => "%".into(),
+        "asciicircum" => "^".into(),
+        "ampersand" => "&".into(),
+        "asterisk" | "kp_multiply" => "*".into(),
+        "parenleft" => "(".into(),
+        "parenright" => ")".into(),
+        "minus" | "kp_subtract" => "-".into(),
+        "underscore" => "_".into(),
+        "equal" | "kp_equal" => "=".into(),
+        "plus" | "kp_add" => "+".into(),
+        "bracketleft" => "[".into(),
+        "bracketright" => "]".into(),
+        "braceleft" => "{".into(),
+        "braceright" => "}".into(),
+        "semicolon" => ";".into(),
+        "colon" => ":".into(),
+        "apostrophe" => "'".into(),
+        "quotedbl" => "\"".into(),
+        "grave" => "`".into(),
+        "asciitilde" => "~".into(),
+        "backslash" => "\\".into(),
+        "bar" => "|".into(),
+        "comma" => ",".into(),
+        "less" => "<".into(),
+        "period" => ".".into(),
+        "greater" => ">".into(),
+        "slash" | "kp_divide" => "/".into(),
+        "question" => "?".into(),
+        "kp_0" => "0".into(),
+        "kp_1" => "1".into(),
+        "kp_2" => "2".into(),
+        "kp_3" => "3".into(),
+        "kp_4" => "4".into(),
+        "kp_5" => "5".into(),
+        "kp_6" => "6".into(),
+        "kp_7" => "7".into(),
+        "kp_8" => "8".into(),
+        "kp_9" => "9".into(),
+        value => value.to_ascii_uppercase(),
+    }
+}
+
 fn normalize_key(value: &str) -> Result<String, ParseKeyComboError> {
     if value.chars().any(char::is_whitespace) {
         return Err(ParseKeyComboError(format!(
@@ -251,34 +314,15 @@ fn normalize_key(value: &str) -> Result<String, ParseKeyComboError> {
         )));
     }
 
-    let normalized = match value.to_ascii_lowercase().as_str() {
-        "arrowleft" | "arrow_left" | "leftarrow" | "left_arrow" => "LEFT",
-        "arrowright" | "arrow_right" | "rightarrow" | "right_arrow" => "RIGHT",
-        "arrowup" | "arrow_up" | "uparrow" | "up_arrow" => "UP",
-        "arrowdown" | "arrow_down" | "downarrow" | "down_arrow" => "DOWN",
-        "enter" | "return" | "kp_enter" | "kp_return" => "RETURN",
-        "esc" | "escape" => "ESCAPE",
-        "spacebar" => "SPACE",
-        "pgup" | "pageup" | "page_up" | "prior" => "PAGE_UP",
-        "pgdown" | "pagedown" | "page_down" | "next" => "PAGE_DOWN",
-        "backspace" => "BACKSPACE",
-        "delete" | "del" => "DELETE",
-        "insert" | "ins" => "INSERT",
-        "home" => "HOME",
-        "end" => "END",
-        "tab" => "TAB",
-        "space" => "SPACE",
-        value if value.starts_with("code:") => {
-            let code = value.strip_prefix("code:").unwrap_or_default();
-            if code.is_empty() || !code.chars().all(|character| character.is_ascii_digit()) {
-                return Err(ParseKeyComboError(format!("invalid keycode '{value}'")));
-            }
-            return Ok(format!("CODE:{code}"));
+    if value.to_ascii_lowercase().starts_with("code:") {
+        let code = value.split_at(5).1;
+        if code.is_empty() || !code.chars().all(|character| character.is_ascii_digit()) {
+            return Err(ParseKeyComboError(format!("invalid keycode '{value}'")));
         }
-        _ => return Ok(value.to_ascii_uppercase()),
-    };
+        return Ok(format!("CODE:{code}"));
+    }
 
-    Ok(normalized.into())
+    Ok(normalize_key_str(value))
 }
 
 #[cfg(test)]

@@ -1,10 +1,12 @@
-//! Capture one key event from the controlling terminal or Linux evdev and
-//! explain it.
+//! Capture one key event from Hyprland compositor, Linux evdev, or the
+//! controlling terminal, and explain it.
 //!
-//! The default listener captures the terminal side of the chain. A compositor
-//! binding that consumes a key never reaches it, so the static
-//! `whykey <combo>` command remains the right tool for that case. The optional
-//! evdev backend observes the physical key before compositor processing.
+//! When running inside a compatible Hyprland session, the default listener
+//! uses a temporary runtime Lua hook and capture submap to suppress bound
+//! compositor actions during inspection (or pass them through when configured).
+//! If Hyprland capture is unavailable, it falls back to terminal capture
+//! (`--terminal` explicitly forces terminal capture). The optional evdev backend
+//! observes physical input events before compositor processing.
 
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
@@ -15,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome};
@@ -34,15 +36,26 @@ const MAX_TERMINAL_SEQUENCE_BYTES: usize = 4096;
 const KITTY_CAPTURE_FLAGS: u32 = 1 | 2 | 4 | 8 | 16;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+pub use crate::hyprland_capture::HyprlandCapturePolicy;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureDisposition {
+    Suppressed,
+    PassedThrough,
+    ObservedOnly,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
+    pub capture_policy: HyprlandCapturePolicy,
     pub repeat: bool,
     pub json: bool,
     /// Emit one compact schema-v2 JSON record per captured event. This is a
     /// stream-only format, so it is accepted by `whykey listen` rather than
     /// static inspection commands.
     pub ndjson: bool,
+    pub terminal: bool,
     pub evdev: bool,
     pub device: Option<PathBuf>,
     /// Stop waiting after this amount of wall-clock time. The deadline is
@@ -166,13 +179,14 @@ pub fn evdev_devices() -> Vec<EvdevDeviceInfo> {
 pub enum ListenError {
     Io(io::Error),
     Message(String),
+    Setup(String),
 }
 
 impl fmt::Display for ListenError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "{error}"),
-            Self::Message(message) => formatter.write_str(message),
+            Self::Message(message) | Self::Setup(message) => formatter.write_str(message),
         }
     }
 }
@@ -193,6 +207,7 @@ enum ReadEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ObservedKey {
+    pub disposition: CaptureDisposition,
     pub combo: KeyCombo,
     pub raw: Vec<u8>,
     #[serde(default)]
@@ -248,6 +263,7 @@ pub struct DeviceModifierState {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub enum CaptureSource {
     Terminal,
+    Hyprland,
     Evdev { device: String, path: String },
 }
 
@@ -255,6 +271,7 @@ impl CaptureSource {
     pub fn label(&self) -> String {
         match self {
             Self::Terminal => "terminal".into(),
+            Self::Hyprland => "Hyprland".into(),
             Self::Evdev { device, path } => format!("evdev ({device}; {path})"),
         }
     }
@@ -284,6 +301,258 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     if options.evdev || options.device.is_some() {
         return run_evdev(options);
     }
+    if options.terminal {
+        return run_terminal(options);
+    }
+    #[cfg(target_os = "linux")]
+    match crate::hyprland_capture::HyprlandCaptureSession::connect() {
+        Ok(session) => run_hyprland(options, session),
+        Err(error) => {
+            if options.events_all {
+                return Err(ListenError::Message(format!(
+                    "Hyprland capture unavailable: {error}; --events all requires Hyprland or evdev capture"
+                )));
+            }
+            if options.capture_policy == HyprlandCapturePolicy::Suppress
+                && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
+            {
+                eprintln!("whykey listen: could not suppress Hyprland shortcuts");
+                eprintln!("No key was captured and no shortcut was executed.");
+                eprintln!("Use --pass-through to capture without suppression.");
+                return Err(ListenError::Setup(format!(
+                    "Hyprland capture unavailable: {error}"
+                )));
+            }
+            eprintln!("Global Hyprland capture is unavailable: {error}");
+            eprintln!(
+                "Using terminal capture; shortcuts consumed by the compositor will not appear."
+            );
+            run_terminal(options)
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if options.events_all {
+            return Err(ListenError::Message(
+                "--events all requires evdev capture on non-Linux platforms".into(),
+            ));
+        }
+        eprintln!("Global Hyprland capture is unavailable: only supported on Linux");
+        eprintln!("Using terminal capture; shortcuts consumed by the compositor will not appear.");
+        run_terminal(options)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_hyprland(
+    options: Options,
+    mut capture_session: crate::hyprland_capture::HyprlandCaptureSession,
+) -> Result<(), ListenError> {
+    let signals = SignalGuard::install()?;
+    let mut export = open_export(options.output.as_deref())?;
+    let snapshot = ListenSession::capture();
+
+    if options.capture_policy == HyprlandCapturePolicy::Suppress
+        && crate::hyprland_capture::has_universal_bindings()
+    {
+        eprintln!("warning: universal Hyprland bindings remain active during capture");
+    }
+
+    let mut capture_stdout = io::BufWriter::new(io::stdout());
+    let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
+    let mut captured_events = 0_usize;
+
+    // Keep one terminal raw-mode guard for the complete Hyprland listening session
+    let mut terminal = TerminalSession::open()?;
+    let original_termios = terminal.original;
+    let tty_fd = terminal.tty.as_raw_fd();
+    let socket_fd = capture_session.socket_fd();
+    let _ = flush_input(tty_fd);
+
+    if let Err(err) = capture_session.arm(options.capture_policy) {
+        let _ = flush_input(tty_fd);
+        if options.capture_policy == HyprlandCapturePolicy::Suppress {
+            eprintln!("whykey listen: could not suppress Hyprland shortcuts");
+            eprintln!("No key was captured and no shortcut was executed.");
+            eprintln!("Use --pass-through to capture without suppression.");
+            return Err(ListenError::Setup(
+                "could not suppress Hyprland shortcuts".into(),
+            ));
+        } else {
+            return Err(ListenError::Setup(format!(
+                "Hyprland capture failed to arm: {err}"
+            )));
+        }
+    }
+
+    if options.json {
+        eprintln!("whykey listen: press a key combination (Esc or Ctrl+C exits)");
+    } else {
+        println!("whykey listen");
+        if options.capture_policy == HyprlandCapturePolicy::Suppress {
+            println!("Hyprland shortcuts are temporarily suppressed.");
+        }
+        println!("Press a key combination. Press Esc or Ctrl+C to exit.");
+        if options.repeat {
+            println!("Repeat mode is on.");
+        }
+        println!();
+    }
+
+    if options.json {
+        eprintln!("Waiting for input...");
+    } else {
+        println!("Waiting for input...");
+    }
+    let _ = io::stdout().flush();
+
+    let mut last_renewed = Instant::now();
+    loop {
+        let observed = loop {
+            if signals.received() {
+                let _ = flush_input(tty_fd);
+                capture_session.close().map_err(ListenError::Io)?;
+                return Err(ListenError::Message(
+                    "interrupted; terminal settings restored".into(),
+                ));
+            }
+            if deadline.is_some_and(|value| Instant::now() >= value) {
+                let _ = flush_input(tty_fd);
+                capture_session.close().map_err(ListenError::Io)?;
+                return Err(ListenError::Message("capture timed out".into()));
+            }
+
+            if capture_session.is_suppressing() && last_renewed.elapsed() >= Duration::from_secs(2)
+            {
+                capture_session.renew_lease().map_err(|e| {
+                    ListenError::Message(format!("failed to renew capture lease: {e}"))
+                })?;
+                last_renewed = Instant::now();
+            }
+            if let Some(observed) = capture_session
+                .next_observed_event(options.events_all)
+                .map_err(ListenError::Message)?
+            {
+                if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
+                    if options.json {
+                        eprintln!("Stopped.");
+                    } else {
+                        println!("\nStopped.");
+                    }
+                    return Ok(());
+                }
+                break observed;
+            }
+
+            let timeout_ms = deadline
+                .map(remaining_millis)
+                .map_or(100, |remaining| remaining.min(100));
+            let mut pollfds = [
+                libc::pollfd {
+                    fd: socket_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: tty_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let result = unsafe { libc::poll(pollfds.as_mut_ptr(), 2, timeout_ms) };
+            if result == -1 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                let _ = flush_input(tty_fd);
+                return Err(ListenError::Io(error));
+            }
+            if pollfds[1].revents & libc::POLLIN != 0 {
+                // Drain forwarded terminal bytes continuously
+                let mut scratch = [0u8; 1024];
+                let _ = terminal.tty.read(&mut scratch);
+            }
+            if pollfds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                let _ = flush_input(tty_fd);
+                capture_session.close().map_err(ListenError::Io)?;
+                return Err(ListenError::Message(
+                    "Hyprland socket disconnected while listening".into(),
+                ));
+            }
+            if pollfds[0].revents & libc::POLLIN != 0 {
+                if let Err(err) = capture_session.read_incoming() {
+                    let _ = flush_input(tty_fd);
+                    capture_session.close().map_err(ListenError::Io)?;
+                    return Err(ListenError::Io(err));
+                }
+            }
+        };
+
+        if capture_session.is_suppressing() {
+            let main_code = observed
+                .physical_keycode
+                .map_or(0, |code| (code + 8) as u32);
+            if let Err(err) =
+                capture_session.wait_for_chord_release(main_code, Duration::from_millis(1000))
+            {
+                let _ = flush_input(tty_fd);
+                capture_session.close().map_err(ListenError::Io)?;
+                return Err(ListenError::Message(err));
+            }
+            let keep_listening = options.repeat
+                || options
+                    .count
+                    .is_some_and(|count| count > 1 && captured_events + 1 < count);
+            if !keep_listening {
+                let _ = capture_session.restore_submap();
+            }
+        }
+
+        let results = snapshot.inspect(&observed, Some(&original_termios));
+        let rendered = if options.json {
+            if options.ndjson {
+                report::render_ndjson(&observed.combo, &results, Some(&observed))
+            } else {
+                report::render_listen_json(
+                    &observed.combo,
+                    &results,
+                    Some(&observed),
+                    options.schema_version,
+                )
+            }
+        } else {
+            report::render_observed(&observed, &results, options.verbose)
+        };
+        write_capture(&mut export, &mut capture_stdout, &rendered)?;
+
+        // Flush any lingering bytes in TTY input queue before waiting for the next key
+        let _ = flush_input(tty_fd);
+
+        captured_events += 1;
+        let count_reached = options.count.is_some_and(|count| captured_events >= count);
+        let keep_listening = options.repeat || options.count.is_some_and(|count| count > 1);
+        if !keep_listening || count_reached {
+            break;
+        }
+        if !options.json {
+            println!();
+        }
+    }
+
+    let _ = flush_input(tty_fd);
+    capture_session.close().map_err(ListenError::Io)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_hyprland(_options: Options) -> Result<(), ListenError> {
+    Err(ListenError::Setup(
+        "Hyprland capture is only available on Linux".into(),
+    ))
+}
+
+fn run_terminal(options: Options) -> Result<(), ListenError> {
     let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
     let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
@@ -433,6 +702,13 @@ fn inspect_with_session(
             crate::layers::inspect_default_chain_evdev_with_session(
                 &observed.combo,
                 device.clone(),
+                keycode,
+                &session.environment,
+            )
+        }
+        (CaptureSource::Hyprland, Some(keycode)) => {
+            crate::layers::inspect_default_chain_hyprland_with_session(
+                &observed.combo,
                 keycode,
                 &session.environment,
             )
@@ -876,6 +1152,7 @@ impl EvdevSession {
                         )),
                         physical_keycode: Some(event.code),
                         source: CaptureSource::Evdev { device, path },
+                        disposition: CaptureDisposition::ObservedOnly,
                     });
                     break;
                 } else {
@@ -908,6 +1185,7 @@ impl EvdevSession {
                 alternate_key: Some(format!("physical keycode {} ({key_name})", event.code)),
                 physical_keycode: Some(event.code),
                 source: CaptureSource::Evdev { device, path },
+                disposition: CaptureDisposition::ObservedOnly,
             });
             break;
         }
@@ -1159,7 +1437,7 @@ fn evdev_locked_modifiers_from_kernel(file: &File) -> u32 {
 }
 
 #[cfg(target_os = "linux")]
-fn evdev_modifier(code: u16) -> Option<u32> {
+pub(crate) fn evdev_modifier(code: u16) -> Option<u32> {
     Some(match code {
         29 | 97 => 4,    // KEY_LEFTCTRL / KEY_RIGHTCTRL
         42 | 54 => 1,    // KEY_LEFTSHIFT / KEY_RIGHTSHIFT
@@ -1211,7 +1489,7 @@ fn evdev_lock_names(mask: u32) -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn evdev_key_name(code: u16) -> Option<&'static str> {
+pub(crate) fn evdev_key_name(code: u16) -> Option<&'static str> {
     Some(match code {
         1 => "ESCAPE",
         2 => "1",
@@ -1283,9 +1561,24 @@ fn evdev_key_name(code: u16) -> Option<&'static str> {
         68 => "F10",
         69 => "NUMLOCK",
         70 => "SCROLLLOCK",
+        71 => "KP_7",
+        72 => "KP_8",
+        73 => "KP_9",
+        74 => "KP_SUBTRACT",
+        75 => "KP_4",
+        76 => "KP_5",
+        77 => "KP_6",
+        78 => "KP_ADD",
+        79 => "KP_1",
+        80 => "KP_2",
+        81 => "KP_3",
+        82 => "KP_0",
+        83 => "KP_DECIMAL",
         87 => "F11",
         88 => "F12",
+        96 => "KP_ENTER",
         97 => "RIGHTCTRL",
+        98 => "KP_DIVIDE",
         100 => "RIGHTALT",
         102 => "HOME",
         103 => "UP",
@@ -1700,6 +1993,7 @@ fn decode_bytes(bytes: Vec<u8>) -> Result<ObservedKey, io::Error> {
         alternate_keys,
         alternate_key,
         source: CaptureSource::Terminal,
+        disposition: CaptureDisposition::ObservedOnly,
     })
 }
 
@@ -2472,6 +2766,7 @@ mod tests {
                 alternate_keys: None,
                 alternate_key: None,
                 source: CaptureSource::Terminal,
+                disposition: CaptureDisposition::ObservedOnly,
             }
         }
         assert!(is_cancel_key(&observed("escape", vec![0x1b])));
@@ -2850,5 +3145,57 @@ xkb_symbols "pc" {
             }
             .confirms_terminal()
         );
+        assert!(!CaptureSource::Hyprland.confirms_terminal());
+        assert_eq!(CaptureSource::Hyprland.label(), "Hyprland");
+    }
+
+    #[test]
+    fn hyprland_events_all_includes_modifiers_and_releases() {
+        use crate::hyprland_capture::{HyprlandKeyEvent, decode_test_event};
+
+        // LeftCtrl (evdev 29 -> XKB 37) press
+        let event = HyprlandKeyEvent {
+            token: "tok".into(),
+            xkb_keycode: 37,
+            event_type: KeyEventType::Press,
+            modifier_mask: 4,
+        };
+        let observed = decode_test_event(&event, None, 0, false, false);
+        assert_eq!(observed.combo.key(), "LEFTCTRL");
+        assert_eq!(observed.event_type, KeyEventType::Press);
+
+        // Release event (state = 0)
+        let rel_event = HyprlandKeyEvent {
+            token: "tok".into(),
+            xkb_keycode: 36,
+            event_type: KeyEventType::Release,
+            modifier_mask: 0,
+        };
+        let observed_rel = decode_test_event(&rel_event, None, 0, false, false);
+        assert_eq!(observed_rel.combo.key(), "RETURN");
+        assert_eq!(observed_rel.event_type, KeyEventType::Release);
+    }
+
+    #[test]
+    fn stopping_conditions_for_oneshot_and_repeat() {
+        let opt_oneshot = Options {
+            repeat: false,
+            count: None,
+            ..Default::default()
+        };
+        let keep = opt_oneshot.repeat || opt_oneshot.count.is_some_and(|c| c > 1);
+        assert!(!keep, "one-shot must not keep listening");
+
+        let opt_repeat = Options {
+            repeat: true,
+            count: Some(2),
+            ..Default::default()
+        };
+        let keep_repeat = opt_repeat.repeat || opt_repeat.count.is_some_and(|c| c > 1);
+        assert!(keep_repeat);
+        let captured_1 = 1;
+        assert!(!opt_repeat.count.is_some_and(|c| captured_1 >= c));
+        let captured_2 = 2;
+        assert!(opt_repeat.count.is_some_and(|c| captured_2 >= c));
     }
 }

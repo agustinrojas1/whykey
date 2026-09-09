@@ -10,7 +10,7 @@ struct JsonReport<'a> {
     key: &'a KeyCombo,
     key_display: String,
     confidence: &'static str,
-    observed: Option<&'a ObservedKey>,
+    observed: Option<serde_json::Value>,
     layers: &'a [LayerResult],
 }
 
@@ -100,6 +100,13 @@ fn render_json_for_operation(
     if schema_version == 2 {
         return render_json_v2(key, layers, observed, operation);
     }
+    let observed_v1 = observed.and_then(|obs| {
+        let mut val = serde_json::to_value(obs).ok()?;
+        if let serde_json::Value::Object(map) = &mut val {
+            map.remove("disposition");
+        }
+        Some(val)
+    });
     serde_json::to_string_pretty(&JsonReport {
         schema_version: 1,
         key,
@@ -108,7 +115,7 @@ fn render_json_for_operation(
             layers,
             observed.is_some_and(|observation| observation.source.confirms_terminal()),
         ),
-        observed,
+        observed: observed_v1,
         layers,
     })
     .expect("whykey report types are serializable")
@@ -300,16 +307,35 @@ fn render_inner(
         } else {
             "raw event"
         };
-        let encoding_note = if observation.source.confirms_terminal() {
-            match crate::layers::terminal_identity() {
-                Some(name) => {
-                    format!("  downstream analysis uses {name}'s normal encoding when available")
+        let universal_match = layers.iter().any(|l| {
+            l.layer == "Hyprland" && l.details.iter().any(|d| d.contains("(all submaps)"))
+        });
+        let encoding_note = match observation.disposition {
+            crate::listen::CaptureDisposition::Suppressed => {
+                if universal_match {
+                    "  Whykey captured this event, but universal Hyprland bindings may execute.".to_owned()
+                } else {
+                    "  Whykey captured and suppressed this event.".to_owned()
                 }
-                None => "  downstream analysis uses the terminal's normal encoding when available"
-                    .to_owned(),
             }
-        } else {
-            "  physical capture does not prove compositor or terminal forwarding".to_owned()
+            crate::listen::CaptureDisposition::PassedThrough
+            | crate::listen::CaptureDisposition::ObservedOnly => match &observation.source {
+                crate::listen::CaptureSource::Terminal => {
+                    match crate::layers::terminal_identity() {
+                        Some(name) => {
+                            format!("  downstream analysis uses {name}'s normal encoding when available")
+                        }
+                        None => "  downstream analysis uses the terminal's normal encoding when available"
+                            .to_owned(),
+                    }
+                }
+                crate::listen::CaptureSource::Hyprland => {
+                    "  compositor capture proves the key reached Hyprland, but does not prove forwarding".to_owned()
+                }
+                crate::listen::CaptureSource::Evdev { .. } => {
+                    "  physical capture does not prove compositor or terminal forwarding".to_owned()
+                }
+            },
         };
         output.push_str(&format!(
             "Capture\n  source: {}\n  observed key: {}\n  event: {}\n  encoding: {}\n  {raw_label}: {}\n{}\n",
@@ -338,7 +364,12 @@ fn render_inner(
                 "  modifiers pressed: {pressed}\n  modifiers locked: {locked}\n"
             ));
             if state.latched.is_none() {
-                output.push_str("  modifiers latched: unavailable from evdev\n");
+                let from = match &observation.source {
+                    crate::listen::CaptureSource::Terminal => "terminal",
+                    crate::listen::CaptureSource::Hyprland => "compositor",
+                    crate::listen::CaptureSource::Evdev { .. } => "evdev",
+                };
+                output.push_str(&format!("  modifiers latched: unavailable from {from}\n"));
             }
         }
         if let Some(alternate) = &observation.alternate_key {
@@ -405,14 +436,80 @@ fn render_conclusion(
 ) -> String {
     let mut output = String::from("Result:\n");
     if let Some(observation) = observation {
-        if observation.source.confirms_terminal() {
-            output.push_str(
-                "  The captured event reached this terminal, so earlier forwarding is confirmed.\n",
-            );
-        } else {
-            output.push_str(
-                "  The physical key event was captured before the compositor; forwarding is not confirmed.\n",
-            );
+        match observation.disposition {
+            crate::listen::CaptureDisposition::Suppressed => {
+                let universal_match = layers.iter().any(|l| {
+                    l.layer == "Hyprland" && l.details.iter().any(|d| d.contains("(all submaps)"))
+                });
+                if universal_match {
+                    output.push_str(
+                        "  Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute.\n",
+                    );
+                } else {
+                    output.push_str("  Whykey captured and suppressed this event.\n");
+                }
+                if let Some(layer) = layers.iter().find(|l| l.status() == LayerStatus::Handled) {
+                    let action_summary = layer.details.iter().find_map(|d| {
+                        d.strip_prefix("binding: ")
+                            .or_else(|| d.strip_prefix("exact: "))
+                            .or_else(|| d.strip_prefix("device-specific binding: "))
+                            .map(|s| {
+                                let after_semi = s.split("; ").last().unwrap_or(s);
+                                let before_paren =
+                                    after_semi.split(" (").next().unwrap_or(after_semi);
+                                let before_bracket =
+                                    before_paren.split(" [").next().unwrap_or(before_paren);
+                                before_bracket.trim()
+                            })
+                    });
+                    if let Some(action) = action_summary {
+                        if universal_match {
+                            output.push_str(&format!(
+                                "  The normal configuration indicates that {} may execute {}.\n",
+                                layer.layer, action
+                            ));
+                        } else {
+                            output.push_str(&format!(
+                                "  The normal configuration indicates that {} would run {}.\n",
+                                layer.layer, action
+                            ));
+                        }
+                    } else if universal_match {
+                        output.push_str(&format!(
+                            "  The normal configuration indicates that {} universal binding may handle {key}.\n",
+                            layer.layer
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  The normal configuration indicates that {} would handle and consume {key}.\n",
+                            layer.layer
+                        ));
+                    }
+                    return output;
+                }
+            }
+            crate::listen::CaptureDisposition::PassedThrough => {
+                output.push_str(
+                    "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
+                );
+            }
+            crate::listen::CaptureDisposition::ObservedOnly => match &observation.source {
+                crate::listen::CaptureSource::Terminal => {
+                    output.push_str(
+                            "  The captured event reached this terminal, so earlier forwarding is confirmed.\n",
+                        );
+                }
+                crate::listen::CaptureSource::Hyprland => {
+                    output.push_str(
+                            "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
+                        );
+                }
+                crate::listen::CaptureSource::Evdev { .. } => {
+                    output.push_str(
+                            "  The physical key event was captured before the compositor; forwarding is not confirmed.\n",
+                        );
+                }
+            },
         }
     }
     match layers.last() {
@@ -758,6 +855,7 @@ mod tests {
             alternate_keys: None,
             alternate_key: None,
             source: crate::listen::CaptureSource::Terminal,
+            disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
         let layers = [
             LayerResult {
@@ -803,6 +901,7 @@ mod tests {
                 device: "Test Keyboard".into(),
                 path: "/dev/input/event0".into(),
             },
+            disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
         let layers = [LayerResult {
             layer: "Hyprland",
@@ -817,6 +916,174 @@ mod tests {
         assert!(output.contains("physical key event was captured before the compositor"));
         assert!(!output.contains("earlier forwarding is confirmed"));
         assert!(!output.contains("probe bytes:"));
+    }
+
+    #[test]
+    fn hyprland_report_does_not_claim_terminal_forwarding() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=36 evdev=28 (press)".into()),
+            modifier_state: Some(crate::listen::ModifierState {
+                pressed: vec!["CTRL".into(), "SUPER".into()],
+                locked: vec![],
+                latched: None,
+                devices: vec![],
+            }),
+            associated_text: None,
+            physical_keycode: Some(28),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: Some("physical keycode 28 (RETURN)".into()),
+            source: crate::listen::CaptureSource::Hyprland,
+            disposition: crate::listen::CaptureDisposition::PassedThrough,
+        };
+        let layers = [LayerResult {
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Pass,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+
+        let output = render_observed(&observed, &layers, false);
+        assert!(output.contains("source: Hyprland"));
+        assert!(output.contains("observed key: CTRL + SUPER + RETURN"));
+        assert!(output.contains("encoding: Hyprland XKB key event"));
+        assert!(
+            output.contains(
+                "The key event was captured by Hyprland, but forwarding is not confirmed."
+            )
+        );
+        assert!(!output.contains("earlier forwarding is confirmed"));
+        assert!(output.contains("modifiers latched: unavailable from compositor"));
+    }
+
+    #[test]
+    fn hyprland_report_with_suppression() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=36 evdev=28 (press)".into()),
+            modifier_state: Some(crate::listen::ModifierState {
+                pressed: vec!["CTRL".into(), "SUPER".into()],
+                locked: vec![],
+                latched: None,
+                devices: vec![],
+            }),
+            associated_text: None,
+            physical_keycode: Some(28),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: Some("physical keycode 28 (RETURN)".into()),
+            source: crate::listen::CaptureSource::Hyprland,
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        };
+        let layers = [LayerResult {
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+
+        let output = render_observed(&observed, &layers, false);
+        assert!(output.contains("source: Hyprland"));
+        assert!(output.contains("observed key: CTRL + SUPER + RETURN"));
+        assert!(output.contains("Whykey captured and suppressed this event."));
+        assert!(
+            output.contains("The normal configuration indicates that Hyprland would run Herdr.")
+        );
+        assert!(!output.contains("forwarding is not confirmed"));
+        assert!(!output.contains("earlier forwarding is confirmed"));
+    }
+
+    #[test]
+    fn hyprland_report_with_universal_binding_qualifies_suppression() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=36 evdev=28 (press)".into()),
+            modifier_state: Some(crate::listen::ModifierState {
+                pressed: vec!["CTRL".into(), "SUPER".into()],
+                locked: vec![],
+                latched: None,
+                devices: vec![],
+            }),
+            associated_text: None,
+            physical_keycode: Some(28),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: Some("physical keycode 28 (RETURN)".into()),
+            source: crate::listen::CaptureSource::Hyprland,
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        };
+        let layers = [LayerResult {
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr (all submaps)".into()],
+        }];
+
+        let output = render_observed(&observed, &layers, false);
+        assert!(output.contains("source: Hyprland"));
+        assert!(output.contains(
+            "Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute."
+        ));
+        assert!(
+            output.contains("The normal configuration indicates that Hyprland may execute Herdr.")
+        );
+    }
+
+    #[test]
+    fn schema_v2_json_includes_disposition_while_v1_omits_it() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: None,
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: None,
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::Hyprland,
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        };
+        let layers = [LayerResult {
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Pass,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+
+        let v1_json = render_listen_json(&key, &layers, Some(&observed), 1);
+        let v1_val: serde_json::Value = serde_json::from_str(&v1_json).unwrap();
+        assert_eq!(v1_val["schema_version"], 1);
+        assert!(v1_val["observed"].is_object());
+        assert!(
+            v1_val["observed"].get("disposition").is_none(),
+            "schema-v1 must omit disposition"
+        );
+
+        let v2_json = render_listen_json(&key, &layers, Some(&observed), 2);
+        let v2_val: serde_json::Value = serde_json::from_str(&v2_json).unwrap();
+        assert_eq!(v2_val["schema_version"], 2);
+        assert_eq!(v2_val["observation"]["disposition"], "suppressed");
     }
 
     #[test]
