@@ -248,6 +248,18 @@ end"#
             format!(
                 r#"local state = _G.__whykey_capture
 local cur_submap = hl.get_current_submap()
+local function do_dispatch_submap(target)
+    local ok, res = pcall(function() return hl.dispatch(hl.dsp.submap(target)) end)
+    if not ok then
+        return false, tostring(res)
+    end
+    if (type(res) == "table" and res.ok == false) or res == false then
+        local err = type(res) == "table" and (res.error or "dispatch returned not ok") or "dispatch returned false"
+        return false, tostring(err)
+    end
+    return true
+end
+
 if state and state.owner == "{token}" then
     if state.timer then
         pcall(function() state.timer:set_enabled(false) end)
@@ -263,15 +275,24 @@ if state and state.owner == "{token}" then
         local p = state.previous_submap
         local target = (p == "" or p == "default") and "reset" or p
         if target == "__whykey_capture" then target = "reset" end
-        pcall(function() hl.dispatch(hl.dsp.submap(target)) end)
+        local ok, err = do_dispatch_submap(target)
+        if not ok then
+            error("cleanup: failed to restore submap: " .. tostring(err))
+        end
         state.previous_submap = nil
     elseif cur_submap == "__whykey_capture" then
-        pcall(function() hl.dispatch(hl.dsp.submap("{default_target}")) end)
+        local ok, err = do_dispatch_submap("{default_target}")
+        if not ok then
+            error("cleanup: failed to restore submap: " .. tostring(err))
+        end
     end
     state.owner = nil
 elseif state == nil or state.owner == nil or state.owner == "" then
     if cur_submap == "__whykey_capture" then
-        pcall(function() hl.dispatch(hl.dsp.submap("{default_target}")) end)
+        local ok, err = do_dispatch_submap("{default_target}")
+        if not ok then
+            error("cleanup: failed to restore submap: " .. tostring(err))
+        end
     end
 else
     error("cleanup: not capture owner")
@@ -1414,7 +1435,7 @@ xkb_symbols "pc" {
                 .contains("elseif state == nil or state.owner == nil or state.owner == \"\" then")
         );
         assert!(cleanup.contains("if cur_submap == \"__whykey_capture\" then"));
-        assert!(cleanup.contains("hl.dispatch(hl.dsp.submap(\"reset\"))"));
+        assert!(cleanup.contains("do_dispatch_submap(\"reset\")"));
     }
 
     #[test]
@@ -1484,12 +1505,18 @@ xkb_symbols "pc" {
         };
         assert_eq!(raw_current_submap(), "__whykey_capture");
 
-        // Simulate config reload wiping the Lua state
-        let mut cmd = Command::new("hyprctl");
-        cmd.args(["eval", "_G.__whykey_capture = nil"]);
-        let _ = command::output(&mut cmd);
+        // Run an actual hyprctl reload against the live compositor
+        let mut reload_cmd = Command::new("hyprctl");
+        reload_cmd.arg("reload");
+        let reload_res = command::output(&mut reload_cmd);
+        if let Ok(output) = reload_res {
+            assert!(output.status.success(), "hyprctl reload must succeed");
+        }
 
-        // Close the session (triggering cleanup with wiped owner)
+        // Allow compositor and socket events to process
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Close the session (triggering cleanup after real reload)
         let _ = session.close();
 
         // Submap MUST be restored to normal/default, NOT stuck in __whykey_capture
