@@ -27,16 +27,46 @@ pub struct Report {
     pub limitations: Vec<String>,
 }
 
+type ConflictGroupKey = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 pub fn current() -> Report {
     let inventory = bindings::current();
-    let mut groups: BTreeMap<(String, String, Option<String>), Vec<&bindings::BindingEntry>> =
-        BTreeMap::new();
-    for entry in &inventory.bindings {
+    let (conflicts, unknown_context_groups) = build_conflicts(&inventory.bindings);
+
+    let mut limitations = inventory.limitations;
+    if unknown_context_groups > 0 {
+        limitations.push(format!(
+            "{unknown_context_groups} duplicate group(s) were omitted because their active context was unavailable"
+        ));
+    }
+    limitations.push(
+        "identical actions and bindings in different applications are not global conflicts".into(),
+    );
+
+    Report {
+        schema_version: 1,
+        conflicts,
+        unavailable: inventory.unavailable,
+        limitations,
+    }
+}
+
+fn build_conflicts(entries: &[bindings::BindingEntry]) -> (Vec<Conflict>, usize) {
+    let mut groups: BTreeMap<ConflictGroupKey, Vec<&bindings::BindingEntry>> = BTreeMap::new();
+    for entry in entries {
         groups
             .entry((
                 entry.source.clone(),
                 entry.key.clone(),
                 entry.context.clone(),
+                entry.device.clone(),
+                entry.submap.clone(),
             ))
             .or_default()
             .push(entry);
@@ -44,7 +74,7 @@ pub fn current() -> Report {
 
     let mut conflicts = Vec::new();
     let mut unknown_context_groups = 0;
-    for ((source, key, context), entries) in groups {
+    for ((source, key, context, device, submap), entries) in groups {
         if context.is_none() {
             if entries
                 .iter()
@@ -73,8 +103,8 @@ pub fn current() -> Report {
             key,
             source,
             context,
-            device: entries.first().and_then(|entry| entry.device.clone()),
-            submap: entries.first().and_then(|entry| entry.submap.clone()),
+            device,
+            submap,
             classification: if runtime {
                 "possible; precedence/order is not exposed".into()
             } else {
@@ -84,22 +114,7 @@ pub fn current() -> Report {
         });
     }
 
-    let mut limitations = inventory.limitations;
-    if unknown_context_groups > 0 {
-        limitations.push(format!(
-            "{unknown_context_groups} duplicate group(s) were omitted because their active context was unavailable"
-        ));
-    }
-    limitations.push(
-        "identical actions and bindings in different applications are not global conflicts".into(),
-    );
-
-    Report {
-        schema_version: 1,
-        conflicts,
-        unavailable: inventory.unavailable,
-        limitations,
-    }
+    (conflicts, unknown_context_groups)
 }
 
 pub fn filter(
@@ -219,26 +234,62 @@ mod tests {
                 certainty: "runtime effective binding".into(),
             },
         ];
-        let mut groups = BTreeMap::new();
-        for entry in &entries {
-            groups
-                .entry((
-                    entry.source.clone(),
-                    entry.key.clone(),
-                    entry.context.clone(),
-                ))
-                .or_insert_with(Vec::new)
-                .push(entry);
-        }
-        assert_eq!(groups.len(), 1);
-        let actions = groups
-            .values()
-            .next()
-            .unwrap()
-            .iter()
-            .map(|entry| entry.action.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(actions, vec!["first", "second"]);
+        let (conflicts, unknown_context_groups) = build_conflicts(&entries);
+        assert_eq!(unknown_context_groups, 0);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].actions, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn different_devices_are_not_grouped_as_conflicts() {
+        let entries = vec![
+            bindings::BindingEntry {
+                device: Some("kbd-a".into()),
+                submap: Some("default".into()),
+                source: "test".into(),
+                key: "CTRL+C".into(),
+                action: "first".into(),
+                context: Some("default".into()),
+                certainty: "runtime effective binding".into(),
+            },
+            bindings::BindingEntry {
+                device: Some("kbd-b".into()),
+                submap: Some("default".into()),
+                source: "test".into(),
+                key: "CTRL+C".into(),
+                action: "second".into(),
+                context: Some("default".into()),
+                certainty: "runtime effective binding".into(),
+            },
+        ];
+        let (conflicts, _) = build_conflicts(&entries);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn different_submaps_are_not_grouped_as_conflicts() {
+        let entries = vec![
+            bindings::BindingEntry {
+                device: Some("kbd".into()),
+                submap: Some("default".into()),
+                source: "test".into(),
+                key: "CTRL+C".into(),
+                action: "first".into(),
+                context: Some("default".into()),
+                certainty: "runtime effective binding".into(),
+            },
+            bindings::BindingEntry {
+                device: Some("kbd".into()),
+                submap: Some("resize".into()),
+                source: "test".into(),
+                key: "CTRL+C".into(),
+                action: "second".into(),
+                context: Some("default".into()),
+                certainty: "runtime effective binding".into(),
+            },
+        ];
+        let (conflicts, _) = build_conflicts(&entries);
+        assert!(conflicts.is_empty());
     }
 
     #[test]

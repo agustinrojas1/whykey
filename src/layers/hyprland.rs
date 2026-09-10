@@ -1566,8 +1566,11 @@ fn inspect_json_with_keycode(
         }
     };
 
-    let binding =
-        primary_match(&matches).map(|matched| binding_evidence(matched.binding, lua_hints));
+    let has_universal_match = matches
+        .iter()
+        .any(|matched| matched.binding.submap_universal);
+    let binding = primary_match(&matches)
+        .map(|matched| binding_evidence(matched.binding, lua_hints, has_universal_match));
 
     Ok(LayerResult {
         verbose_details,
@@ -1597,7 +1600,11 @@ fn primary_match<'a>(matches: &'a [BindingMatch<'a>]) -> Option<BindingMatch<'a>
 
 /// Typed binding evidence for the renderer and schema v2. The human-readable
 /// `details` stay untouched; decisions must read these fields instead.
-fn binding_evidence(binding: &Binding, lua_hints: &[LuaBindHint]) -> BindingEvidence {
+fn binding_evidence(
+    binding: &Binding,
+    lua_hints: &[LuaBindHint],
+    has_universal_match: bool,
+) -> BindingEvidence {
     let action = format!("{} {}", binding.dispatcher, binding.arg);
     BindingEvidence {
         dispatcher: none_if_empty(&binding.dispatcher),
@@ -1610,6 +1617,12 @@ fn binding_evidence(binding: &Binding, lua_hints: &[LuaBindHint]) -> BindingEvid
             BindingScope::Submap(normalize_submap(&binding.submap).to_string())
         },
         source: hint_source(binding, lua_hints),
+        has_universal_match,
+        uncertainty: if BindingEvidence::dispatcher_is_opaque(&binding.dispatcher) {
+            Some(crate::layers::UncertaintyReason::OpaqueDispatcher)
+        } else {
+            None
+        },
     }
 }
 
@@ -2277,6 +2290,33 @@ mod tests {
     }
 
     const BINDINGS: &str = include_str!("../../tests/fixtures/hyprland/binds-representative.json");
+
+    #[test]
+    fn preserves_a_universal_match_when_a_regular_binding_is_primary() {
+        let combo: KeyCombo = "ctrl+x".parse().unwrap();
+        let bindings = r#"[
+            {
+                "modmask": 4,
+                "key": "X",
+                "submap": "default",
+                "submap_universal": false,
+                "dispatcher": "exec",
+                "arg": "regular"
+            },
+            {
+                "modmask": 4,
+                "key": "X",
+                "submap": "default",
+                "submap_universal": true,
+                "dispatcher": "exec",
+                "arg": "universal"
+            }
+        ]"#;
+        let result = inspect_json(&combo, bindings, "default").unwrap();
+        let evidence = result.binding.expect("a primary binding is expected");
+        assert_eq!(evidence.scope, BindingScope::Submap("default".into()));
+        assert!(evidence.has_universal_match);
+    }
 
     #[test]
     fn sanitized_fixture_matrix_covers_legacy_structured_and_malformed_shapes() {

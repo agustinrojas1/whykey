@@ -201,6 +201,14 @@ pub enum Propagation {
 /// Only adapters with runtime binding data populate it; the rest leave
 /// `LayerResult::binding` absent, and replaying an older report never
 /// invents it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum UncertaintyReason {
+    UnverifiedTerminalBytes,
+    UnresolvedMode,
+    OpaqueDispatcher,
+    EndpointUnavailable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BindingEvidence {
     pub dispatcher: Option<String>,
@@ -209,6 +217,11 @@ pub struct BindingEvidence {
     pub submap: Option<String>,
     pub scope: BindingScope,
     pub source: Option<SourceLocation>,
+    /// True when another matching binding is universal, even if this is the
+    /// primary evidence selected for the layer.
+    pub has_universal_match: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uncertainty: Option<UncertaintyReason>,
 }
 
 impl BindingEvidence {
@@ -226,6 +239,10 @@ impl BindingEvidence {
 
     pub fn is_universal(&self) -> bool {
         self.scope == BindingScope::Universal
+    }
+
+    pub fn includes_universal_match(&self) -> bool {
+        self.has_universal_match || self.is_universal()
     }
 }
 
@@ -264,7 +281,7 @@ impl Serialize for LayerResult {
         state.serialize_field("status", &status)?;
         state.serialize_field("propagation", &propagation)?;
         state.serialize_field("summary", &self.summary)?;
-        state.serialize_field("details", &self.details)?;
+        state.serialize_field("details", &self.all_details().collect::<Vec<_>>())?;
         state.end()
     }
 }
@@ -610,23 +627,26 @@ fn inspect_default_chain_inner_without_remapper(
         description: "captured bytes; normal encoding is unknown".into(),
         confidence: InputConfidence::Observed,
     });
-    let Some(input) = emulator.input.clone().or(observed_fallback) else {
-        return vec![compositor_result, emulator.layer];
-    };
+    let input = emulator.input.clone().or(observed_fallback);
+    let bytes_verified = input.is_some();
     if protocol_flags.is_some() {
-        emulator
-            .layer
-            .details
-            .retain(|detail| !detail.starts_with("byte:") && !detail.starts_with("sequence:"));
-        emulator.layer.details.push(format!(
-            "normal input for the existing keyboard protocol: {}",
-            input.display_bytes()
-        ));
+        if let Some(input) = &input {
+            emulator
+                .layer
+                .details
+                .retain(|detail| !detail.starts_with("byte:") && !detail.starts_with("sequence:"));
+            emulator.layer.details.push(format!(
+                "normal input for the existing keyboard protocol: {}",
+                input.display_bytes()
+            ));
+        }
     }
 
-    let terminal_result = termios
-        .map(|termios| terminal.inspect_input_with_termios(&input, termios))
-        .unwrap_or_else(|| terminal.inspect_input(&input));
+    let terminal_result = match (input.as_ref(), termios) {
+        (Some(input), Some(termios)) => terminal.inspect_input_with_termios(input, termios),
+        (Some(input), None) => terminal.inspect_input(input),
+        (None, _) => terminal.inspect_unknown(),
+    };
     if command::deadline_exceeded() {
         let mut results = vec![compositor_result, emulator.layer];
         results.extend([terminal_result, deadline_result()]);
@@ -638,7 +658,7 @@ fn inspect_default_chain_inner_without_remapper(
         return results;
     }
 
-    let session_result = session::inspect(key);
+    let session_result = session::inspect_with_byte_status(key, bytes_verified);
     if command::deadline_exceeded() {
         let mut results = vec![compositor_result, emulator.layer];
         results.extend([terminal_result, session_result, deadline_result()]);
@@ -669,18 +689,28 @@ fn inspect_default_chain_inner_without_remapper(
         results.extend([terminal_result, session_result, application_result]);
         return results;
     }
+    let target_is_shell = application_target
+        .as_ref()
+        .is_some_and(|target| application::is_shell_process(target.pid));
 
-    let shell_result = application_target.map_or_else(
-        || shell::inspect_input(&input),
-        |target| shell::inspect_input_for_pid(&input, target.pid),
-    );
+    let application_is_recipient = match application_target {
+        Some(_) => !target_is_shell,
+        None => {
+            application_result.id == LayerId::Application
+                && application_result.outcome != Outcome::Pass
+        }
+    };
     let mut results = vec![compositor_result, emulator.layer];
-    results.extend([
-        terminal_result,
-        session_result,
-        application_result,
-        shell_result,
-    ]);
+    results.extend([terminal_result, session_result, application_result]);
+
+    if !application_is_recipient {
+        let shell_result = match (input.as_ref(), application_target) {
+            (Some(input), Some(target)) => shell::inspect_input_for_pid(input, target.pid),
+            (Some(input), None) => shell::inspect_input(input),
+            (None, _) => shell::inspect_unknown(),
+        };
+        results.push(shell_result);
+    }
     if command::deadline_exceeded() {
         results.push(deadline_result());
     }
@@ -834,5 +864,49 @@ mod tests {
             identity,
             "schema context and text reports must name the same adapter"
         );
+    }
+
+    #[test]
+    fn missing_byte_prediction_does_not_drop_downstream_layers() {
+        let key: KeyCombo = "alt+return".parse().unwrap();
+        let layers = inspect_default_chain(&key);
+        let ids: Vec<LayerId> = layers.iter().map(|l| l.id).collect();
+        assert!(
+            ids.contains(&LayerId::Tty),
+            "TTY driver must be inspected even when terminal bytes are unpredicted"
+        );
+        assert!(
+            ids.contains(&LayerId::Session),
+            "Session/multiplexer must be inspected even when terminal bytes are unpredicted"
+        );
+        assert!(
+            ids.contains(&LayerId::Application),
+            "Application layer must be inspected even when terminal bytes are unpredicted"
+        );
+    }
+
+    #[test]
+    fn active_application_target_does_not_append_parent_shell() {
+        let key: KeyCombo = "ctrl+w".parse().unwrap();
+        let request = InspectRequest {
+            key: Some(&key),
+            force_continue: true,
+            protocol_flags: None,
+            observed_bytes: None,
+            physical_input: None,
+            termios: None,
+            application_pid: Some(1),
+            application_source: Some("test"),
+        };
+        let session = crate::environment::Environment::collect();
+        let results = inspect_with_request_and_session(&request, &session);
+        let app_result = results.iter().find(|l| l.id == LayerId::Application);
+        assert!(app_result.is_some());
+        if app_result.unwrap().layer != "Interactive application" {
+            assert!(
+                results.iter().all(|l| l.id != LayerId::Shell),
+                "when an interactive application is active, parent shell must not be appended"
+            );
+        }
     }
 }

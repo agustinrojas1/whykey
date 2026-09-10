@@ -763,9 +763,12 @@ impl HyprlandCaptureSession {
         if let Err(error) = self.guard.client.eval(&lua) {
             return Err(self.fail_arm(format!("hyprctl eval failed: {error}")));
         }
-        // Submap postcondition, checked owner-side: the private submap must
-        // be observable before waiting for the token-specific armed event.
-        if self.guard.client.current_submap() != "__whykey_capture" {
+        // Suppression uses a private submap, so its activation is an explicit
+        // postcondition. Pass-through deliberately leaves the active submap
+        // unchanged and only needs the token-specific armed event.
+        if policy == HyprlandCapturePolicy::Suppress
+            && self.guard.client.current_submap() != "__whykey_capture"
+        {
             return Err(self.fail_arm("capture: submap activation was not observed".into()));
         }
 
@@ -853,8 +856,10 @@ impl HyprlandCaptureSession {
 
     /// Bounded teardown through the owner-checked Lua route: enter
     /// RestorePending, retry the attempt twice, and reach Closed only after
-    /// observing the recorded submap. A permanent failure stays
-    /// RestorePending so Drop can warn instead of pretending success.
+    /// observing the recorded submap for suppression. Pass-through only owns
+    /// its listener, so it closes after the owner-checked removal succeeds.
+    /// A permanent failure stays RestorePending so Drop can warn instead of
+    /// pretending success.
     fn cleanup_bounded(&mut self) -> io::Result<()> {
         if self.state == CaptureState::Closed {
             return Ok(());
@@ -865,7 +870,7 @@ impl HyprlandCaptureSession {
             return Ok(());
         }
         self.state = CaptureState::RestorePending;
-        if self.guard.restore_target().is_none() {
+        if self.policy == HyprlandCapturePolicy::Suppress && self.guard.restore_target().is_none() {
             // Never guess a restore target: without the recorded original,
             // the Lua route would fall back to `reset`, which may not be the
             // session's submap. Stay RestorePending and say so.
@@ -878,6 +883,10 @@ impl HyprlandCaptureSession {
         let mut last_error = String::new();
         for attempt in 0..3 {
             match self.guard.remove() {
+                Ok(()) if self.policy == HyprlandCapturePolicy::PassThrough => {
+                    self.state = CaptureState::Closed;
+                    return Ok(());
+                }
                 Ok(()) if self.verify_restored() => {
                     self.state = CaptureState::Closed;
                     return Ok(());
@@ -1243,7 +1252,7 @@ impl Drop for HyprlandCaptureSession {
             .remove()
             .map_err(|error| error.to_string())
             .and_then(|()| {
-                if self.verify_restored() {
+                if self.policy == HyprlandCapturePolicy::PassThrough || self.verify_restored() {
                     Ok(())
                 } else {
                     Err(format!(
@@ -1252,9 +1261,12 @@ impl Drop for HyprlandCaptureSession {
                     ))
                 }
             });
-        self.state = CaptureState::RestorePending;
-        if let Err(error) = outcome {
-            eprintln!("warning: failed to clean up Hyprland key hook: {error}");
+        match outcome {
+            Ok(()) => self.state = CaptureState::Closed,
+            Err(error) => {
+                self.state = CaptureState::RestorePending;
+                eprintln!("warning: failed to clean up Hyprland key hook: {error}");
+            }
         }
     }
 }
@@ -1848,6 +1860,59 @@ xkb_symbols "pc" {
             .expect("postcondition plus armed event must arm");
         assert_eq!(session.state(), CaptureState::Armed);
         assert!(session.is_suppressing());
+    }
+
+    #[test]
+    fn pass_through_arm_succeeds_without_private_submap_activation() {
+        let fake = FakeHyprctl::with_submap("default");
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake);
+        session.buffer.push_str("custom>>whykey-probe,tok,armed\n");
+        session
+            .arm(HyprlandCapturePolicy::PassThrough)
+            .expect("pass-through must not require the suppression submap");
+        assert_eq!(session.state(), CaptureState::Armed);
+        assert!(!session.is_suppressing());
+    }
+
+    #[test]
+    fn pass_through_cleanup_does_not_restore_a_user_changed_submap() {
+        let fake = FakeHyprctl::with_submap("default");
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        session.buffer.push_str("custom>>whykey-probe,tok,armed\n");
+        session
+            .arm(HyprlandCapturePolicy::PassThrough)
+            .expect("pass-through must arm");
+
+        *fake.current_submap.borrow_mut() = "resize".into();
+        session.close().expect("pass-through cleanup must close");
+
+        assert_eq!(session.state(), CaptureState::Closed);
+        assert_eq!(fake.current_submap.borrow().as_str(), "resize");
+        assert_eq!(fake.eval_calls.borrow().len(), 2);
+        assert!(
+            !fake.eval_calls.borrow()[1].contains("hl.dsp.submap"),
+            "pass-through cleanup must not dispatch submap restoration"
+        );
+    }
+
+    #[test]
+    fn pass_through_drop_removes_only_its_listener() {
+        let fake = FakeHyprctl::with_submap("default");
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        session.buffer.push_str("custom>>whykey-probe,tok,armed\n");
+        session
+            .arm(HyprlandCapturePolicy::PassThrough)
+            .expect("pass-through must arm");
+
+        *fake.current_submap.borrow_mut() = "resize".into();
+        drop(session);
+
+        assert_eq!(fake.current_submap.borrow().as_str(), "resize");
+        assert_eq!(fake.eval_calls.borrow().len(), 2);
+        assert!(
+            !fake.eval_calls.borrow()[1].contains("hl.dsp.submap"),
+            "pass-through drop must not dispatch submap restoration"
+        );
     }
 
     #[test]

@@ -1,5 +1,8 @@
 use crate::key::{KeyCombo, KeySequence};
-use crate::layers::{BindingEvidence, LayerResult, LayerStatus, Propagation, format_bytes};
+use crate::layers::{
+    BindingEvidence, LayerId, LayerResult, LayerStatus, Outcome, Propagation, UncertaintyReason,
+    format_bytes,
+};
 use crate::listen::ObservedKey;
 use crate::schema;
 use serde::Serialize;
@@ -419,6 +422,7 @@ fn render_inner(
             _ => "? ",
         });
         output.push_str(&layer.summary);
+        output.push('\n');
         for detail in &layer.details {
             output.push_str("    ");
             output.push_str(detail);
@@ -452,7 +456,7 @@ fn render_conclusion(
                 let universal_match = layers.iter().any(|l| {
                     l.binding
                         .as_ref()
-                        .is_some_and(BindingEvidence::is_universal)
+                        .is_some_and(BindingEvidence::includes_universal_match)
                 });
                 if universal_match {
                     output.push_str(
@@ -547,83 +551,163 @@ fn render_conclusion(
             },
         }
     }
-    match layers.last() {
-        Some(layer) if layer.status() == LayerStatus::Unavailable => {
-            output.push_str(&format!("  Could not inspect {}.\n", layer.layer))
-        }
-        Some(layer) if layer.propagation() == Propagation::Stops => {
-            let qualifier = (!terminal_observed && prior_uncertainty(layers))
-                .then_some("Assuming earlier uncertain layers forward it, ");
-            output.push_str(&format!(
-                "  ✓ Final handler: {}\n  {}{} handles and consumes {key}.\n  It should not reach a later layer.\n",
-                layer.layer,
-                qualifier.unwrap_or_default(),
-                layer.layer
-            ));
-        }
-        Some(layer) if layer.propagation() == Propagation::Redirected => {
-            let qualifier = (!terminal_observed && prior_uncertainty(layers))
-                .then_some("Assuming earlier uncertain layers forward it, ");
-            output.push_str(&format!(
-                "  ✓ Final handler: {}\n  {}{} handles {key} and redirects it to another window.\n  It should not reach a later layer in this chain.\n",
-                layer.layer,
-                qualifier.unwrap_or_default(),
-                layer.layer
-            ));
-        }
-        Some(layer)
-            if layer.status() == LayerStatus::Indeterminate
-                && !layers
-                    .iter()
-                    .any(|candidate| candidate.status() == LayerStatus::Handled) =>
-        {
-            output.push_str(&format!(
-                "  No exact binding for {key} was found in {}.\n  Some same-key bindings may ignore modifiers, so forwarding cannot be proven.\n",
-                layer.layer
-            ));
-        }
-        Some(layer) if layer.propagation() == Propagation::Indeterminate => {
-            output.push_str(&format!(
-                "  Could not determine whether {} forwards {key}.\n",
-                layer.layer
-            ))
-        }
-        Some(_) if !terminal_observed && has_uncertain_layer(layers) => {
-            let handlers: Vec<_> = layers
-                .iter()
-                .filter(|layer| layer.status() == LayerStatus::Handled)
-                .map(|layer| layer.layer)
-                .collect();
-            if handlers.is_empty() {
+    if let Some(layer) = layers
+        .iter()
+        .find(|l| l.propagation() == Propagation::Stops)
+    {
+        let qualifier = (!terminal_observed && prior_uncertainty(layers))
+            .then_some("Assuming earlier uncertain layers forward it, ");
+        output.push_str(&format!(
+            "  ✓ Configured handler: {}\n  {}{} is configured to consume {key}.\n  It should not reach a later layer under this configuration.\n",
+            layer.layer,
+            qualifier.unwrap_or_default(),
+            layer.layer
+        ));
+        output.push('\n');
+        return output;
+    }
+    if let Some(layer) = layers
+        .iter()
+        .find(|l| l.propagation() == Propagation::Redirected)
+    {
+        let qualifier = (!terminal_observed && prior_uncertainty(layers))
+            .then_some("Assuming earlier uncertain layers forward it, ");
+        output.push_str(&format!(
+            "  ✓ Configured handler: {}\n  {}{} is configured to redirect {key} to another window.\n  It should not reach a later layer in this chain under this configuration.\n",
+            layer.layer,
+            qualifier.unwrap_or_default(),
+            layer.layer
+        ));
+        output.push('\n');
+        return output;
+    }
+
+    let active_app = layers
+        .last()
+        .filter(|l| l.id == LayerId::Application && l.outcome != Outcome::Pass);
+    if let Some(app) = active_app {
+        if app.outcome == Outcome::Unavailable {
+            output.push_str(&format!("  Could not inspect {}.\n", app.layer));
+        } else if let Some(binding) = &app.binding {
+            if binding.uncertainty == Some(UncertaintyReason::UnresolvedMode) {
                 output.push_str(&format!(
-                    "  {key} may be forwarded, but one or more layers are uncertain.\n  Downstream layer results are conditional.\n"
+                    "  Selected target: {} has a matching keymap for {key}, but mode-dependent execution is uncertain.\n",
+                    app.layer
                 ));
             } else {
                 output.push_str(&format!(
-                    "  {} handled {key}, but forwarding is uncertain. Other layers may also handle it.\n  Downstream layer results are conditional.\n",
-                    handlers.join(", ")
+                    "  Selected target: {} matches {key}; execution is unverified.\n",
+                    app.layer
                 ));
             }
-        }
-        Some(_)
-            if layers
-                .iter()
-                .any(|layer| layer.status() == LayerStatus::Handled) =>
-        {
-            let handlers: Vec<_> = layers
-                .iter()
-                .filter(|layer| layer.status() == LayerStatus::Handled)
-                .map(|layer| layer.layer)
-                .collect();
+        } else if app.layer == "Interactive application" {
             output.push_str(&format!(
-                "  {} handled {key} and forwarded it.\n  It should continue to the next layer.\n",
-                handlers.join(", ")
+                "  Selected target: {}; application shortcut handling is unverified.\n",
+                app.summary
+            ));
+        } else {
+            output.push_str(&format!(
+                "  Selected target: {}; no matching keymap was found for {key}.\n",
+                app.layer
             ));
         }
-        Some(_) => output.push_str(&format!(
-            "  No inspected layer handles {key}.\n  It should continue to the next layer.\n"
-        )),
-        None => output.push_str("  No layers were inspected.\n"),
+        output.push('\n');
+        return output;
+    }
+
+    let unverified_session = layers.iter().find(|l| {
+        l.id == LayerId::Multiplexer
+            && l.outcome == Outcome::HandledUncertain
+            && l.binding.as_ref().and_then(|b| b.uncertainty)
+                == Some(UncertaintyReason::UnverifiedTerminalBytes)
+    });
+    if let Some(session) = unverified_session {
+        output.push_str(&format!(
+            "  {} has a candidate binding for {key} in the root table, but terminal byte delivery could not be verified.\n",
+            session.layer
+        ));
+        output.push('\n');
+        return output;
+    }
+
+    let handled_layers: Vec<_> = layers
+        .iter()
+        .filter(|layer| layer.status() == LayerStatus::Handled)
+        .collect();
+    if !handled_layers.is_empty() {
+        let names: Vec<_> = handled_layers.iter().map(|l| l.layer).collect();
+        if !terminal_observed && has_uncertain_layer(layers) {
+            output.push_str(&format!(
+                "  {} has a matching binding for {key}; forwarding is uncertain. Other layers may also handle it.\n  Downstream layer results are conditional.\n",
+                names.join(", ")
+            ));
+        } else {
+            output.push_str(&format!(
+                "  {} has a matching binding for {key} and is configured to forward it.\n  It should continue to the next layer.\n",
+                names.join(", ")
+            ));
+        }
+        if let Some(unavailable) = layers
+            .iter()
+            .find(|l| l.status() == LayerStatus::Unavailable)
+        {
+            output.push_str(&format!(
+                "  Note: {} was not inspected.\n",
+                unavailable.layer
+            ));
+        }
+        output.push('\n');
+        return output;
+    }
+    if layers
+        .iter()
+        .all(|l| l.status() == LayerStatus::Unavailable)
+    {
+        let layer = layers.last().unwrap();
+        output.push_str(&format!("  Could not inspect {}.\n", layer.layer));
+        output.push('\n');
+        return output;
+    }
+    if let Some(layer) = layers.last().filter(|l| {
+        l.status() == LayerStatus::Unavailable
+            && (l.id == LayerId::Application || l.id == LayerId::Diagnostic)
+    }) {
+        output.push_str(&format!("  Could not inspect {}.\n", layer.layer));
+        output.push('\n');
+        return output;
+    }
+
+    if let Some(layer) = layers.iter().find(|l| {
+        l.status() == LayerStatus::Indeterminate && l.summary.contains("no exact binding")
+    }) {
+        output.push_str(&format!(
+            "  No exact binding for {key} was found in {}.\n  Some same-key bindings may ignore modifiers, so forwarding cannot be proven.\n",
+            layer.layer
+        ));
+        output.push('\n');
+        return output;
+    }
+    if let Some(layer) = layers.iter().find(|l| {
+        l.status() == LayerStatus::Indeterminate && l.propagation() == Propagation::Indeterminate
+    }) {
+        output.push_str(&format!(
+            "  Could not determine whether {} forwards {key}.\n",
+            layer.layer
+        ));
+        output.push('\n');
+        return output;
+    }
+
+    if !terminal_observed && has_uncertain_layer(layers) {
+        output.push_str(&format!(
+            "  {key} may be forwarded, but one or more layers are uncertain.\n  Downstream layer results are conditional.\n"
+        ));
+    } else if layers.is_empty() {
+        output.push_str("  No layers were inspected.\n");
+    } else {
+        output.push_str(&format!(
+            "  No inspected layer has a matching binding for {key}.\n  It should continue to the next layer.\n"
+        ));
     }
     output.push('\n');
     output
@@ -662,7 +746,7 @@ fn confidence_label(layers: &[LayerResult], observed: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layers::{LayerId, Outcome};
+    use crate::layers::{BindingScope, LayerId, Outcome};
 
     #[test]
     fn renders_a_forwarded_result() {
@@ -681,7 +765,7 @@ mod tests {
 
         assert!(output.contains("Key: CTRL + LEFT"));
         assert!(output.contains("Assessment: configured"));
-        assert!(output.contains("No inspected layer handles CTRL + LEFT."));
+        assert!(output.contains("No inspected layer has a matching binding for CTRL + LEFT."));
         assert!(output.contains("It should continue to the next layer."));
         assert!(output.contains("--verbose"));
 
@@ -715,7 +799,7 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("Readline handles and consumes CTRL + Z."));
+        assert!(output.contains("Readline is configured to consume CTRL + Z."));
         assert!(!output.contains("Hyprland handles and consumes"));
     }
 
@@ -765,7 +849,7 @@ mod tests {
         let output = render(&key, &[layer], false);
 
         assert!(output.contains("↗ active binding found"));
-        assert!(output.contains("redirects it to another window"));
+        assert!(output.contains("is configured to redirect"));
     }
 
     #[test]
@@ -794,7 +878,9 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("Hyprland handled CTRL + LEFT and forwarded it."));
+        assert!(output.contains(
+            "Hyprland has a matching binding for CTRL + LEFT and is configured to forward it."
+        ));
         assert!(!output.contains("No inspected layer handles"));
     }
 
@@ -824,7 +910,11 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("Ghostty handled CTRL + LEFT, but forwarding is uncertain."));
+        assert!(
+            output.contains(
+                "Ghostty has a matching binding for CTRL + LEFT; forwarding is uncertain."
+            )
+        );
         assert!(output.contains("Other layers may also handle it."));
     }
 
@@ -946,7 +1036,7 @@ mod tests {
         let normal = render_observed(&observed, &layers, false);
         assert!(normal.contains("earlier forwarding is confirmed"));
         assert!(!normal.contains("probe bytes"));
-        assert!(output.contains("Readline handles and consumes CTRL + LEFT."));
+        assert!(output.contains("Readline is configured to consume CTRL + LEFT."));
         assert!(!output.contains("Assuming earlier uncertain layers"));
     }
 
@@ -1046,6 +1136,8 @@ mod tests {
             submap: Some("default".into()),
             scope: crate::layers::BindingScope::Submap("default".into()),
             source: None,
+            has_universal_match: false,
+            uncertainty: Some(UncertaintyReason::OpaqueDispatcher),
         }
     }
 
@@ -1158,7 +1250,8 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let universal = BindingEvidence {
-            scope: crate::layers::BindingScope::Universal,
+            scope: crate::layers::BindingScope::Submap("default".into()),
+            has_universal_match: true,
             ..opaque_herdr_evidence()
         };
         let layers = [LayerResult {
@@ -1181,6 +1274,44 @@ mod tests {
         assert!(
             output.contains("The normal configuration indicates that Hyprland may execute Herdr.")
         );
+    }
+
+    #[test]
+    fn schema_v1_json_keeps_normal_and_verbose_evidence() {
+        let key: KeyCombo = "ctrl+x".parse().unwrap();
+        let layers = [LayerResult {
+            verbose_details: vec!["verbose evidence".into()],
+            binding: None,
+            layer: "test",
+            id: LayerId::Diagnostic,
+            outcome: Outcome::Pass,
+            summary: "not handled".into(),
+            details: vec!["normal evidence".into()],
+        }];
+        let value: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
+        assert_eq!(
+            value["layers"][0]["details"],
+            serde_json::json!(["normal evidence", "verbose evidence"])
+        );
+    }
+
+    #[test]
+    fn layer_summary_is_separated_from_its_details() {
+        let key: KeyCombo = "ctrl+x".parse().unwrap();
+        let layers = [LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::HandledUncertain,
+            summary: "active binding found; forwarding cannot be determined".into(),
+            details: vec!["active submap: default".into()],
+        }];
+        let output = render(&key, &layers, false);
+        assert!(output.contains(
+            "  ? active binding found; forwarding cannot be determined\n    active submap: default\n"
+        ));
     }
 
     #[test]
@@ -1496,5 +1627,93 @@ mod tests {
         assert_eq!(value["sequence_display"], "CTRL+X CTRL+S");
         assert_eq!(value["steps"].as_array().unwrap().len(), 2);
         assert_eq!(value["steps"][0]["key"]["key"], "X");
+    }
+
+    #[test]
+    fn upstream_match_is_not_masked_by_trailing_unavailable_layer() {
+        let key: KeyCombo = "ctrl+alt+delete".parse().unwrap();
+        let layers = [
+            LayerResult {
+                verbose_details: Vec::new(),
+                binding: None,
+                layer: "Hyprland",
+                id: LayerId::Compositor,
+                outcome: Outcome::HandledUncertain,
+                summary: "active binding found; forwarding cannot be determined".into(),
+                details: vec!["binding: __lua 11; Close all windows".into()],
+            },
+            LayerResult {
+                verbose_details: Vec::new(),
+                binding: None,
+                layer: "Shell input",
+                id: LayerId::Shell,
+                outcome: Outcome::Unavailable,
+                summary: "shell 'unknown shell' is not inspected".into(),
+                details: vec![],
+            },
+        ];
+        let output = render(&key, &layers, false);
+        assert!(output.contains(
+            "Hyprland has a matching binding for CTRL + ALT + DELETE; forwarding is uncertain."
+        ));
+        assert!(!output.contains("Result:\n  Could not inspect Shell input."));
+        assert!(output.contains("Note: Shell input was not inspected."));
+    }
+
+    #[test]
+    fn candidate_multiplexer_binding_reports_unverified_delivery() {
+        let key: KeyCombo = "alt+return".parse().unwrap();
+        let layers = [LayerResult {
+            verbose_details: Vec::new(),
+            binding: Some(BindingEvidence {
+                dispatcher: None,
+                action: Some("split-window -v".into()),
+                description: None,
+                submap: None,
+                scope: BindingScope::Unknown,
+                source: None,
+                has_universal_match: false,
+                uncertainty: Some(UncertaintyReason::UnverifiedTerminalBytes),
+            }),
+            layer: "tmux",
+            id: LayerId::Multiplexer,
+            outcome: Outcome::HandledUncertain,
+            summary: "candidate binding matches in tmux root table; delivery is unverified".into(),
+            details: vec!["binding: bind-key -T root M-Enter split-window -v".into()],
+        }];
+        let output = render(&key, &layers, false);
+        assert!(output.contains(
+            "tmux has a candidate binding for ALT + RETURN in the root table, but terminal byte delivery could not be verified."
+        ));
+        assert!(!output.contains("No inspected layer handles"));
+    }
+
+    #[test]
+    fn active_application_target_reports_application_uncertainty_without_shell() {
+        let key: KeyCombo = "ctrl+w".parse().unwrap();
+        let layers = [LayerResult {
+            verbose_details: Vec::new(),
+            binding: Some(BindingEvidence {
+                dispatcher: None,
+                action: Some("<C-W>".into()),
+                description: None,
+                submap: None,
+                scope: BindingScope::Unknown,
+                source: None,
+                has_universal_match: false,
+                uncertainty: Some(UncertaintyReason::UnresolvedMode),
+            }),
+            layer: "Neovim",
+            id: LayerId::Application,
+            outcome: Outcome::HandledUncertain,
+            summary: "runtime mapping found; Neovim may consume the key".into(),
+            details: vec!["runtime mapping: mode n: <C-W>".into()],
+        }];
+        let output = render(&key, &layers, false);
+        assert!(output.contains(
+            "Selected target: Neovim has a matching keymap for CTRL + W, but mode-dependent execution is uncertain."
+        ));
+        assert!(!output.contains("Bash"));
+        assert!(!output.contains("Readline"));
     }
 }

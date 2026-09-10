@@ -2492,7 +2492,7 @@ fn sxhkd_adapter_reads_static_binding_with_conditional_runtime() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("sxhkd"));
-    assert!(text.contains("sxhkd handled"));
+    assert!(text.contains("sxhkd has a matching binding"));
     assert!(text.contains("alacritty"));
     let _ = fs::remove_dir_all(base);
 }
@@ -2523,7 +2523,7 @@ fn openbox_adapter_reads_xml_keybinds_conditionally() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("Openbox"));
-    assert!(text.contains("Openbox handled"));
+    assert!(text.contains("Openbox has a matching binding"));
     assert!(text.contains("Execute: alacritty"));
     let _ = fs::remove_dir_all(base);
 }
@@ -2863,4 +2863,182 @@ fn listen_terminal_mode_claims_observed_only_disposition() {
     assert_eq!(record["observation"]["disposition"], "observed_only");
 
     let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_with_unset_and_empty_shell_preserves_matches_and_exits_zero() {
+    let base = temp_dir("hyprland-shell-test");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let hyprctl = bin.join("hyprctl");
+    fs::write(
+        &hyprctl,
+        "#!/bin/sh\ncase \"$*\" in *instances*) printf '%s\\n' '[{\"instance\":\"test\",\"wl_socket\":\"wayland-1\"}]' ;; *binds*) cat tests/fixtures/hyprland/binds-representative.json ;; *submap*) printf '%s\\n' '\"default\"' ;; *devices*) printf '%s\\n' '{\"keyboards\":[]}' ;; *) exit 0 ;; esac\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&hyprctl).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&hyprctl, permissions).unwrap();
+
+    // Test with unset SHELL
+    let output_unset = binary()
+        .args(["inspect", "super+c", "--instance", "test"])
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), env::var("PATH").unwrap_or_default()),
+        )
+        .env_remove("SHELL")
+        .env_remove("WHYKEY_READLINE_BINDINGS")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output_unset.status.code(),
+        Some(0),
+        "unset SHELL must not cause non-zero exit when upstream matches: {output_unset:?}"
+    );
+    let text_unset = String::from_utf8_lossy(&output_unset.stdout);
+    assert!(text_unset.contains("Hyprland"));
+    assert!(!text_unset.contains("Result:\n  Could not inspect Shell input."));
+
+    // Test with empty SHELL=""
+    let output_empty = binary()
+        .args(["inspect", "super+c", "--instance", "test"])
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), env::var("PATH").unwrap_or_default()),
+        )
+        .env("SHELL", "")
+        .env_remove("WHYKEY_READLINE_BINDINGS")
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output_empty.status.code(),
+        Some(0),
+        "empty SHELL must not cause non-zero exit when upstream matches: {output_empty:?}"
+    );
+    let text_empty = String::from_utf8_lossy(&output_empty.stdout);
+    assert!(text_empty.contains("Hyprland"));
+    assert!(!text_empty.contains("Result:\n  Could not inspect Shell input."));
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_with_unpredicted_terminal_bytes_exposes_tmux_candidate() {
+    let base = temp_dir("tmux-byte-test");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let tmux = bin.join("tmux");
+    fs::write(
+        &tmux,
+        "#!/bin/sh\ncase \"$*\" in *list-keys*root*) printf '%s\\n' 'bind-key -T root M-Enter split-window -v' ;; *list-keys*) printf '%s\\n' '' ;; *display-message*) printf '%s\\n' 'root' ;; *) exit 0 ;; esac\n",
+    )
+    .unwrap();
+    let ghostty = bin.join("ghostty");
+    fs::write(&ghostty, "#!/bin/sh\nexit 0\n").unwrap();
+    for cmd in [&tmux, &ghostty] {
+        let mut perms = fs::metadata(cmd).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(cmd, perms).unwrap();
+    }
+
+    let output = binary()
+        .args(["alt+return", "--verbose"])
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), env::var("PATH").unwrap_or_default()),
+        )
+        .env("TMUX", "/tmp/mock-tmux,1,0")
+        .env("TMUX_PANE", "%0")
+        .env("TERM_PROGRAM", "ghostty")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(
+            "tmux has a candidate binding for ALT + RETURN in the root table, but terminal byte delivery could not be verified."
+        ),
+        "tmux candidate must be exposed when bytes are unpredicted; output:\n{text}"
+    );
+    assert!(
+        !text.contains("No inspected layer handles ALT + RETURN."),
+        "must not falsely claim no layer handles the key"
+    );
+
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_pid_on_non_editor_tui_does_not_fall_through_to_shell() {
+    // Start a background process named sleep (simulating a TUI ancestor)
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("sleep must spawn");
+    let pid = child.id();
+    let output = binary()
+        .args(["inspect", "--pid", &pid.to_string(), "ctrl+w", "--verbose"])
+        .env("SHELL", "/bin/bash")
+        .env(
+            "WHYKEY_READLINE_BINDINGS",
+            "unix-word-rubout can be found on \"\\C-w\".\n",
+        )
+        .output()
+        .unwrap();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !text.contains("Bash / Readline"),
+        "a non-shell application target must not fall through to the parent shell; output:\n{text}"
+    );
+    assert!(
+        text.contains("selected process has no dedicated shortcut inspection adapter"),
+        "unrecognized application target must report unverified adapter status"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inspect_pid_on_shell_inspects_shell_directly() {
+    let mut bash = std::process::Command::new("bash")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("bash must spawn");
+    let bash_pid = bash.id();
+
+    let output = binary()
+        .args([
+            "inspect",
+            "--pid",
+            &bash_pid.to_string(),
+            "ctrl+r",
+            "--verbose",
+        ])
+        .env("SHELL", "/bin/bash")
+        .env(
+            "WHYKEY_READLINE_BINDINGS",
+            "reverse-search-history can be found on \"\\C-r\".\n",
+        )
+        .output()
+        .unwrap();
+
+    let _ = bash.kill();
+    let _ = bash.wait();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("Bash / Readline"),
+        "a shell targeted via --pid must be inspected by the shell layer; output:\n{text}"
+    );
+    assert!(
+        text.contains("reverse-search-history"),
+        "readline binding must be reported for shell target"
+    );
 }

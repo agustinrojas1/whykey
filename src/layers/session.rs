@@ -9,6 +9,10 @@ use crate::layers::{LayerId, LayerResult, LayerStatus, Outcome, Propagation};
 /// Their results are kept separate from the compositor and terminal layers so
 /// a report can show where a key was consumed before reaching Readline.
 pub fn inspect(key: &KeyCombo) -> LayerResult {
+    inspect_with_byte_status(key, true)
+}
+
+pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerResult {
     let mut multiplexers = Vec::new();
     if env::var_os("TMUX").is_some() {
         multiplexers.push("tmux");
@@ -49,7 +53,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     match multiplexers.as_slice() {
         [] => {}
         ["tmux"] => {
-            let mut result = super::tmux::inspect(key);
+            let mut result = super::tmux::inspect_with_byte_status(key, bytes_verified);
             result.details.splice(0..0, details);
             return result;
         }
@@ -67,7 +71,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             let results = multiplexers
                 .iter()
                 .map(|multiplexer| match *multiplexer {
-                    "tmux" => super::tmux::inspect(key),
+                    "tmux" => super::tmux::inspect_with_byte_status(key, bytes_verified),
                     "screen" => super::screen::inspect(key),
                     "Zellij" => super::zellij::inspect(key),
                     _ => unreachable!(),

@@ -39,6 +39,19 @@ pub fn inspect_input_for_pid(input: &TerminalInput, target_pid: u32) -> LayerRes
         other => unsupported(other),
     }
 }
+pub fn inspect_unknown() -> LayerResult {
+    LayerResult {
+        verbose_details: Vec::new(),
+        binding: None,
+        layer: "Shell input",
+        id: LayerId::Shell,
+        outcome: Outcome::Unknown,
+        summary: "terminal byte encoding is unknown; shell line editing unevaluated".into(),
+        details: vec![
+            "shell line editors (Readline, ZLE, Fish) match against terminal byte sequences".into(),
+        ],
+    }
+}
 
 fn unsupported(shell: &str) -> LayerResult {
     LayerResult {

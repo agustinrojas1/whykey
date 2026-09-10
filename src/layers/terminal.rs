@@ -80,6 +80,20 @@ impl Terminal {
         let state = tty_state_from_termios(termios);
         self.inspect_input_with_state(input, &state)
     }
+    pub fn inspect_unknown(&self) -> LayerResult {
+        LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "TTY driver",
+            id: LayerId::Tty,
+            outcome: Outcome::Unknown,
+            summary: "terminal byte encoding is unknown; TTY signal checks unevaluated".into(),
+            details: vec![
+                "termios special-character processing depends on bytes emitted by the terminal"
+                    .into(),
+            ],
+        }
+    }
 
     fn inspect_input_with_state(&self, input: &TerminalInput, state: &TtyState) -> LayerResult {
         let [byte] = input.bytes.as_slice() else {

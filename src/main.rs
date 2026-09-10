@@ -11,8 +11,8 @@ use whykey::extensions;
 use whykey::focus;
 use whykey::key::{KeyCombo, KeySequence};
 use whykey::layers::{
-    Outcome, hyprland, inspect_default_chain, inspect_default_chain_for_pid,
-    inspect_default_chain_for_pid_with_source, programmable,
+    LayerId, LayerResult, LayerStatus, Outcome, Propagation, hyprland, inspect_default_chain,
+    inspect_default_chain_for_pid, inspect_default_chain_for_pid_with_source, programmable,
 };
 use whykey::listen;
 use whykey::replay;
@@ -489,9 +489,7 @@ fn main() -> ExitCode {
     let results = command::with_deadline(command::configured_diagnostic_timeout(), || {
         inspect_default_chain(&key)
     });
-    let unavailable = results
-        .iter()
-        .any(|result| result.outcome == Outcome::Unavailable);
+    let unavailable = inspection_failed(&results, false);
     if json {
         print!(
             "{}",
@@ -506,6 +504,33 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn inspection_failed(layers: &[LayerResult], has_explicit_target: bool) -> bool {
+    let target_unavailable = layers
+        .iter()
+        .any(|l| l.id == LayerId::Application && l.status() == LayerStatus::Unavailable);
+    if has_explicit_target && target_unavailable {
+        return true;
+    }
+    let budget_exceeded = layers
+        .iter()
+        .any(|l| l.id == LayerId::Diagnostic && l.status() == LayerStatus::Unavailable);
+    if budget_exceeded {
+        return true;
+    }
+    let has_handled = layers.iter().any(|l| {
+        l.status() == LayerStatus::Handled
+            || l.propagation() == Propagation::Stops
+            || l.propagation() == Propagation::Redirected
+    });
+    if has_handled {
+        return false;
+    }
+    !layers.is_empty()
+        && layers
+            .iter()
+            .all(|l| l.status() == LayerStatus::Unavailable)
 }
 
 fn shell_init(shell: &str) -> String {
@@ -757,10 +782,10 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
             return ExitCode::from(1);
         }
     };
+    let has_explicit_target = target_pid.is_some() || focused;
     let unavailable = reports
         .iter()
-        .flatten()
-        .any(|result| result.outcome == Outcome::Unavailable);
+        .any(|steps| inspection_failed(steps, has_explicit_target));
 
     if json {
         print!(

@@ -4,16 +4,18 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{
+    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, UncertaintyReason,
+};
 
 const MAX_ANCESTORS: usize = 16;
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
-    inspect_for_pid(key, std::process::id())
+    inspect_for_pid_with_source_inner(key, std::process::id(), None, false)
 }
 
 pub fn inspect_for_pid(key: &KeyCombo, target_pid: u32) -> LayerResult {
-    inspect_for_pid_with_source(key, target_pid, None)
+    inspect_for_pid_with_source_inner(key, target_pid, None, true)
 }
 
 pub fn inspect_for_pid_with_source(
@@ -21,8 +23,46 @@ pub fn inspect_for_pid_with_source(
     target_pid: u32,
     source: Option<&str>,
 ) -> LayerResult {
+    inspect_for_pid_with_source_inner(key, target_pid, source, true)
+}
+
+fn inspect_for_pid_with_source_inner(
+    key: &KeyCombo,
+    target_pid: u32,
+    source: Option<&str>,
+    is_explicit_target: bool,
+) -> LayerResult {
+    if is_shell_process(target_pid) {
+        let mut details = vec![format!("target pid: {target_pid}")];
+        if let Some(source) = source {
+            details.push(format!("target selection source: {source}"));
+        }
+        details.push("selected target is a shell".into());
+        return LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "Interactive application",
+            id: LayerId::Application,
+            outcome: Outcome::Pass,
+            summary: "selected process is a shell".into(),
+            details,
+        };
+    }
+
     let Some((name, command, application_pid)) = interactive_ancestor_from(target_pid) else {
-        if process_info(target_pid).is_none() {
+        if !is_explicit_target {
+            let details = vec![format!("target pid: {target_pid}")];
+            return LayerResult {
+                verbose_details: Vec::new(),
+                binding: None,
+                layer: "Interactive application",
+                id: LayerId::Application,
+                outcome: Outcome::Pass,
+                summary: "no known interactive editor ancestor detected for target process".into(),
+                details,
+            };
+        }
+        let Some((_parent, command)) = process_info(target_pid) else {
             let mut details = vec![
                 "the process may have exited or /proc access may be restricted".into(),
                 "select a live process from the same session".into(),
@@ -32,25 +72,45 @@ pub fn inspect_for_pid_with_source(
             }
             return LayerResult {
                 verbose_details: Vec::new(),
-                binding: None,
+                binding: Some(BindingEvidence {
+                    dispatcher: None,
+                    action: None,
+                    description: None,
+                    submap: None,
+                    scope: BindingScope::Unknown,
+                    source: None,
+                    has_universal_match: false,
+                    uncertainty: Some(UncertaintyReason::EndpointUnavailable),
+                }),
                 layer: "Interactive application",
                 id: LayerId::Application,
                 outcome: Outcome::Unavailable,
                 summary: format!("target process {target_pid} is unavailable"),
                 details,
             };
-        }
-        let mut details = vec![format!("target pid: {target_pid}")];
+        };
+        let mut details = vec![
+            format!("target pid: {target_pid}"),
+            format!("command: {command}"),
+        ];
         if let Some(source) = source {
             details.push(format!("target selection source: {source}"));
         }
+        details.push("selected process has no dedicated shortcut inspection adapter".into());
+        details.push("foreground terminal ownership is unverified".into());
+        let bin_name = Path::new(command.split_whitespace().next().unwrap_or_default())
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("process");
         return LayerResult {
             verbose_details: Vec::new(),
             binding: None,
             layer: "Interactive application",
             id: LayerId::Application,
-            outcome: Outcome::Pass,
-            summary: "no known interactive editor ancestor detected for target process".into(),
+            outcome: Outcome::Unknown,
+            summary: format!(
+                "selected process '{bin_name}' ({target_pid}) has no dedicated shortcut adapter; handling is unverified"
+            ),
             details,
         };
     };
@@ -67,9 +127,20 @@ pub fn inspect_for_pid_with_source(
         if let Some(mapping) = nvim_runtime_mapping(key, &command, application_pid) {
             details.push(format!("runtime mapping: {mapping}"));
             details.push("mapping queried through Neovim RPC".into());
+            details.push("foreground terminal ownership is unverified".into());
+            let binding = BindingEvidence {
+                dispatcher: None,
+                action: Some(mapping),
+                description: None,
+                submap: None,
+                scope: BindingScope::Unknown,
+                source: None,
+                has_universal_match: false,
+                uncertainty: Some(UncertaintyReason::UnresolvedMode),
+            };
             return LayerResult {
                 verbose_details: Vec::new(),
-                binding: None,
+                binding: Some(binding),
                 layer: "Neovim",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -320,14 +391,15 @@ pub fn inspect_for_pid_with_source(
             details,
         };
     }
-    details.push("application mappings are not inspected yet".into());
+    details.push("application shortcut mappings are not inspected".into());
+    details.push("foreground terminal ownership is unverified".into());
     LayerResult {
         verbose_details: Vec::new(),
         binding: None,
-        layer: "Interactive application",
+        layer: "Selected application",
         id: LayerId::Application,
         outcome: Outcome::Unknown,
-        summary: format!("{name} may handle the key before the shell"),
+        summary: format!("selected application '{name}' may consume the key before the shell"),
         details,
     }
 }
@@ -349,6 +421,23 @@ fn interactive_ancestor_from(start_pid: u32) -> Option<(String, String, u32)> {
         pid = parent;
     }
     None
+}
+
+pub fn is_shell_process(pid: u32) -> bool {
+    let Some((_, command)) = process_info(pid) else {
+        return false;
+    };
+    let Some(name) = Path::new(command.split_whitespace().next().unwrap_or_default())
+        .file_name()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    let clean_name = name.strip_prefix('-').unwrap_or(name).to_ascii_lowercase();
+    matches!(
+        clean_name.as_str(),
+        "bash" | "zsh" | "fish" | "sh" | "dash" | "tcsh" | "csh" | "ksh"
+    )
 }
 
 fn process_info(pid: u32) -> Option<(u32, String)> {

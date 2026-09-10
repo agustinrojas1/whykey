@@ -32,7 +32,8 @@ pub fn context() -> Value {
 }
 
 /// Schema v2 path entries. Schema v1 serializes `LayerResult` directly and
-/// stays byte-compatible; only v2 gains the optional `binding` object.
+/// remains schema-compatible, preserving its fields and complete evidence;
+/// only v2 gains the optional `binding` object.
 /// Replaying a report without one never invents typed evidence.
 pub fn path(layers: &[LayerResult]) -> Vec<Value> {
     layers
@@ -104,6 +105,8 @@ mod tests {
                 submap: Some("default".into()),
                 scope: crate::layers::BindingScope::Universal,
                 source: None,
+                has_universal_match: true,
+                uncertainty: None,
             }),
             layer: "Hyprland",
             id: crate::layers::LayerId::Compositor,

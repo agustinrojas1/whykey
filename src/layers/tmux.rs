@@ -2,9 +2,15 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{
+    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, UncertaintyReason,
+};
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
+    inspect_with_byte_status(key, true)
+}
+
+pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerResult {
     let active_table = tmux_active_table();
     let root_output = match list_keys("root") {
         Ok(output) => output,
@@ -37,7 +43,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                         };
                         details.push(format!("table: {table} ({context})"));
                         details.push(format!("binding: {}", binding.description));
-                        return result_for_binding(&binding.action, details);
+                        return result_for_binding(&binding.action, details, bytes_verified);
                     }
                 }
                 Err(message) => {
@@ -68,7 +74,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
 
     if let Some(binding) = find_binding(&root_output, key, "root") {
         details.push(format!("binding: {}", binding.description));
-        return result_for_binding(&binding.action, details);
+        return result_for_binding(&binding.action, details, bytes_verified);
     }
 
     if active_table.is_none() {
@@ -81,7 +87,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                     "table: {table} (requires the configured prefix first)"
                 ));
                 details.push(format!("binding: {}", binding.description));
-                return result_for_binding(&binding.action, details);
+                return result_for_binding(&binding.action, details, bytes_verified);
             }
         }
     }
@@ -93,13 +99,23 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             .any(|prefix| prefix == *key)
     {
         details.push("the configured prefix starts a tmux key sequence".into());
+        let outcome = if bytes_verified {
+            Outcome::Consumed
+        } else {
+            Outcome::HandledUncertain
+        };
+        let summary = if bytes_verified {
+            "prefix key is consumed by tmux".into()
+        } else {
+            "configured prefix matches, but terminal byte delivery is unverified".into()
+        };
         return LayerResult {
             verbose_details: Vec::new(),
             binding: None,
             layer: "tmux",
             id: LayerId::Multiplexer,
-            outcome: Outcome::Consumed,
-            summary: "prefix key is consumed by tmux".into(),
+            outcome,
+            summary,
             details,
         };
     }
@@ -110,7 +126,11 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         layer: "tmux",
         id: LayerId::Multiplexer,
         outcome: Outcome::Pass,
-        summary: "no direct tmux binding; forwarded to the shell".into(),
+        summary: if bytes_verified {
+            "no direct tmux binding; forwarded to the shell".into()
+        } else {
+            "no direct tmux binding; terminal byte delivery remains unverified".into()
+        },
         details,
     }
 }
@@ -141,12 +161,40 @@ fn tmux_active_table() -> Option<String> {
     (!table.is_empty()).then_some(table)
 }
 
-fn result_for_binding(action: &str, mut details: Vec<String>) -> LayerResult {
+fn result_for_binding(action: &str, mut details: Vec<String>, bytes_verified: bool) -> LayerResult {
+    let binding = BindingEvidence {
+        dispatcher: None,
+        action: Some(action.to_owned()),
+        description: None,
+        submap: None,
+        scope: BindingScope::Unknown,
+        source: None,
+        has_universal_match: false,
+        uncertainty: if !bytes_verified {
+            Some(UncertaintyReason::UnverifiedTerminalBytes)
+        } else {
+            None
+        },
+    };
+    if !bytes_verified {
+        details.push(
+            "candidate binding matches in tmux, but terminal byte delivery is unverified".into(),
+        );
+        return LayerResult {
+            verbose_details: Vec::new(),
+            binding: Some(binding),
+            layer: "tmux",
+            id: LayerId::Multiplexer,
+            outcome: Outcome::HandledUncertain,
+            summary: "candidate binding matches in tmux root table; delivery is unverified".into(),
+            details,
+        };
+    }
     if action == "send-keys" || action.starts_with("send-keys ") {
         details.push("tmux emits another key sequence downstream".into());
         return LayerResult {
             verbose_details: Vec::new(),
-            binding: None,
+            binding: Some(binding),
             layer: "tmux",
             id: LayerId::Multiplexer,
             outcome: Outcome::HandledAndPassed,
@@ -156,7 +204,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>) -> LayerResult {
     }
     LayerResult {
         verbose_details: Vec::new(),
-        binding: None,
+        binding: Some(binding),
         layer: "tmux",
         id: LayerId::Multiplexer,
         outcome: Outcome::Consumed,
