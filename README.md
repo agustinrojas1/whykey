@@ -50,6 +50,7 @@ whykey listen --terminal            # force terminal-only capture
 whykey listen --evdev               # observe a physical Linux input device
 whykey doctor                       # check available integrations
 whykey bindings --key ctrl+x        # list matching desktop bindings
+whykey bindings --submap gaming    # list bindings in one submap
 whykey conflicts --source hyprland  # find matching conflicts
 whykey snapshot ctrl+super+return --output whykey-snapshot.json
 whykey diff before.json after.json

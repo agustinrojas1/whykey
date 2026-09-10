@@ -16,6 +16,15 @@ pub struct BindingEntry {
     pub action: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// Typed device scope read from the adapter payload, never inferred
+    /// from `context`. `None` means the adapter did not report one, which
+    /// never matches an active `--device` filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// Typed submap read from the adapter payload, never inferred from
+    /// `context`. Same missing-metadata rule as `device`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submap: Option<String>,
     pub certainty: String,
 }
 
@@ -77,13 +86,24 @@ pub fn current() -> Inventory {
             .limitations
             .push("the detected desktop has no dedicated binding inventory adapter".into());
     }
+
     inventory.bindings.sort_by(|left, right| {
-        (&left.source, &left.key, &left.context, &left.action).cmp(&(
-            &right.source,
-            &right.key,
-            &right.context,
-            &right.action,
-        ))
+        (
+            &left.source,
+            &left.key,
+            &left.context,
+            &left.device,
+            &left.submap,
+            &left.action,
+        )
+            .cmp(&(
+                &right.source,
+                &right.key,
+                &right.context,
+                &right.device,
+                &right.submap,
+                &right.action,
+            ))
     });
     if inventory.bindings.len() > MAX_BINDINGS {
         inventory.bindings.truncate(MAX_BINDINGS);
@@ -99,26 +119,37 @@ pub fn filter(
     key: Option<&str>,
     action: Option<&str>,
     source: Option<&str>,
+    device: Option<&str>,
+    submap: Option<&str>,
 ) -> Inventory {
     inventory.bindings.retain(|binding| {
-        key.is_none_or(|needle| {
-            binding
-                .key
-                .to_ascii_lowercase()
-                .contains(&needle.to_ascii_lowercase())
-        }) && action.is_none_or(|needle| {
-            binding
-                .action
-                .to_ascii_lowercase()
-                .contains(&needle.to_ascii_lowercase())
-        }) && source.is_none_or(|needle| {
-            binding
-                .source
+        contains(&binding.key, key)
+            && contains(&binding.action, action)
+            && contains(&binding.source, source)
+            && contains_optional(binding.device.as_deref(), device)
+            && contains_optional(binding.submap.as_deref(), submap)
+    });
+    inventory
+}
+
+fn contains(haystack: &str, needle: Option<&str>) -> bool {
+    needle.is_none_or(|needle| {
+        haystack
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
+    })
+}
+
+/// Missing metadata never matches an active filter: filters combine with
+/// AND logic, so an entry without a device cannot satisfy `--device`.
+fn contains_optional(field: Option<&str>, needle: Option<&str>) -> bool {
+    needle.is_none_or(|needle| {
+        field.is_some_and(|value| {
+            value
                 .to_ascii_lowercase()
                 .contains(&needle.to_ascii_lowercase())
         })
-    });
-    inventory
+    })
 }
 
 /// Whether a bindings-capable adapter contributes to this session. The X11
@@ -162,6 +193,8 @@ pub(crate) fn gnome_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, name, command) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "GNOME".into(),
                     key: key.compact_display(),
                     action: command.map_or(name.clone(), |command| format!("{name}: {command}")),
@@ -183,6 +216,8 @@ pub(crate) fn kde_entries(sink: &mut BindingSink<'_>) {
                     |description| format!("{action} ({description})"),
                 );
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "KDE Plasma".into(),
                     key: key.compact_display(),
                     action,
@@ -200,6 +235,8 @@ pub(crate) fn xfce_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, context) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "Xfce".into(),
                     key: key.compact_display(),
                     action,
@@ -217,6 +254,8 @@ pub(crate) fn cinnamon_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, command) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "Cinnamon".into(),
                     key: key.compact_display(),
                     action: command
@@ -235,6 +274,8 @@ pub(crate) fn mate_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, command) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "MATE".into(),
                     key: key.compact_display(),
                     action: command
@@ -253,6 +294,8 @@ pub(crate) fn niri_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "Niri".into(),
                     key: key.compact_display(),
                     action,
@@ -270,6 +313,8 @@ pub(crate) fn river_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, mode) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "River".into(),
                     key: key.compact_display(),
                     action,
@@ -287,6 +332,8 @@ pub(crate) fn wayfire_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, section) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "Wayfire".into(),
                     key: key.compact_display(),
                     action,
@@ -308,6 +355,8 @@ pub(crate) fn labwc_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, context) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "labwc".into(),
                     key: key.compact_display(),
                     action,
@@ -325,6 +374,8 @@ pub(crate) fn sxhkd_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "sxhkd".into(),
                     key: key.compact_display(),
                     action,
@@ -342,6 +393,8 @@ pub(crate) fn openbox_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action, context) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "Openbox".into(),
                     key: key.compact_display(),
                     action,
@@ -359,6 +412,8 @@ pub(crate) fn x11_entries(sink: &mut BindingSink<'_>) {
         Ok(bindings) => {
             for (key, action) in bindings {
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "X11 xbindkeys".into(),
                     key: key.compact_display(),
                     action,
@@ -378,6 +433,8 @@ pub(crate) fn programmable_entries(sink: &mut BindingSink<'_>) {
                 let source = programmable::detect()
                     .map_or_else(|| "Programmable X11 WM".into(), |wm| wm.name().into());
                 sink.entries.push(BindingEntry {
+                    device: None,
+                    submap: None,
                     source,
                     key: key.compact_display(),
                     action,
@@ -430,7 +487,16 @@ fn collect_hyprland(value: &serde_json::Value, entries: &mut Vec<BindingEntry>) 
             .and_then(serde_json::Value::as_str)
             .filter(|submap| !submap.is_empty() && *submap != "reset")
             .map_or_else(|| "default".into(), str::to_owned);
+        // Typed filter fields come straight from the payload. `device` stays
+        // absent for structured per-device scopes instead of guessing.
+        let device = binding
+            .get("device")
+            .and_then(serde_json::Value::as_str)
+            .filter(|device| !device.is_empty())
+            .map(str::to_owned);
         entries.push(BindingEntry {
+            device,
+            submap: Some(submap.clone()),
             source: "Hyprland (hyprctl binds -j)".into(),
             key: combo_display(mask, key),
             action,
@@ -490,6 +556,8 @@ fn collect_sway_or_i3(value: &serde_json::Value, source: &str, entries: &mut Vec
         };
         for key in keys {
             entries.push(BindingEntry {
+                device: None,
+                submap: None,
                 source: source.into(),
                 key: mask.map_or_else(
                     || key.to_ascii_uppercase(),
@@ -551,6 +619,12 @@ pub fn render_text(inventory: &Inventory) -> String {
         if let Some(context) = &entry.context {
             output.push_str(&format!("  context: {context}\n"));
         }
+        if let Some(device) = &entry.device {
+            output.push_str(&format!("  device: {device}\n"));
+        }
+        if let Some(submap) = &entry.submap {
+            output.push_str(&format!("  submap: {submap}\n"));
+        }
     }
     if inventory.bindings.is_empty() {
         output.push_str("No bindings were enumerated from the detected sources.\n");
@@ -605,20 +679,32 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
     }
 
-    #[test]
-    fn filters_bindings_by_case_insensitive_key_action_and_source() {
-        let inventory = Inventory {
+    fn filter_fixture() -> Inventory {
+        Inventory {
             schema_version: 1,
             complete: false,
             bindings: vec![
                 BindingEntry {
+                    device: Some("AT Keyboard".into()),
+                    submap: Some("default".into()),
                     source: "Hyprland".into(),
                     key: "CTRL+X".into(),
-                    action: "Open terminal".into(),
-                    context: None,
+                    action: "exec foot".into(),
+                    context: Some("default".into()),
                     certainty: "configured".into(),
                 },
                 BindingEntry {
+                    device: Some("Other Keyboard".into()),
+                    submap: Some("gaming".into()),
+                    source: "Hyprland".into(),
+                    key: "CTRL+X".into(),
+                    action: "exec kitty".into(),
+                    context: Some("gaming".into()),
+                    certainty: "configured".into(),
+                },
+                BindingEntry {
+                    device: None,
+                    submap: None,
                     source: "GNOME".into(),
                     key: "SUPER+X".into(),
                     action: "Open overview".into(),
@@ -628,11 +714,110 @@ mod tests {
             ],
             unavailable: Vec::new(),
             limitations: Vec::new(),
-        };
+        }
+    }
 
-        let filtered = filter(inventory, Some("ctrl+x"), Some("terminal"), Some("hypr"));
+    #[test]
+    fn filters_bindings_by_case_insensitive_key_action_and_source() {
+        let filtered = filter(
+            filter_fixture(),
+            Some("ctrl+x"),
+            Some("foot"),
+            Some("hypr"),
+            None,
+            None,
+        );
 
         assert_eq!(filtered.bindings.len(), 1);
         assert_eq!(filtered.bindings[0].source, "Hyprland");
+    }
+
+    #[test]
+    fn filters_bindings_by_device_only() {
+        let filtered = filter(
+            filter_fixture(),
+            None,
+            None,
+            None,
+            Some("at KEYBOARD"),
+            None,
+        );
+        assert_eq!(filtered.bindings.len(), 1);
+        assert_eq!(filtered.bindings[0].action, "exec foot");
+    }
+
+    #[test]
+    fn filters_bindings_by_submap_only() {
+        let filtered = filter(filter_fixture(), None, None, None, None, Some("GAMING"));
+        assert_eq!(filtered.bindings.len(), 1);
+        assert_eq!(filtered.bindings[0].action, "exec kitty");
+    }
+
+    #[test]
+    fn filters_bindings_by_combined_key_device_and_submap() {
+        let filtered = filter(
+            filter_fixture(),
+            Some("ctrl+x"),
+            None,
+            None,
+            Some("other"),
+            Some("gaming"),
+        );
+        assert_eq!(filtered.bindings.len(), 1);
+        assert_eq!(filtered.bindings[0].action, "exec kitty");
+        let empty = filter(
+            filter_fixture(),
+            Some("ctrl+x"),
+            None,
+            None,
+            Some("other"),
+            Some("default"),
+        );
+        assert!(empty.bindings.is_empty());
+    }
+
+    #[test]
+    fn missing_metadata_never_matches_an_active_filter() {
+        let filtered = filter(
+            filter_fixture(),
+            None,
+            None,
+            Some("gnome"),
+            Some("keyboard"),
+            None,
+        );
+        assert!(filtered.bindings.is_empty());
+        let filtered = filter(
+            filter_fixture(),
+            None,
+            None,
+            Some("gnome"),
+            None,
+            Some("default"),
+        );
+        assert!(filtered.bindings.is_empty());
+    }
+
+    #[test]
+    fn text_and_json_return_the_same_filtered_entries() {
+        let filtered = filter(filter_fixture(), Some("ctrl+x"), None, None, None, None);
+        let text = render_text(&filtered);
+        assert!(text.contains("exec foot"));
+        assert!(text.contains("exec kitty"));
+        assert!(text.contains("submap: default"));
+        assert!(text.contains("submap: gaming"));
+        for version in [1, 2] {
+            let value: serde_json::Value =
+                serde_json::from_str(&render_json(&filtered, version)).unwrap();
+            let entries = value["bindings"].as_array().unwrap();
+            assert_eq!(entries.len(), 2);
+            assert!(entries.iter().any(|entry| entry["submap"] == "default"));
+        }
+        let device_only = filter(filter_fixture(), None, None, None, Some("other"), None);
+        let text = render_text(&device_only);
+        assert!(text.contains("exec kitty"));
+        assert!(!text.contains("exec foot"));
+        let value: serde_json::Value = serde_json::from_str(&render_json(&device_only, 1)).unwrap();
+        assert_eq!(value["bindings"].as_array().unwrap().len(), 1);
     }
 }

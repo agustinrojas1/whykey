@@ -35,6 +35,8 @@ struct InventoryFilters {
     key: Option<String>,
     action: Option<String>,
     source: Option<String>,
+    device: Option<String>,
+    submap: Option<String>,
 }
 
 struct DoctorState {
@@ -77,13 +79,13 @@ const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "bindings",
-        usage: "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
+        usage: "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
         summary: "enumerate effective bindings",
         advanced: true,
     },
     CommandSpec {
         name: "conflicts",
-        usage: "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
+        usage: "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
         summary: "group duplicate actions",
         advanced: true,
     },
@@ -144,7 +146,8 @@ const LISTEN_COMPLETION_OPTIONS: &[&str] = &[
     "--verbose",
 ];
 const SNAPSHOT_COMPLETION_OPTIONS: &[&str] = &["--output"];
-const INVENTORY_FILTER_OPTIONS: &[&str] = &["--key", "--action", "--source"];
+const INVENTORY_FILTER_OPTIONS: &[&str] =
+    &["--key", "--action", "--source", "--device", "--submap"];
 
 /// Primary help leads with the common use; advanced commands follow.
 /// Every usage line comes from [`COMMANDS`], so help, the parser, and
@@ -177,6 +180,8 @@ fn parse_inventory_filters(
             "--key" => &mut filters.key,
             "--action" => &mut filters.action,
             "--source" => &mut filters.source,
+            "--device" => &mut filters.device,
+            "--submap" => &mut filters.submap,
             _ => return Err(format!("usage is `{usage}`")),
         };
         let Some(value) = arguments.next().filter(|value| !value.is_empty()) else {
@@ -387,7 +392,7 @@ fn main() -> ExitCode {
     if argument == "bindings" {
         let filters = match parse_inventory_filters(
             arguments.collect(),
-            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
+            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
         ) {
             Ok(filters) => filters,
             Err(error) => {
@@ -400,7 +405,7 @@ fn main() -> ExitCode {
     if argument == "conflicts" {
         let filters = match parse_inventory_filters(
             arguments.collect(),
-            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
+            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
         ) {
             Ok(filters) => filters,
             Err(error) => {
@@ -573,6 +578,7 @@ _whykey() {
     '--key[filter by key]:text:' \
     '--action[filter by action]:text:' \
     '--source[filter by source]:text:' \
+    '--submap[filter by submap]:text:' \
     '--pid[inspect process ancestry]:pid:' \
     '--focused[inspect focused window]' \
     '--instance[select a Hyprland instance]:instance:' \
@@ -599,6 +605,7 @@ complete -c whykey -l verbose -d 'show every route layer'
 complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l key -r -d 'filter by key'
 complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l action -r -d 'filter by action'
 complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l source -r -d 'filter by source'
+complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l submap -r -d 'filter by submap'
 complete -c whykey -n '__fish_seen_subcommand_from capabilities' -l all -d 'list the complete adapter inventory'
 complete -c whykey -l pid -r -d 'inspect the process ancestry rooted at this PID'
 complete -c whykey -l focused -d 'inspect the focused window process'
@@ -793,6 +800,8 @@ fn run_bindings(json: bool, schema_version: u8, filters: InventoryFilters) -> Ex
             filters.key.as_deref(),
             filters.action.as_deref(),
             filters.source.as_deref(),
+            filters.device.as_deref(),
+            filters.submap.as_deref(),
         )
     });
     if json {
@@ -814,6 +823,8 @@ fn run_conflicts(json: bool, schema_version: u8, filters: InventoryFilters) -> E
             filters.key.as_deref(),
             filters.action.as_deref(),
             filters.source.as_deref(),
+            filters.device.as_deref(),
+            filters.submap.as_deref(),
         )
     });
     if json {

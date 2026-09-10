@@ -164,16 +164,20 @@ from integrations unavailable in the current session.
 Enumerate effective bindings exposed by detected compositor adapters. The
 versioned output marks the inventory incomplete when application, plugin,
 inhibitor, or firmware state is not observable. Use
-.B --key , --action , and
-.B --source
-to filter the enumerated fields case-insensitively.
+.B --key , --action ,
+.B --source , --device , and
+.B --submap
+to filter the enumerated fields case-insensitively. Device and submap filters
+match only entries whose adapter reported that metadata; missing metadata
+never matches an active filter.
 .TP
 .B conflicts
 Compare the enumerated bindings for duplicate actions in the same source,
 key, and context. Precedence and runtime activation that cannot be observed
 are reported as possible conflicts. The same
-.B --key , --action , and
-.B --source
+.B --key , --action ,
+.B --source , --device , and
+.B --submap
 filters apply to the conflict list.
 .TP
 .BI extension\ program\ combination

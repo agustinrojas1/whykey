@@ -11,6 +11,10 @@ pub struct Conflict {
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submap: Option<String>,
     pub classification: String,
     pub actions: Vec<String>,
 }
@@ -69,6 +73,8 @@ pub fn current() -> Report {
             key,
             source,
             context,
+            device: entries.first().and_then(|entry| entry.device.clone()),
+            submap: entries.first().and_then(|entry| entry.submap.clone()),
             classification: if runtime {
                 "possible; precedence/order is not exposed".into()
             } else {
@@ -101,27 +107,41 @@ pub fn filter(
     key: Option<&str>,
     action: Option<&str>,
     source: Option<&str>,
+    device: Option<&str>,
+    submap: Option<&str>,
 ) -> Report {
     report.conflicts.retain(|conflict| {
-        key.is_none_or(|needle| {
-            conflict
-                .key
-                .to_ascii_lowercase()
-                .contains(&needle.to_ascii_lowercase())
-        }) && action.is_none_or(|needle| {
-            conflict.actions.iter().any(|value| {
-                value
-                    .to_ascii_lowercase()
-                    .contains(&needle.to_ascii_lowercase())
+        contains(&conflict.key, key)
+            && conflict.actions.iter().any(|value| {
+                action.is_none_or(|needle| {
+                    value
+                        .to_ascii_lowercase()
+                        .contains(&needle.to_ascii_lowercase())
+                })
             })
-        }) && source.is_none_or(|needle| {
-            conflict
-                .source
+            && contains(&conflict.source, source)
+            && contains_optional(conflict.device.as_deref(), device)
+            && contains_optional(conflict.submap.as_deref(), submap)
+    });
+    report
+}
+
+fn contains(haystack: &str, needle: Option<&str>) -> bool {
+    needle.is_none_or(|needle| {
+        haystack
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
+    })
+}
+
+fn contains_optional(field: Option<&str>, needle: Option<&str>) -> bool {
+    needle.is_none_or(|needle| {
+        field.is_some_and(|value| {
+            value
                 .to_ascii_lowercase()
                 .contains(&needle.to_ascii_lowercase())
         })
-    });
-    report
+    })
 }
 
 pub fn render_text(report: &Report) -> String {
@@ -136,6 +156,12 @@ pub fn render_text(report: &Report) -> String {
             ));
             if let Some(context) = &conflict.context {
                 output.push_str(&format!("  context: {context}\n"));
+            }
+            if let Some(device) = &conflict.device {
+                output.push_str(&format!("  device: {device}\n"));
+            }
+            if let Some(submap) = &conflict.submap {
+                output.push_str(&format!("  submap: {submap}\n"));
             }
             for action in &conflict.actions {
                 output.push_str(&format!("  action: {action}\n"));
@@ -175,6 +201,8 @@ mod tests {
     fn only_different_actions_in_the_same_context_are_conflicts() {
         let entries = vec![
             bindings::BindingEntry {
+                device: None,
+                submap: None,
                 source: "test".into(),
                 key: "CTRL+C".into(),
                 action: "first".into(),
@@ -182,6 +210,8 @@ mod tests {
                 certainty: "runtime effective binding".into(),
             },
             bindings::BindingEntry {
+                device: None,
+                submap: None,
                 source: "test".into(),
                 key: "CTRL+C".into(),
                 action: "second".into(),
@@ -224,15 +254,16 @@ mod tests {
         assert!(value["conflicts"].is_array());
     }
 
-    #[test]
-    fn filters_conflicts_by_key_action_and_source() {
-        let report = Report {
+    fn conflict_fixture() -> Report {
+        Report {
             schema_version: 1,
             conflicts: vec![
                 Conflict {
                     key: "CTRL+X".into(),
                     source: "Hyprland".into(),
                     context: Some("default".into()),
+                    device: Some("AT Keyboard".into()),
+                    submap: Some("default".into()),
                     classification: "possible".into(),
                     actions: vec!["Open terminal".into(), "Open editor".into()],
                 },
@@ -240,17 +271,67 @@ mod tests {
                     key: "SUPER+X".into(),
                     source: "GNOME".into(),
                     context: Some("global".into()),
+                    device: None,
+                    submap: None,
                     classification: "possible".into(),
                     actions: vec!["Open overview".into(), "Open settings".into()],
                 },
             ],
             unavailable: Vec::new(),
             limitations: Vec::new(),
-        };
+        }
+    }
 
-        let filtered = filter(report, Some("ctrl+x"), Some("terminal"), Some("hypr"));
+    #[test]
+    fn filters_conflicts_by_key_action_and_source() {
+        let filtered = filter(
+            conflict_fixture(),
+            Some("ctrl+x"),
+            Some("terminal"),
+            Some("hypr"),
+            None,
+            None,
+        );
 
         assert_eq!(filtered.conflicts.len(), 1);
         assert_eq!(filtered.conflicts[0].source, "Hyprland");
+    }
+
+    #[test]
+    fn filters_conflicts_by_device_and_submap() {
+        let filtered = filter(
+            conflict_fixture(),
+            None,
+            None,
+            None,
+            Some("at keyboard"),
+            None,
+        );
+        assert_eq!(filtered.conflicts.len(), 1);
+        assert_eq!(filtered.conflicts[0].key, "CTRL+X");
+        let filtered = filter(conflict_fixture(), None, None, None, None, Some("DEFAULT"));
+        assert_eq!(filtered.conflicts.len(), 1);
+        let combined = filter(
+            conflict_fixture(),
+            Some("ctrl+x"),
+            Some("editor"),
+            None,
+            Some("at"),
+            Some("default"),
+        );
+        assert_eq!(combined.conflicts.len(), 1);
+        let missing = filter(
+            conflict_fixture(),
+            None,
+            None,
+            Some("gnome"),
+            Some("kbd"),
+            None,
+        );
+        assert!(missing.conflicts.is_empty());
+        let text = render_text(&filtered);
+        assert!(text.contains("CTRL+X"));
+        let value: serde_json::Value = serde_json::from_str(&render_json(&filtered, 1)).unwrap();
+        assert_eq!(value["conflicts"].as_array().unwrap().len(), 1);
     }
 }
