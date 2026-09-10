@@ -58,6 +58,78 @@ fn env_value(primary: &str, fallback: &str) -> Option<String> {
 fn env_value_or(primary: &str, fallback: &str, default: &str) -> String {
     env_value(primary, fallback).unwrap_or_else(|| default.into())
 }
+/// A Linux evdev keycode as reported by the kernel input layer.
+///
+/// A compiled XKB keymap addresses keys eight higher by convention, so the
+/// `+8` shift lives in [`EvdevKeycode::to_xkb`] alone. Constructing this
+/// type from a `u16` is lossless; interpreting it as an XKB keycode without
+/// conversion is a namespace error the type system now rejects.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct EvdevKeycode(u16);
+
+/// An XKB keycode as used in compiled keymaps, Hyprland socket events, and
+/// Hyprland binding fields.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct XkbKeycode(u32);
+
+impl EvdevKeycode {
+    pub fn new(code: u16) -> Self {
+        Self(code)
+    }
+    pub fn get(self) -> u16 {
+        self.0
+    }
+    /// Convert to the XKB namespace once, at the entry boundary.
+    pub fn to_xkb(self) -> Option<XkbKeycode> {
+        u32::from(self.0).checked_add(8).map(XkbKeycode)
+    }
+}
+
+impl XkbKeycode {
+    pub fn new(code: u32) -> Self {
+        Self(code)
+    }
+    pub fn get(self) -> u32 {
+        self.0
+    }
+    /// Convert back to the evdev namespace. Wire values below 8 have no
+    /// evdev counterpart and yield `None` instead of wrapping.
+    pub fn to_evdev(self) -> Option<EvdevKeycode> {
+        self.0
+            .checked_sub(8)
+            .and_then(|code| u16::try_from(code).ok().map(EvdevKeycode))
+    }
+}
+
+impl From<u16> for EvdevKeycode {
+    fn from(code: u16) -> Self {
+        Self(code)
+    }
+}
+
+impl From<u32> for XkbKeycode {
+    fn from(code: u32) -> Self {
+        Self(code)
+    }
+}
+
+impl std::fmt::Display for EvdevKeycode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Display for XkbKeycode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 pub fn compile_keymap(rmlvo: &Rmlvo) -> Option<String> {
     let mut command = Command::new("xkbcli");
@@ -99,16 +171,20 @@ pub fn group_from_environment() -> usize {
 }
 
 /// Return the symbols in one XKB group for a Linux evdev key code.
-pub fn symbols_for_evdev_keycode(keymap: &str, evdev_keycode: u16, group: usize) -> Vec<String> {
-    let candidates = [u32::from(evdev_keycode), u32::from(evdev_keycode) + 8];
+pub fn symbols_for_evdev_keycode(
+    keymap: &str,
+    evdev_keycode: EvdevKeycode,
+    group: usize,
+) -> Vec<String> {
+    // A compiled XKB keymap uses XKB keycodes. Linux evdev keycodes are eight
+    // lower by convention. Do not inspect the raw evdev number too: evdev 28
+    // is Return while XKB 28 is the T key.
+    let Some(xkb_keycode) = evdev_keycode.to_xkb() else {
+        return Vec::new();
+    };
     let mut symbols = parse_symbol_keycodes_for_group(keymap, group)
         .into_iter()
-        .filter_map(|(symbol, codes)| {
-            codes
-                .iter()
-                .any(|code| candidates.contains(code))
-                .then_some(symbol)
-        })
+        .filter_map(|(symbol, codes)| codes.contains(&xkb_keycode.get()).then_some(symbol))
         .collect::<Vec<_>>();
     symbols.sort();
     symbols.dedup();
@@ -120,13 +196,13 @@ pub fn symbols_for_evdev_keycode(keymap: &str, evdev_keycode: u16, group: usize)
 /// without losing the distinction between unshifted and shifted symbols.
 pub fn preferred_symbol_for_xkb_keycode(
     keymap: &str,
-    xkb_keycode: u32,
+    xkb_keycode: XkbKeycode,
     group: usize,
     level: usize,
 ) -> Option<String> {
     let (keycodes, symbols) = parse_keymap(keymap);
     keycodes.into_iter().find_map(|(name, codes)| {
-        if !codes.contains(&xkb_keycode) {
+        if !codes.contains(&xkb_keycode.get()) {
             return None;
         }
         let levels = symbols.get(&name)?.get(&group)?;
@@ -140,23 +216,12 @@ pub fn preferred_symbol_for_xkb_keycode(
 
 pub fn preferred_symbol_for_evdev_keycode(
     keymap: &str,
-    evdev_keycode: u16,
+    evdev_keycode: EvdevKeycode,
     group: usize,
     level: usize,
 ) -> Option<String> {
-    let candidates = [u32::from(evdev_keycode), u32::from(evdev_keycode) + 8];
-    let (keycodes, symbols) = parse_keymap(keymap);
-    keycodes.into_iter().find_map(|(name, codes)| {
-        if !codes.iter().any(|code| candidates.contains(code)) {
-            return None;
-        }
-        let levels = symbols.get(&name)?.get(&group)?;
-        levels
-            .get(level)
-            .or_else(|| levels.first())
-            .cloned()
-            .filter(|symbol| !symbol.is_empty())
-    })
+    let xkb_keycode = evdev_keycode.to_xkb()?;
+    preferred_symbol_for_xkb_keycode(keymap, xkb_keycode, group, level)
 }
 
 pub fn parse_symbol_keycodes_for_group(
@@ -346,19 +411,44 @@ xkb_symbols "pc" {
 
     #[test]
     fn selects_symbols_by_group_and_evdev_offset() {
-        let first = symbols_for_evdev_keycode(KEYMAP, 16, 0);
+        let first = symbols_for_evdev_keycode(KEYMAP, EvdevKeycode::from(16), 0);
         assert_eq!(first, vec!["Q", "q"]);
-        let second_layout = symbols_for_evdev_keycode(KEYMAP, 16, 1);
+        let second_layout = symbols_for_evdev_keycode(KEYMAP, EvdevKeycode::from(16), 1);
         assert_eq!(second_layout, vec!["A", "a"]);
-        let second = symbols_for_evdev_keycode(KEYMAP, 2, 0);
+        let second = symbols_for_evdev_keycode(KEYMAP, EvdevKeycode::from(2), 0);
         assert_eq!(second, vec!["1", "exclam"]);
         assert_eq!(
-            preferred_symbol_for_evdev_keycode(KEYMAP, 16, 0, 0),
+            preferred_symbol_for_evdev_keycode(KEYMAP, EvdevKeycode::from(16), 0, 0),
             Some("q".into())
         );
         assert_eq!(
-            preferred_symbol_for_evdev_keycode(KEYMAP, 16, 0, 1),
+            preferred_symbol_for_evdev_keycode(KEYMAP, EvdevKeycode::from(16), 0, 1),
             Some("Q".into())
+        );
+    }
+
+    #[test]
+    fn does_not_mix_raw_evdev_and_xkb_namespaces() {
+        let keymap = r#"
+xkb_keymap {
+xkb_keycodes "evdev" {
+    <AD05> = 28;
+    <RTRN> = 36;
+};
+xkb_symbols "pc" {
+    key <AD05> { symbols[1] = [ t, T ] };
+    key <RTRN> { symbols[1] = [ Return ] };
+};
+};
+"#;
+
+        assert_eq!(
+            symbols_for_evdev_keycode(keymap, EvdevKeycode::from(28), 0),
+            vec!["Return"]
+        );
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, EvdevKeycode::from(28), 0, 0),
+            Some("Return".into())
         );
     }
 
@@ -382,16 +472,84 @@ xkb_symbols "pc" {
 };
 "#;
         assert_eq!(
-            preferred_symbol_for_evdev_keycode(keymap, 16, 0, 0),
+            preferred_symbol_for_evdev_keycode(keymap, EvdevKeycode::from(16), 0, 0),
             Some("q".into())
         );
-        assert_eq!(preferred_symbol_for_evdev_keycode(keymap, 16, 0, 1), None);
         assert_eq!(
-            preferred_symbol_for_evdev_keycode(keymap, 16, 0, 2),
+            preferred_symbol_for_evdev_keycode(keymap, EvdevKeycode::from(16), 0, 1),
+            None
+        );
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, EvdevKeycode::from(16), 0, 2),
             Some("Q".into())
         );
-        let symbols = symbols_for_evdev_keycode(keymap, 16, 0);
+        let symbols = symbols_for_evdev_keycode(keymap, EvdevKeycode::from(16), 0);
         assert_eq!(symbols, vec!["Q", "q"]);
+    }
+
+    #[test]
+    fn evdev_converts_to_xkb_once_with_plus_eight() {
+        assert_eq!(EvdevKeycode::from(28).to_xkb(), Some(XkbKeycode::from(36)));
+        assert_eq!(
+            XkbKeycode::from(36).to_evdev(),
+            Some(EvdevKeycode::from(28))
+        );
+        // An evdev 28 event (Return) must never equal XKB 28 (the T key).
+        assert_ne!(EvdevKeycode::from(28).to_xkb(), Some(XkbKeycode::from(28)));
+        // Wire values below the offset have no evdev counterpart.
+        assert_eq!(XkbKeycode::from(7).to_evdev(), None);
+        // Serialization stays numeric for report compatibility.
+        assert_eq!(
+            serde_json::to_string(&EvdevKeycode::from(28)).unwrap(),
+            "28"
+        );
+        assert_eq!(serde_json::to_string(&XkbKeycode::from(36)).unwrap(), "36");
+    }
+
+    #[test]
+    fn resolves_shift_altgr_and_numlock_levels() {
+        let keymap = r#"
+xkb_keymap {
+xkb_keycodes "evdev" {
+    <AD01> = 24;
+    <AE05> = 14;
+    <KP1> = 87;
+};
+xkb_symbols "pc" {
+    key <AD01> { symbols[1] = [ q, Q ] };
+    key <AE05> { symbols[1] = [ 5, percent, EuroSign ] };
+    key <KP1> { symbols[1] = [ KP_End, KP_1 ] };
+};
+};
+"#;
+        let letter = EvdevKeycode::from(16);
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, letter, 0, 0),
+            Some("q".into())
+        );
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, letter, 0, 1),
+            Some("Q".into())
+        );
+        let digit = EvdevKeycode::from(6);
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, digit, 0, 1),
+            Some("percent".into())
+        );
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, digit, 0, 2),
+            Some("EuroSign".into())
+        );
+        // NumLock selects the keypad level: KP_End without it, KP_1 with it.
+        let keypad = EvdevKeycode::from(79);
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, keypad, 0, 0),
+            Some("KP_End".into())
+        );
+        assert_eq!(
+            preferred_symbol_for_evdev_keycode(keymap, keypad, 0, 1),
+            Some("KP_1".into())
+        );
     }
 
     #[test]
@@ -409,8 +567,8 @@ xkb_symbols "pc" {
             // authoritative in that environment.
             return;
         };
-        let us = symbols_for_evdev_keycode(&keymap, 21, 0);
-        let german = symbols_for_evdev_keycode(&keymap, 21, 1);
+        let us = symbols_for_evdev_keycode(&keymap, EvdevKeycode::from(21), 0);
+        let german = symbols_for_evdev_keycode(&keymap, EvdevKeycode::from(21), 1);
         assert!(us.iter().any(|symbol| symbol == "y"));
         assert!(german.iter().any(|symbol| symbol == "z"));
     }

@@ -45,7 +45,7 @@ struct Binding {
     modmask: u32,
     key: String,
     #[serde(default)]
-    keycode: u32,
+    keycode: crate::xkb::XkbKeycode,
     #[serde(default)]
     catch_all: bool,
     #[serde(default)]
@@ -252,24 +252,24 @@ fn inspect_system(
             match xkb_symbols_for_physical_key(input.keycode, devices_json) {
                 Some(symbols) if !symbols.is_empty() => result.details.push(format!(
                     "active XKB keymap maps evdev keycode {} to symbols: {}",
-                    input.keycode,
+                    input.keycode.get(),
                     symbols.join(", ")
                 )),
                 _ => result.details.push(format!(
                     "active XKB keymap did not resolve evdev keycode {} to a symbol",
-                    input.keycode
+                    input.keycode.get()
                 )),
             }
         }
         if keycodes.len() == 1 {
             result.details.push(format!(
                 "XKB layout resolves {key} to keycode {} for the main keyboard",
-                keycodes[0]
+                keycodes[0].get()
             ));
         } else if !keycodes.is_empty() {
             let values = keycodes
                 .iter()
-                .map(u32::to_string)
+                .map(|code| code.get().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             result.details.push(format!(
@@ -1086,7 +1086,7 @@ fn summarize_keyboards(devices_json: &str) -> Option<String> {
     }
 }
 
-fn xkb_keycodes_for_key(key: &KeyCombo, devices_json: &str) -> Vec<u32> {
+fn xkb_keycodes_for_key(key: &KeyCombo, devices_json: &str) -> Vec<crate::xkb::XkbKeycode> {
     if key.key().starts_with("CODE:") {
         return Vec::new();
     }
@@ -1099,11 +1099,19 @@ fn xkb_keycodes_for_key(key: &KeyCombo, devices_json: &str) -> Vec<u32> {
     let keycodes = parse_xkb_symbol_keycodes_for_group(&keymap, group);
     keycodes
         .get(&xkb_symbol_name(key).unwrap_or_default())
-        .cloned()
+        .map(|codes| {
+            codes
+                .iter()
+                .map(|code| crate::xkb::XkbKeycode::from(*code))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-fn xkb_symbols_for_physical_key(evdev_keycode: u16, devices_json: &str) -> Option<Vec<String>> {
+fn xkb_symbols_for_physical_key(
+    evdev_keycode: crate::xkb::EvdevKeycode,
+    devices_json: &str,
+) -> Option<Vec<String>> {
     let keymap = compile_main_xkb_keymap(devices_json)?;
     let group = main_keyboard_active_layout_index(devices_json)?;
     Some(xkb::symbols_for_evdev_keycode(
@@ -1141,18 +1149,18 @@ pub(crate) fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
         .or_else(|| keyboards.first());
     let keyboard = keyboard?;
 
+    let layout = keyboard
+        .get("layout")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
     let mut rmlvo = xkb::Rmlvo {
         rules: "evdev".into(),
         model: "pc105".into(),
-        layout: "us".into(),
+        layout: layout.into(),
         variant: None,
         options: None,
     };
-    for (field, flag, default) in [
-        ("rules", "rules", "evdev"),
-        ("model", "model", "pc105"),
-        ("layout", "layout", "us"),
-    ] {
+    for (field, flag, default) in [("rules", "rules", "evdev"), ("model", "model", "pc105")] {
         let value = keyboard
             .get(field)
             .and_then(serde_json::Value::as_str)
@@ -1278,7 +1286,7 @@ fn inspect_json_with_keycode(
     key: &KeyCombo,
     bindings_json: &str,
     active_submap: &str,
-    keycodes: &[u32],
+    keycodes: &[crate::xkb::XkbKeycode],
     lua_hints: &[LuaBindHint],
     config_ignore_mods: bool,
     physical_input: Option<&PhysicalInput>,
@@ -1632,16 +1640,20 @@ fn inactive_submap_details(bindings: &[&Binding]) -> Vec<String> {
 fn binding_matches_key(
     binding: &Binding,
     combo: &KeyCombo,
-    keycodes: &[u32],
+    keycodes: &[crate::xkb::XkbKeycode],
     physical_input: Option<&PhysicalInput>,
 ) -> bool {
     if let Some(keycode) = combo.key().strip_prefix("CODE:") {
         // An explicit numeric query is already an assertion about the
         // binding's code; do not let a separately captured physical event
         // broaden it to another code.
-        return keycode.parse::<u32>().ok() == Some(binding.keycode);
+        return keycode
+            .parse::<u32>()
+            .ok()
+            .map(crate::xkb::XkbKeycode::from)
+            == Some(binding.keycode);
     }
-    if binding.keycode != 0 {
+    if binding.keycode != crate::xkb::XkbKeycode::from(0) {
         return keycodes.contains(&binding.keycode)
             || physical_input
                 .is_some_and(|input| physical_keycode_matches(binding.keycode, input.keycode));
@@ -1649,13 +1661,16 @@ fn binding_matches_key(
     binding.catch_all || binding.key.eq_ignore_ascii_case(combo.key())
 }
 
-fn physical_keycode_matches(binding_keycode: u32, evdev_keycode: u16) -> bool {
-    let evdev = u32::from(evdev_keycode);
-    // XKB keycodes conventionally equal the Linux evdev code plus 8. Some
-    // Hyprland versions/configurations expose the raw evdev value instead, so
-    // accept both representations while keeping the evidence visible in the
-    // report.
-    binding_keycode == evdev || binding_keycode == evdev.saturating_add(8)
+fn physical_keycode_matches(
+    binding_keycode: crate::xkb::XkbKeycode,
+    evdev_keycode: crate::xkb::EvdevKeycode,
+) -> bool {
+    // `Binding.keycode` is an XKB keycode per the compositor. Physical
+    // capture carries a Linux evdev code, so convert it once at this
+    // boundary instead of accepting both numeric namespaces.
+    evdev_keycode
+        .to_xkb()
+        .is_some_and(|xkb_keycode| binding_keycode == xkb_keycode)
 }
 
 fn binding_propagation(matches: &[BindingMatch<'_>]) -> Propagation {
@@ -1973,11 +1988,14 @@ fn details_with_physical_input(
             Some(device) => details.push(format!("captured evdev device: {device}")),
             None => details.push("captured keyboard device: unavailable".into()),
         }
+        let xkb_candidate = input
+            .keycode
+            .to_xkb()
+            .map_or("unknown".into(), |code| code.get().to_string());
         details.push(format!(
-            "physical keycode: {} (XKB candidates {}, {})",
-            input.keycode,
-            input.keycode,
-            u32::from(input.keycode).saturating_add(8)
+            "physical keycode: {} (XKB keycode {})",
+            input.keycode.get(),
+            xkb_candidate
         ));
     }
     details
@@ -2411,7 +2429,7 @@ mod tests {
         }]"#;
         let physical = PhysicalInput {
             device: Some("Example-Keyboard".into()),
-            keycode: 46,
+            keycode: crate::xkb::EvdevKeycode::from(46),
         };
 
         let result = inspect_json_with_keycode(
@@ -2446,7 +2464,7 @@ mod tests {
         }]"#;
         let physical = PhysicalInput {
             device: Some("example-keyboard".into()),
-            keycode: 46,
+            keycode: crate::xkb::EvdevKeycode::from(46),
         };
 
         let result = inspect_json_with_keycode(
@@ -2481,7 +2499,7 @@ mod tests {
         }]"#;
         let physical = PhysicalInput {
             device: Some("keyboard".into()),
-            keycode: 105,
+            keycode: crate::xkb::EvdevKeycode::from(105),
         };
 
         let result = inspect_json_with_keycode(
@@ -2500,6 +2518,35 @@ mod tests {
     }
 
     #[test]
+    fn physical_evdev_code_does_not_match_raw_xkb_number() {
+        let combo: KeyCombo = "ctrl+left".parse().unwrap();
+        let bindings = r#"[{
+            "modmask": 4,
+            "key": "",
+            "keycode": 105,
+            "dispatcher": "exec"
+        }]"#;
+        let physical = PhysicalInput {
+            device: Some("keyboard".into()),
+            keycode: crate::xkb::EvdevKeycode::from(105),
+        };
+
+        let result = inspect_json_with_keycode(
+            &combo,
+            bindings,
+            "default",
+            &[],
+            &[],
+            false,
+            Some(&physical),
+        )
+        .unwrap();
+
+        assert_eq!(result.status(), LayerStatus::NotHandled);
+        assert_eq!(result.propagation(), Propagation::Continues);
+    }
+
+    #[test]
     fn explicit_code_query_is_not_broadened_by_physical_capture() {
         let combo: KeyCombo = "ctrl+code:30".parse().unwrap();
         let bindings = r#"[{
@@ -2510,7 +2557,7 @@ mod tests {
         }]"#;
         let physical = PhysicalInput {
             device: Some("keyboard".into()),
-            keycode: 105,
+            keycode: crate::xkb::EvdevKeycode::from(105),
         };
 
         let result = inspect_json_with_keycode(
@@ -2788,6 +2835,12 @@ xkb_symbols "pc" {
     }
 
     #[test]
+    fn does_not_compile_a_guessed_us_layout_when_devices_omit_layout() {
+        let devices = include_str!("../../tests/fixtures/hyprland/devices-keyboards.json");
+        assert!(compile_main_xkb_keymap(devices).is_none());
+    }
+
+    #[test]
     fn matches_symbolic_query_against_xkb_keycode_binding() {
         let combo: KeyCombo = "ctrl+left".parse().unwrap();
         let bindings = r#"[{
@@ -2796,9 +2849,16 @@ xkb_symbols "pc" {
             "keycode": 113,
             "dispatcher": "exec"
         }]"#;
-        let result =
-            inspect_json_with_keycode(&combo, bindings, "default", &[113], &[], false, None)
-                .unwrap();
+        let result = inspect_json_with_keycode(
+            &combo,
+            bindings,
+            "default",
+            &[crate::xkb::XkbKeycode::from(113)],
+            &[],
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.status(), LayerStatus::Handled);
         assert_eq!(result.propagation(), Propagation::Stops);
     }

@@ -580,7 +580,7 @@ pub enum SocketMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyprlandKeyEvent {
     pub token: String,
-    pub xkb_keycode: u32,
+    pub xkb_keycode: crate::xkb::XkbKeycode,
     pub event_type: KeyEventType,
     pub modifier_mask: u32,
 }
@@ -605,9 +605,11 @@ pub fn parse_socket_line(line: &str) -> SocketMessage {
         return SocketMessage::Armed(token);
     }
     if parts.len() == 4 {
-        let Ok(xkb_keycode) = parts[1].parse::<u32>() else {
+        let Ok(raw_keycode) = parts[1].parse::<u32>() else {
             return SocketMessage::Other;
         };
+        // Socket wire values are XKB keycodes; they enter typed here.
+        let xkb_keycode = crate::xkb::XkbKeycode::from(raw_keycode);
         let Ok(state_raw) = parts[2].parse::<u32>() else {
             return SocketMessage::Other;
         };
@@ -642,7 +644,7 @@ pub struct HyprlandCaptureSession {
     keyboard_state_dirty: bool,
     layout_uncertain: bool,
     buffer: String,
-    held_keys: HashSet<u32>,
+    held_keys: HashSet<crate::xkb::XkbKeycode>,
     current_modifier_mask: u32,
     armed: bool,
 }
@@ -837,11 +839,10 @@ impl HyprlandCaptureSession {
                     self.keyboard_state_dirty = true;
                 }
                 SocketMessage::Key(event) if event.token == self.guard.token() => {
-                    let evdev_code = if event.xkb_keycode >= 8 {
-                        (event.xkb_keycode - 8) as u16
-                    } else {
-                        event.xkb_keycode as u16
-                    };
+                    // The socket speaks XKB; cross to evdev once via the
+                    // single conversion. Values below the offset have no
+                    // evdev counterpart and behave as key zero downstream.
+                    let evdev_code = event.xkb_keycode.to_evdev().map_or(0, |code| code.get());
 
                     self.current_modifier_mask = event.modifier_mask;
                     match event.event_type {
@@ -884,7 +885,7 @@ impl HyprlandCaptureSession {
     }
     pub fn wait_for_chord_release(
         &mut self,
-        main_keycode: u32,
+        main_keycode: crate::xkb::XkbKeycode,
         max_duration: Duration,
     ) -> Result<ChordReleaseStatus, String> {
         let deadline = Instant::now() + max_duration;
@@ -940,7 +941,7 @@ impl HyprlandCaptureSession {
         Ok(ChordReleaseStatus::TimedOut)
     }
 
-    fn chord_release_confirmed(&self, main_keycode: u32) -> bool {
+    fn chord_release_confirmed(&self, main_keycode: crate::xkb::XkbKeycode) -> bool {
         !self.held_keys.contains(&main_keycode)
             && self.held_keys.is_empty()
             && self.current_modifier_mask == 0
@@ -977,15 +978,14 @@ impl HyprlandCaptureSession {
         Ok(())
     }
     fn decode_event(&self, event: &HyprlandKeyEvent) -> ObservedKey {
-        let evdev_code = if event.xkb_keycode >= 8 {
-            (event.xkb_keycode - 8) as u16
-        } else {
-            event.xkb_keycode as u16
-        };
+        // The socket speaks XKB; cross to evdev once via the single
+        // conversion. Values below the offset have no evdev counterpart.
+        let evdev_code = event.xkb_keycode.to_evdev();
+        let evdev_raw = evdev_code.map_or(0, |code| code.get());
 
         // 1. Adjust modifier state according to press or release of the current modifier
         let mut effective_mask = event.modifier_mask;
-        if let Some(mod_bit) = crate::listen::evdev_modifier(evdev_code) {
+        if let Some(mod_bit) = crate::listen::evdev_modifier(evdev_raw) {
             match event.event_type {
                 KeyEventType::Press | KeyEventType::Repeat => {
                     effective_mask |= mod_bit;
@@ -996,25 +996,22 @@ impl HyprlandCaptureSession {
             }
         }
 
-        // 2. Base unshifted symbol (level 0) for Hyprland binding matching
+        // 2. Base unshifted symbol (level 0) for Hyprland binding matching.
+        // The event already carries the XKB keycode, so one lookup suffices;
+        // the old evdev/raw dual lookup could only disagree on namespace.
         let base_key_name = self
             .keymap
             .as_deref()
             .and_then(|km| {
                 crate::xkb::preferred_symbol_for_xkb_keycode(km, event.xkb_keycode, self.group, 0)
-                    .or_else(|| {
-                        crate::xkb::preferred_symbol_for_evdev_keycode(
-                            km, evdev_code, self.group, 0,
-                        )
-                    })
             })
-            .or_else(|| crate::listen::evdev_key_name(evdev_code).map(str::to_owned))
-            .unwrap_or_else(|| format!("CODE:{evdev_code}"));
+            .or_else(|| crate::listen::evdev_key_name(evdev_raw).map(str::to_owned))
+            .unwrap_or_else(|| format!("CODE:{evdev_raw}"));
 
         // 3. Normalize aliases at this boundary
         let normalized_base = crate::key::normalize_key_str(&base_key_name);
 
-        let combo_mods = match crate::listen::evdev_modifier(evdev_code) {
+        let combo_mods = match crate::listen::evdev_modifier(evdev_raw) {
             Some(own_mod) => effective_mask & !own_mod,
             None => effective_mask,
         };
@@ -1038,11 +1035,6 @@ impl HyprlandCaptureSession {
                         self.group,
                         xkb_level,
                     )
-                    .or_else(|| {
-                        crate::xkb::preferred_symbol_for_evdev_keycode(
-                            km, evdev_code, self.group, xkb_level,
-                        )
-                    })
                 })
                 .filter(|sym| crate::key::normalize_key_str(sym) != normalized_base)
         } else {
@@ -1093,9 +1085,9 @@ impl HyprlandCaptureSession {
 
         let alternate_key = match shifted_keysym {
             Some(sym) => Some(format!(
-                "physical keycode {evdev_code} ({normalized_base}); shifted keysym: {sym}"
+                "physical keycode {evdev_raw} ({normalized_base}); shifted keysym: {sym}"
             )),
-            None => Some(format!("physical keycode {evdev_code} ({normalized_base})")),
+            None => Some(format!("physical keycode {evdev_raw} ({normalized_base})")),
         };
 
         let disposition = match self.policy {
@@ -1108,13 +1100,13 @@ impl HyprlandCaptureSession {
             raw: Vec::new(),
             raw_display: Some(format!(
                 "Hyprland XKB keycode={} evdev={} ({})",
-                event.xkb_keycode,
-                evdev_code,
+                event.xkb_keycode.get(),
+                evdev_raw,
                 event.event_type.label()
             )),
             modifier_state: Some(modifier_state),
             associated_text: None,
-            physical_keycode: Some(evdev_code),
+            physical_keycode: evdev_code,
             encoding,
             protocol_flags: None,
             event_type: event.event_type,
@@ -1166,7 +1158,7 @@ mod tests {
             parsed,
             SocketMessage::Key(HyprlandKeyEvent {
                 token: "tok1".into(),
-                xkb_keycode: 36,
+                xkb_keycode: crate::xkb::XkbKeycode::from(36),
                 event_type: KeyEventType::Press,
                 modifier_mask: 68,
             })
@@ -1186,7 +1178,7 @@ mod tests {
             parse_socket_line(&line),
             SocketMessage::Key(HyprlandKeyEvent {
                 token: "tok1".into(),
-                xkb_keycode: 36,
+                xkb_keycode: crate::xkb::XkbKeycode::from(36),
                 event_type: KeyEventType::Release,
                 modifier_mask: 0,
             })
@@ -1210,7 +1202,7 @@ mod tests {
             parse_socket_line(&lines[1]),
             SocketMessage::Key(HyprlandKeyEvent {
                 token: "tok1".into(),
-                xkb_keycode: 36,
+                xkb_keycode: crate::xkb::XkbKeycode::from(36),
                 event_type: KeyEventType::Repeat,
                 modifier_mask: 4,
             })
@@ -1256,12 +1248,15 @@ mod tests {
     fn convert_xkb_keycode_36_to_evdev_28_and_return() {
         let event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 36,
+            xkb_keycode: crate::xkb::XkbKeycode::from(36),
             event_type: KeyEventType::Press,
             modifier_mask: 0,
         };
         let observed = decode_test_event(&event, None, 0, false, false);
-        assert_eq!(observed.physical_keycode, Some(28));
+        assert_eq!(
+            observed.physical_keycode,
+            Some(crate::xkb::EvdevKeycode::from(28))
+        );
         assert_eq!(observed.combo.key(), "RETURN");
         assert_eq!(observed.combo.modmask(), 0);
         assert_eq!(observed.source, CaptureSource::Hyprland);
@@ -1273,7 +1268,7 @@ mod tests {
     fn preserve_ctrl_super_modifier_state() {
         let event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 36,
+            xkb_keycode: crate::xkb::XkbKeycode::from(36),
             event_type: KeyEventType::Press,
             modifier_mask: 4 | 64, // CTRL (4) | SUPER (64)
         };
@@ -1290,7 +1285,7 @@ mod tests {
     fn modifier_event_ordering_press_and_release() {
         let press_event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 37,
+            xkb_keycode: crate::xkb::XkbKeycode::from(37),
             event_type: KeyEventType::Press,
             modifier_mask: 0,
         };
@@ -1305,7 +1300,7 @@ mod tests {
 
         let release_event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 37,
+            xkb_keycode: crate::xkb::XkbKeycode::from(37),
             event_type: KeyEventType::Release,
             modifier_mask: 4,
         };
@@ -1334,7 +1329,7 @@ xkb_symbols "pc" {
 "#;
         let event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 10,
+            xkb_keycode: crate::xkb::XkbKeycode::from(10),
             event_type: KeyEventType::Press,
             modifier_mask: 1, // SHIFT
         };
@@ -1585,11 +1580,12 @@ xkb_symbols "pc" {
             keyboard_state_dirty: false,
             layout_uncertain: false,
             buffer: String::new(),
-            held_keys: [10].into_iter().collect(),
+            held_keys: [crate::xkb::XkbKeycode::from(10)].into_iter().collect(),
             current_modifier_mask: 0,
             armed: true,
         };
-        let res = session.wait_for_chord_release(10, Duration::from_millis(100));
+        let res = session
+            .wait_for_chord_release(crate::xkb::XkbKeycode::from(10), Duration::from_millis(100));
         assert!(res.is_err(), "socket disconnect must return error");
         assert!(res.unwrap_err().contains("disconnected"));
     }
@@ -1611,15 +1607,16 @@ xkb_symbols "pc" {
             keyboard_state_dirty: false,
             layout_uncertain: false,
             buffer: String::new(),
-            held_keys: [10].into_iter().collect(),
+            held_keys: [crate::xkb::XkbKeycode::from(10)].into_iter().collect(),
             current_modifier_mask: 4,
             armed: true,
         };
 
         assert_eq!(
-            session.wait_for_chord_release(10, Duration::ZERO).unwrap(),
+            session
+                .wait_for_chord_release(crate::xkb::XkbKeycode::from(10), Duration::ZERO)
+                .unwrap(),
             ChordReleaseStatus::TimedOut
         );
     }
-
 }

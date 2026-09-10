@@ -219,7 +219,7 @@ impl Serialize for LayerResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalInput {
     pub device: Option<String>,
-    pub keycode: u16,
+    pub keycode: crate::xkb::EvdevKeycode,
 }
 
 impl LayerResult {
@@ -348,7 +348,7 @@ pub fn inspect_default_chain_observed_with_termios(
 pub fn inspect_default_chain_evdev(
     key: &KeyCombo,
     device: impl Into<String>,
-    keycode: u16,
+    keycode: crate::xkb::EvdevKeycode,
 ) -> Vec<LayerResult> {
     let session = crate::environment::Environment::collect();
     inspect_default_chain_evdev_with_session(key, device, keycode, &session)
@@ -359,7 +359,7 @@ pub fn inspect_default_chain_evdev(
 pub fn inspect_default_chain_evdev_with_session(
     key: &KeyCombo,
     device: impl Into<String>,
-    keycode: u16,
+    keycode: crate::xkb::EvdevKeycode,
     session: &crate::environment::Environment,
 ) -> Vec<LayerResult> {
     inspect_with_request_and_session(
@@ -382,7 +382,7 @@ pub fn inspect_default_chain_evdev_with_session(
 
 pub fn inspect_default_chain_hyprland_with_session(
     key: &KeyCombo,
-    keycode: u16,
+    keycode: crate::xkb::EvdevKeycode,
     session: &crate::environment::Environment,
 ) -> Vec<LayerResult> {
     inspect_with_request_and_session(
@@ -475,11 +475,9 @@ fn inspect_with_request_and_session(
         .as_ref()
         .is_some_and(|result| result.outcome != Outcome::Pass)
     {
-        let insert_at = results
-            .iter()
-            .position(|result| result.id == LayerId::Tty)
-            .unwrap_or(results.len());
-        results.insert(insert_at, ime_result.expect("IME result is present"));
+        if let Some(insert_at) = results.iter().position(|result| result.id == LayerId::Tty) {
+            results.insert(insert_at, ime_result.expect("IME result is present"));
+        }
     }
     results
 }

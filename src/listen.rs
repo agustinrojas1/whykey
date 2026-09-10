@@ -225,7 +225,7 @@ pub struct ObservedKey {
     pub associated_text: Option<String>,
     /// Linux evdev key code when the event was captured before the compositor.
     #[serde(default)]
-    pub physical_keycode: Option<u16>,
+    pub physical_keycode: Option<crate::xkb::EvdevKeycode>,
     pub encoding: String,
     pub protocol_flags: Option<u32>,
     pub event_type: KeyEventType,
@@ -490,22 +490,36 @@ fn run_hyprland(
         };
 
         if capture_session.is_suppressing() {
-            let main_code = observed
-                .physical_keycode
-                .map_or(0, |code| (code + 8) as u32);
-            if let Err(err) =
-                capture_session.wait_for_chord_release(main_code, Duration::from_millis(1000))
-            {
+            let Some(main_code) = observed.physical_keycode.and_then(|code| code.to_xkb()) else {
                 let _ = flush_input(tty_fd);
-                capture_session.close().map_err(ListenError::Io)?;
-                return Err(ListenError::Message(err));
+                let _ = capture_session.close();
+                return Err(ListenError::Message(
+                    "captured Hyprland event has no convertible physical keycode".into(),
+                ));
+            };
+            match capture_session.wait_for_chord_release(main_code, Duration::from_millis(1000)) {
+                Ok(crate::hyprland_capture::ChordReleaseStatus::Released) => {}
+                Ok(crate::hyprland_capture::ChordReleaseStatus::TimedOut) => {
+                    let _ = flush_input(tty_fd);
+                    capture_session.close().map_err(ListenError::Io)?;
+                    return Err(ListenError::Message(
+                        "timed out waiting for confirmed captured chord release; no report was produced"
+                            .into(),
+                    ));
+                }
+                Err(error) => {
+                    let _ = flush_input(tty_fd);
+                    capture_session.close().map_err(ListenError::Io)?;
+                    return Err(ListenError::Message(error));
+                }
             }
-            let keep_listening = options.repeat
-                || options
-                    .count
-                    .is_some_and(|count| count > 1 && captured_events + 1 < count);
-            if !keep_listening {
-                let _ = capture_session.restore_submap();
+            // Remove the hook before running desktop discovery and rendering.
+            // This prevents inspection output, signal handling, or queued key
+            // events from running while the capture submap is still active.
+            if let Err(error) = capture_session.close() {
+                return Err(ListenError::Message(format!(
+                    "could not restore Hyprland submap before reporting: {error}"
+                )));
             }
         }
 
@@ -534,6 +548,11 @@ fn run_hyprland(
         let keep_listening = options.repeat || options.count.is_some_and(|count| count > 1);
         if !keep_listening || count_reached {
             break;
+        }
+        if options.capture_policy == HyprlandCapturePolicy::Suppress {
+            capture_session
+                .arm(HyprlandCapturePolicy::Suppress)
+                .map_err(ListenError::Message)?;
         }
         if !options.json {
             println!();
@@ -993,7 +1012,7 @@ impl EvdevSession {
         })
     }
 
-    fn key_name(&self, code: u16) -> String {
+    fn key_name(&self, code: crate::xkb::EvdevKeycode) -> String {
         self.xkb_keymap
             .as_deref()
             .and_then(|keymap| {
@@ -1005,7 +1024,7 @@ impl EvdevSession {
                 )
             })
             .unwrap_or_else(|| {
-                evdev_key_name(code)
+                evdev_key_name(code.get())
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("CODE:{code}"))
             })
@@ -1113,6 +1132,9 @@ impl EvdevSession {
                 2 => KeyEventType::Repeat,
                 _ => continue,
             };
+            // Kernel input enters the typed keycode system here: the raw u16
+            // becomes an EvdevKeycode once, and only `to_xkb` crosses to XKB.
+            let evdev_code = crate::xkb::EvdevKeycode::from(event.code);
             let modifier = evdev_modifier(event.code);
             if let Some(mask) = modifier {
                 let lock_key = matches!(event.code, 58 | 69);
@@ -1127,7 +1149,7 @@ impl EvdevSession {
                     self.devices[index].pressed_modifiers.push(event.code);
                 }
                 if self.include_modifiers {
-                    let key_name = self.key_name(event.code);
+                    let key_name = self.key_name(evdev_code);
                     let device = self.devices[index].name.clone();
                     let path = self.devices[index].path.display().to_string();
                     let modifiers = self.current_modifiers();
@@ -1150,7 +1172,7 @@ impl EvdevSession {
                             "physical modifier keycode {} ({key_name})",
                             event.code
                         )),
-                        physical_keycode: Some(event.code),
+                        physical_keycode: Some(evdev_code),
                         source: CaptureSource::Evdev { device, path },
                         disposition: CaptureDisposition::ObservedOnly,
                     });
@@ -1163,7 +1185,7 @@ impl EvdevSession {
                 continue;
             }
             let modifiers_before = self.current_modifiers();
-            let key_name = self.key_name(event.code);
+            let key_name = self.key_name(evdev_code);
             let combo = KeyCombo::from_parts(modifiers_before, key_name.clone());
             let device = self.devices[index].name.clone();
             let path = self.devices[index].path.display().to_string();
@@ -1183,7 +1205,7 @@ impl EvdevSession {
                 event_type,
                 alternate_keys: None,
                 alternate_key: Some(format!("physical keycode {} ({key_name})", event.code)),
-                physical_keycode: Some(event.code),
+                physical_keycode: Some(evdev_code),
                 source: CaptureSource::Evdev { device, path },
                 disposition: CaptureDisposition::ObservedOnly,
             });
@@ -3024,7 +3046,7 @@ xkb_symbols "pc" {
             ),
             xkb_group: 1,
         };
-        assert_eq!(session.key_name(16), "b");
+        assert_eq!(session.key_name(crate::xkb::EvdevKeycode::from(16)), "b");
         assert!(session.encoding_label().contains("explicit XKB RMLVO"));
     }
 
@@ -3156,7 +3178,7 @@ xkb_symbols "pc" {
         // LeftCtrl (evdev 29 -> XKB 37) press
         let event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 37,
+            xkb_keycode: crate::xkb::XkbKeycode::from(37),
             event_type: KeyEventType::Press,
             modifier_mask: 4,
         };
@@ -3167,7 +3189,7 @@ xkb_symbols "pc" {
         // Release event (state = 0)
         let rel_event = HyprlandKeyEvent {
             token: "tok".into(),
-            xkb_keycode: 36,
+            xkb_keycode: crate::xkb::XkbKeycode::from(36),
             event_type: KeyEventType::Release,
             modifier_mask: 0,
         };
@@ -3194,7 +3216,7 @@ xkb_symbols "pc" {
         let keep_repeat = opt_repeat.repeat || opt_repeat.count.is_some_and(|c| c > 1);
         assert!(keep_repeat);
         let captured_1 = 1;
-        assert!(!opt_repeat.count.is_some_and(|c| captured_1 >= c));
+        assert!(opt_repeat.count.is_none_or(|c| captured_1 < c));
         let captured_2 = 2;
         assert!(opt_repeat.count.is_some_and(|c| captured_2 >= c));
     }

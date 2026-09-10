@@ -297,6 +297,12 @@ fn render_inner(
         "Key: {key}\nAssessment: {}\n\n",
         confidence_label(layers, observed && terminal_observed,)
     ));
+    output.push_str(&render_conclusion(
+        key,
+        layers,
+        observation,
+        terminal_observed,
+    ));
     if let Some(observation) = observation {
         let raw_display = observation
             .raw_display
@@ -376,12 +382,6 @@ fn render_inner(
             output.push_str(&format!("  alternate key: {alternate}\n\n"));
         }
     }
-    output.push_str(&render_conclusion(
-        key,
-        layers,
-        observation,
-        terminal_observed,
-    ));
     output.push_str("Path\n");
 
     // Default reports show only matching, consuming, unavailable, or
@@ -462,6 +462,15 @@ fn render_conclusion(
                                 before_bracket.trim()
                             })
                     });
+                    if layer.propagation() == Propagation::Indeterminate {
+                        output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
+                        if let Some(action) = action_summary {
+                            output.push_str(&format!(
+                                "  The configuration describes the action as {action}; Whykey did not execute the dispatcher.\n"
+                            ));
+                        }
+                        return output;
+                    }
                     if let Some(action) = action_summary {
                         if universal_match {
                             output.push_str(&format!(
@@ -891,7 +900,7 @@ mod tests {
             raw_display: Some("EV_KEY code=33 value=1 (press)".into()),
             modifier_state: None,
             associated_text: None,
-            physical_keycode: Some(33),
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(33)),
             encoding: "evdev key event before compositor processing".into(),
             protocol_flags: None,
             event_type: crate::listen::KeyEventType::Press,
@@ -932,7 +941,7 @@ mod tests {
                 devices: vec![],
             }),
             associated_text: None,
-            physical_keycode: Some(28),
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(28)),
             encoding: "Hyprland XKB key event".into(),
             protocol_flags: None,
             event_type: crate::listen::KeyEventType::Press,
@@ -976,7 +985,7 @@ mod tests {
                 devices: vec![],
             }),
             associated_text: None,
-            physical_keycode: Some(28),
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(28)),
             encoding: "Hyprland XKB key event".into(),
             protocol_flags: None,
             event_type: crate::listen::KeyEventType::Press,
@@ -1005,6 +1014,40 @@ mod tests {
     }
 
     #[test]
+    fn uncertain_suppression_never_claims_consumption_or_execution() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=36 evdev=28 (press)".into()),
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(28)),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::Hyprland,
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        };
+        let layers = [LayerResult {
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::HandledUncertain,
+            summary: "matching binding; runtime effect unknown".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+
+        let output = render_observed(&observed, &layers, false);
+
+        assert!(output.contains("runtime effect and propagation could not be determined"));
+        assert!(output.contains("Whykey did not execute the dispatcher"));
+        assert!(!output.contains("would run Herdr"));
+        assert!(!output.contains("would handle and consume"));
+    }
+
+    #[test]
     fn hyprland_report_with_universal_binding_qualifies_suppression() {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
         let observed = ObservedKey {
@@ -1018,7 +1061,7 @@ mod tests {
                 devices: vec![],
             }),
             associated_text: None,
-            physical_keycode: Some(28),
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(28)),
             encoding: "Hyprland XKB key event".into(),
             protocol_flags: None,
             event_type: crate::listen::KeyEventType::Press,
