@@ -106,7 +106,6 @@ pub fn raw_current_submap() -> String {
     String::new()
 }
 
-#[cfg(test)]
 fn submap_target_matches(current: &str, target: &str) -> bool {
     if target == "reset" || target == "default" {
         current.is_empty() || current == "default" || current == "reset"
@@ -286,13 +285,22 @@ end"#
             )
         }
         HyprlandCapturePolicy::Suppress => {
-            let default_target = if _saved_submap.is_empty()
-                || _saved_submap == "default"
-                || _saved_submap == "__whykey_capture"
-            {
+            let known_original = !_saved_submap.is_empty() && _saved_submap != "__whykey_capture";
+            let default_target = if !known_original || _saved_submap == "default" {
                 "reset"
             } else {
                 _saved_submap
+            };
+            // Lua-state-loss recovery runs only with a recorded original:
+            // without one, `reset` would be a guess, so refuse instead.
+            // The target is baked now: `{recovery}` inserts finished text.
+            let recovery = if known_original {
+                format!(
+                    "    local ok, err = do_dispatch_submap(\"{default_target}\")\n    if not ok then\n        error(\"cleanup: failed to recover submap after Lua state loss: \" .. tostring(err))\n    end"
+                )
+            } else {
+                "    error(\"cleanup: original submap unknown; refusing recovery to a guessed target\")"
+                    .to_string()
             };
             format!(
                 r#"local state = _G.__whykey_capture
@@ -351,10 +359,7 @@ elseif state == nil and cur_submap == "__whykey_capture" then
     -- the private submap. The Rust guard is still the owner of this cleanup
     -- attempt; only recover when the observable state is exactly that private
     -- submap, and restore the submap captured before arming.
-    local ok, err = do_dispatch_submap("{default_target}")
-    if not ok then
-        error("cleanup: failed to recover submap after Lua state loss: " .. tostring(err))
-    end
+{recovery}
 elseif state == nil or state.owner == nil or state.owner == "" then
     error("cleanup: not capture owner")
 else
@@ -378,11 +383,119 @@ end"#
     )
 }
 
+/// Explicit capture lifecycle. One [`HyprlandCaptureSession`] owns the
+/// state; [`HyprlandHookGuard`] only carries the hook identity (token,
+/// policy, recorded submap) and the IPC handle used to act on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureState {
+    /// Socket connected and original submap recorded; no hook installed.
+    Connected,
+    /// Install script sent; neither dispatcher success, the submap
+    /// postcondition, nor the token-specific armed event is confirmed yet.
+    Installing,
+    /// Dispatcher succeeded, the private submap is observed, and the armed
+    /// event for this token arrived.
+    Armed,
+    /// Teardown requested; the restored submap is not yet verified.
+    RestorePending,
+    /// The recorded submap was observed restored. Terminal.
+    Closed,
+}
+
+/// Narrow Hyprland IPC handle: the only way capture code reaches `hyprctl`.
+/// Unit tests inject [`FakeHyprctl`]; production uses [`Hyprctl::Real`].
+#[derive(Debug, Clone)]
+pub(crate) enum Hyprctl {
+    Real,
+    #[cfg(test)]
+    Fake(std::rc::Rc<FakeHyprctl>),
+}
+
+impl Hyprctl {
+    pub(crate) fn eval(&self, code: &str) -> io::Result<String> {
+        match self {
+            Self::Real => {
+                let mut command = Command::new("hyprctl");
+                command.args(["eval", code]);
+                let output =
+                    command::output(&mut command).map_err(|e| io::Error::other(e.to_string()))?;
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                if output.status.success() && stdout.contains("ok") {
+                    Ok(stdout)
+                } else {
+                    let detail = if !stderr.trim().is_empty() {
+                        stderr.trim().to_string()
+                    } else {
+                        stdout.trim().to_string()
+                    };
+                    Err(io::Error::other(detail))
+                }
+            }
+            #[cfg(test)]
+            Self::Fake(fake) => {
+                fake.eval_calls.borrow_mut().push(code.to_string());
+                match fake.eval_results.borrow_mut().pop_front() {
+                    Some(result) => result,
+                    None => Ok("ok".into()),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn current_submap(&self) -> String {
+        match self {
+            Self::Real => raw_current_submap(),
+            #[cfg(test)]
+            Self::Fake(fake) => fake.current_submap.borrow().clone(),
+        }
+    }
+
+    pub(crate) fn devices_json(&self) -> Option<String> {
+        match self {
+            Self::Real => {
+                let mut command = Command::new("hyprctl");
+                command.args(["devices", "-j"]);
+                let output = command::output(&mut command).ok()?;
+                output
+                    .status
+                    .success()
+                    .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+            }
+            #[cfg(test)]
+            Self::Fake(fake) => fake.devices_json.borrow().clone(),
+        }
+    }
+}
+
+/// Scripted IPC double for capture lifecycle tests. No daemon, no threads:
+/// `eval_results` answers successive eval calls, `eval_calls` records the
+/// Lua sent, and `current_submap` is the observable compositor state used
+/// for postcondition checks.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct FakeHyprctl {
+    pub eval_results: std::cell::RefCell<std::collections::VecDeque<io::Result<String>>>,
+    pub current_submap: std::cell::RefCell<String>,
+    pub devices_json: std::cell::RefCell<Option<String>>,
+    pub eval_calls: std::cell::RefCell<Vec<String>>,
+}
+
+#[cfg(test)]
+impl FakeHyprctl {
+    pub(crate) fn with_submap(submap: &str) -> std::rc::Rc<Self> {
+        std::rc::Rc::new(Self {
+            current_submap: std::cell::RefCell::new(submap.to_string()),
+            ..Self::default()
+        })
+    }
+}
+
 pub struct HyprlandHookGuard {
     token: String,
     policy: HyprlandCapturePolicy,
     saved_submap: String,
-    installed: bool,
+    pub(crate) client: Hyprctl,
 }
 
 impl HyprlandHookGuard {
@@ -395,7 +508,7 @@ impl HyprlandHookGuard {
             token,
             policy,
             saved_submap,
-            installed: true,
+            client: Hyprctl::Real,
         }
     }
 
@@ -404,16 +517,14 @@ impl HyprlandHookGuard {
             token,
             policy: HyprlandCapturePolicy::Suppress,
             saved_submap,
-            installed: false,
+            client: Hyprctl::Real,
         }
     }
 
-    pub fn is_installed(&self) -> bool {
-        self.installed
-    }
-
-    pub fn set_installed(&mut self, installed: bool) {
-        self.installed = installed;
+    #[cfg(test)]
+    pub(crate) fn with_client(mut self, client: Hyprctl) -> Self {
+        self.client = client;
+        self
     }
 
     pub fn set_policy(&mut self, policy: HyprlandCapturePolicy) {
@@ -428,41 +539,50 @@ impl HyprlandHookGuard {
         self.policy
     }
 
-    pub fn renew_lease(&self) -> io::Result<()> {
-        if self.policy != HyprlandCapturePolicy::Suppress || !self.installed {
-            return Ok(());
-        }
-        let code = renew_lua_code(&self.token);
-        let mut command = Command::new("hyprctl");
-        command.args(["eval", &code]);
-        let output = command::output(&mut command).map_err(|e| io::Error::other(e.to_string()))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() && stdout.contains("ok") {
-            Ok(())
+    /// The submap recorded before arming. `None` when it was never known,
+    /// which forbids Lua-state-loss recovery to a guessed target.
+    pub fn saved_submap(&self) -> Option<&str> {
+        let saved = self.saved_submap.trim();
+        if saved.is_empty() || saved == "__whykey_capture" {
+            None
         } else {
-            let err = if !output.stderr.is_empty() {
-                String::from_utf8_lossy(&output.stderr).to_string()
-            } else {
-                stdout.to_string()
-            };
-            Err(io::Error::other(format!(
-                "hyprctl eval lease renewal returned error: {}",
-                err.trim()
-            )))
+            Some(&self.saved_submap)
         }
     }
 
+    /// Owner-checked restore target: the recorded submap, or `reset` for the
+    /// default one. Unknown originals have no safe target.
+    pub fn restore_target(&self) -> Option<String> {
+        let saved = self.saved_submap()?;
+        if saved == "default" {
+            Some("reset".into())
+        } else {
+            Some(saved.to_string())
+        }
+    }
+
+    pub fn renew_lease(&self) -> io::Result<()> {
+        if self.policy != HyprlandCapturePolicy::Suppress {
+            return Ok(());
+        }
+        let code = renew_lua_code(&self.token);
+        self.client.eval(&code).map_err(|error| {
+            io::Error::other(format!(
+                "hyprctl eval lease renewal returned error: {error}"
+            ))
+        })?;
+        Ok(())
+    }
+    /// One owner-checked restore attempt through the Lua route. Does not
+    /// clear hook ownership; the session drives retries and the Closed state.
     pub fn restore_submap(&mut self) -> io::Result<()> {
         if self.policy != HyprlandCapturePolicy::Suppress {
             return Ok(());
         }
-        let target = if self.saved_submap.is_empty()
-            || self.saved_submap == "default"
-            || self.saved_submap == "__whykey_capture"
-        {
-            "reset"
-        } else {
-            &self.saved_submap
+        let Some(target) = self.restore_target() else {
+            return Err(io::Error::other(
+                "restore_submap: original submap unknown; refusing to guess a target",
+            ));
         };
         let lua = format!(
             r#"local state = _G.__whykey_capture
@@ -484,87 +604,29 @@ end"#,
             token = self.token,
             target = target
         );
-        let mut cmd = Command::new("hyprctl");
-        cmd.args(["eval", &lua]);
-        if let Ok(output) = command::output(&mut cmd) {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if output.status.success() && stdout.contains("ok") {
-                return Ok(());
-            } else {
-                let err = if !output.stderr.is_empty() {
-                    String::from_utf8_lossy(&output.stderr).to_string()
-                } else {
-                    stdout.to_string()
-                };
-                return Err(io::Error::other(format!(
-                    "hyprctl eval restore submap failed: {}",
-                    err.trim()
-                )));
-            }
+        if let Err(error) = self.client.eval(&lua) {
+            return Err(io::Error::other(format!(
+                "hyprctl eval restore submap failed: {error}"
+            )));
         }
-        let mut submap_cmd = Command::new("hyprctl");
-        submap_cmd.args(["dispatch", "submap", target]);
-        let output =
-            command::output(&mut submap_cmd).map_err(|e| io::Error::other(e.to_string()))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() && (stdout.trim() == "ok" || stdout.contains("ok")) {
-            Ok(())
-        } else {
-            let err = if !stdout.trim().is_empty() && stdout.trim() != "ok" {
-                stdout.trim().to_string()
-            } else {
-                String::from_utf8_lossy(&output.stderr).to_string()
-            };
-            Err(io::Error::other(format!(
-                "hyprctl dispatch submap returned error: {}",
-                err.trim()
-            )))
-        }
+        // The Lua route already verified the postcondition, but a stale token
+        // must never restore a newer capture through the raw dispatch path,
+        // so there is no fallback here: surface the error instead.
+        Ok(())
     }
 
+    /// One owner-checked teardown attempt through the Lua route. The session
+    /// retries and only marks Closed after observing the restored submap.
     pub fn remove(&mut self) -> io::Result<()> {
-        if !self.installed {
-            return Ok(());
-        }
         let code = cleanup_lua_code(&self.token, self.policy, &self.saved_submap);
-        let mut command = Command::new("hyprctl");
-        command.args(["eval", &code]);
-        let output = command::output(&mut command).map_err(|e| io::Error::other(e.to_string()))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let eval_ok = output.status.success() && stdout.contains("ok");
-
-        // Do not dispatch a fallback submap transition after a failed Lua
-        // cleanup. The external IPC path can observe only the submap name, not
-        // the owner token. A stale guard must never restore a newer capture.
-        // Keep the guard installed and surface the error instead; the Lua
-        // timer remains the owner-checked recovery path when the state exists.
-        let cleanup_ok = eval_ok;
-
-        if cleanup_ok {
-            self.installed = false;
-            Ok(())
-        } else {
-            let err = if !stderr.is_empty() {
-                stderr.to_string()
-            } else {
-                stdout.to_string()
-            };
-            Err(io::Error::other(format!(
-                "hyprctl eval cleanup returned error: {}",
-                err.trim()
-            )))
-        }
-    }
-}
-
-impl Drop for HyprlandHookGuard {
-    fn drop(&mut self) {
-        if self.installed {
-            if let Err(err) = self.remove() {
-                eprintln!("warning: failed to clean up Hyprland key hook: {err}");
-            }
-        }
+        self.client.eval(&code).map(|_| ()).map_err(|error| {
+            // Do not dispatch a fallback submap transition after a failed Lua
+            // cleanup. The external IPC path can observe only the submap name,
+            // not the owner token. A stale guard must never restore a newer
+            // capture; the Lua timer remains the owner-checked recovery path
+            // when the state exists.
+            io::Error::other(format!("hyprctl eval cleanup returned error: {error}"))
+        })
     }
 }
 
@@ -646,7 +708,7 @@ pub struct HyprlandCaptureSession {
     buffer: String,
     held_keys: HashSet<crate::xkb::XkbKeycode>,
     current_modifier_mask: u32,
-    armed: bool,
+    state: CaptureState,
 }
 
 impl HyprlandCaptureSession {
@@ -675,7 +737,7 @@ impl HyprlandCaptureSession {
             buffer: String::new(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
-            armed: false,
+            state: CaptureState::Connected,
         };
 
         session.refresh_keyboard_state();
@@ -683,47 +745,37 @@ impl HyprlandCaptureSession {
     }
 
     pub fn arm(&mut self, policy: HyprlandCapturePolicy) -> Result<(), String> {
+        if self.state != CaptureState::Connected && self.state != CaptureState::Closed {
+            return Err(format!(
+                "cannot arm Hyprland capture from state {:?}; close it first",
+                self.state
+            ));
+        }
         self.policy = policy;
         self.guard.set_policy(policy);
+        self.state = CaptureState::Installing;
 
         let token = self.guard.token().to_string();
         let lua = install_lua_code(&token, policy, &self.saved_submap);
 
-        // Enable cleanup before evaluation so that partial execution or failures trigger cleanup.
-        self.guard.set_installed(true);
-
-        let mut command = Command::new("hyprctl");
-        command.args(["eval", &lua]);
-        let output = command::output(&mut command).map_err(|e| {
-            let cleanup = self.guard.remove().err().map_or_else(String::new, |error| {
-                format!("; cleanup also failed: {error}")
-            });
-            format!("failed to execute hyprctl: {e}{cleanup}")
-        })?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success() || !stdout.contains("ok") {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let cleanup = self.guard.remove().err().map_or_else(String::new, |error| {
-                format!("; cleanup also failed: {error}")
-            });
-            let msg = if !stderr.trim().is_empty() {
-                stderr.trim()
-            } else {
-                stdout.trim()
-            };
-            return Err(format!("hyprctl eval failed: {msg}{cleanup}"));
+        // Dispatcher success: the install script raises when `hl.dispatch`
+        // returns false, `{ ok = false }`, or leaves the submap unchanged.
+        if let Err(error) = self.guard.client.eval(&lua) {
+            return Err(self.fail_arm(format!("hyprctl eval failed: {error}")));
+        }
+        // Submap postcondition, checked owner-side: the private submap must
+        // be observable before waiting for the token-specific armed event.
+        if self.guard.client.current_submap() != "__whykey_capture" {
+            return Err(self.fail_arm("capture: submap activation was not observed".into()));
         }
 
         let deadline = Instant::now() + Duration::from_millis(1500);
         let mut armed_received = false;
         while Instant::now() < deadline {
             if let Err(error) = self.read_incoming() {
-                let cleanup = self.guard.remove().err().map_or_else(String::new, |error| {
-                    format!("; cleanup also failed: {error}")
-                });
-                return Err(format!(
-                    "failed while waiting for Hyprland hook armed confirmation: {error}{cleanup}"
-                ));
+                return Err(self.fail_arm(format!(
+                    "failed while waiting for Hyprland hook armed confirmation: {error}"
+                )));
             }
             while let Some(pos) = self.buffer.find('\n') {
                 let line = self.buffer[..pos].to_string();
@@ -742,16 +794,23 @@ impl HyprlandCaptureSession {
         }
 
         if !armed_received {
-            let cleanup = self.guard.remove().err().map_or_else(String::new, |error| {
-                format!("; cleanup also failed: {error}")
-            });
-            return Err(format!(
-                "timed out waiting for Hyprland hook armed confirmation{cleanup}"
-            ));
+            return Err(
+                self.fail_arm("timed out waiting for Hyprland hook armed confirmation".into())
+            );
         }
 
-        self.armed = true;
+        self.state = CaptureState::Armed;
         Ok(())
+    }
+
+    /// Leave Installing for RestorePending and run the bounded teardown so a
+    /// failed arm never reports an armed hook. Returns the original error
+    /// with the cleanup outcome appended.
+    fn fail_arm(&mut self, error: String) -> String {
+        match self.cleanup_bounded() {
+            Ok(()) => format!("{error}; capture cleaned up"),
+            Err(cleanup) => format!("{error}; cleanup also failed: {cleanup}"),
+        }
     }
 
     pub fn open() -> Result<Self, String> {
@@ -768,8 +827,12 @@ impl HyprlandCaptureSession {
         self.policy
     }
 
+    pub fn state(&self) -> CaptureState {
+        self.state
+    }
+
     pub fn is_suppressing(&self) -> bool {
-        self.policy == HyprlandCapturePolicy::Suppress && self.guard.is_installed()
+        self.policy == HyprlandCapturePolicy::Suppress && self.state == CaptureState::Armed
     }
 
     pub fn saved_submap(&self) -> &str {
@@ -777,7 +840,7 @@ impl HyprlandCaptureSession {
     }
 
     pub fn restore_submap(&mut self) -> io::Result<()> {
-        self.guard.restore_submap()
+        self.cleanup_bounded()
     }
 
     pub fn renew_lease(&self) -> io::Result<()> {
@@ -785,26 +848,75 @@ impl HyprlandCaptureSession {
     }
 
     pub fn close(&mut self) -> io::Result<()> {
-        self.guard.remove()
+        self.cleanup_bounded()
+    }
+
+    /// Bounded teardown through the owner-checked Lua route: enter
+    /// RestorePending, retry the attempt twice, and reach Closed only after
+    /// observing the recorded submap. A permanent failure stays
+    /// RestorePending so Drop can warn instead of pretending success.
+    fn cleanup_bounded(&mut self) -> io::Result<()> {
+        if self.state == CaptureState::Closed {
+            return Ok(());
+        }
+        if self.state == CaptureState::Connected {
+            // No hook was ever installed; nothing to restore.
+            self.state = CaptureState::Closed;
+            return Ok(());
+        }
+        self.state = CaptureState::RestorePending;
+        if self.guard.restore_target().is_none() {
+            // Never guess a restore target: without the recorded original,
+            // the Lua route would fall back to `reset`, which may not be the
+            // session's submap. Stay RestorePending and say so.
+            return Err(io::Error::other(
+                "original submap unknown; refusing to guess a restore target \
+                 (run `hyprctl dispatch submap reset` manually if the private \
+                 `__whykey_capture` submap is still active)",
+            ));
+        }
+        let mut last_error = String::new();
+        for attempt in 0..3 {
+            match self.guard.remove() {
+                Ok(()) if self.verify_restored() => {
+                    self.state = CaptureState::Closed;
+                    return Ok(());
+                }
+                Ok(()) => {
+                    last_error = format!(
+                        "cleanup reported success but the submap was not restored (still {:?})",
+                        self.guard.client.current_submap()
+                    );
+                }
+                Err(error) => last_error = error.to_string(),
+            }
+            if attempt < 2 {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        Err(io::Error::other(last_error))
+    }
+
+    /// Confirm the compositor shows the recorded submap after teardown.
+    fn verify_restored(&self) -> bool {
+        let current = self.guard.client.current_submap();
+        match self.guard.restore_target() {
+            None => false,
+            Some(target) => submap_target_matches(&current, &target),
+        }
     }
 
     pub fn refresh_keyboard_state(&mut self) {
         self.keyboard_state_dirty = false;
-        let mut dev_cmd = Command::new("hyprctl");
-        dev_cmd.args(["devices", "-j"]);
-        if let Ok(dev_output) = command::output(&mut dev_cmd) {
-            if dev_output.status.success() {
-                let devices_json = String::from_utf8_lossy(&dev_output.stdout);
-                self.keymap = crate::layers::hyprland::compile_main_xkb_keymap(&devices_json);
-                self.group =
-                    crate::layers::hyprland::main_keyboard_active_layout_index(&devices_json)
-                        .unwrap_or(0);
-                let (caps, num) = crate::layers::hyprland::main_keyboard_lock_state(&devices_json);
-                self.locked_caps = caps;
-                self.locked_num = num;
-                self.layout_uncertain = false;
-                return;
-            }
+        if let Some(devices_json) = self.guard.client.devices_json() {
+            self.keymap = crate::layers::hyprland::compile_main_xkb_keymap(&devices_json);
+            self.group = crate::layers::hyprland::main_keyboard_active_layout_index(&devices_json)
+                .unwrap_or(0);
+            let (caps, num) = crate::layers::hyprland::main_keyboard_lock_state(&devices_json);
+            self.locked_caps = caps;
+            self.locked_num = num;
+            self.layout_uncertain = false;
+            return;
         }
         self.layout_uncertain = true;
     }
@@ -1118,6 +1230,35 @@ impl HyprlandCaptureSession {
     }
 }
 
+impl Drop for HyprlandCaptureSession {
+    fn drop(&mut self) {
+        if self.state == CaptureState::Closed || self.state == CaptureState::Connected {
+            return;
+        }
+        // One final best-effort attempt: no retries, no sleep. A stale token
+        // still cannot restore another session because the Lua route checks
+        // ownership; warn loudly instead of failing silently.
+        let outcome = self
+            .guard
+            .remove()
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                if self.verify_restored() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "submap was not observed restored (still {:?})",
+                        self.guard.client.current_submap()
+                    ))
+                }
+            });
+        self.state = CaptureState::RestorePending;
+        if let Err(error) = outcome {
+            eprintln!("warning: failed to clean up Hyprland key hook: {error}");
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn decode_test_event(
     event: &HyprlandKeyEvent,
@@ -1140,7 +1281,7 @@ pub(crate) fn decode_test_event(
         buffer: String::new(),
         held_keys: HashSet::new(),
         current_modifier_mask: 0,
-        armed: true,
+        state: CaptureState::Closed,
     };
     session.decode_event(event)
 }
@@ -1513,7 +1654,7 @@ xkb_symbols "pc" {
             buffer: "configreloaded>>\n".into(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
-            armed: true,
+            state: CaptureState::Closed,
         };
         let res = session.drain_buffer_events();
         assert!(res.is_err(), "config reload must return error");
@@ -1539,7 +1680,7 @@ xkb_symbols "pc" {
             buffer: "activelayout>>keyboard,English\n".into(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
-            armed: true,
+            state: CaptureState::Closed,
         };
         let res = session.drain_buffer_events();
         assert!(res.is_ok());
@@ -1582,7 +1723,7 @@ xkb_symbols "pc" {
             buffer: String::new(),
             held_keys: [crate::xkb::XkbKeycode::from(10)].into_iter().collect(),
             current_modifier_mask: 0,
-            armed: true,
+            state: CaptureState::Closed,
         };
         let res = session
             .wait_for_chord_release(crate::xkb::XkbKeycode::from(10), Duration::from_millis(100));
@@ -1609,7 +1750,7 @@ xkb_symbols "pc" {
             buffer: String::new(),
             held_keys: [crate::xkb::XkbKeycode::from(10)].into_iter().collect(),
             current_modifier_mask: 4,
-            armed: true,
+            state: CaptureState::Closed,
         };
 
         assert_eq!(
@@ -1617,6 +1758,214 @@ xkb_symbols "pc" {
                 .wait_for_chord_release(crate::xkb::XkbKeycode::from(10), Duration::ZERO)
                 .unwrap(),
             ChordReleaseStatus::TimedOut
+        );
+    }
+    /// Build a session whose IPC answers come from the scripted fake. The
+    /// peer end is returned so the socket stays connected; drop it to
+    /// simulate transport loss.
+    fn fake_session(
+        saved_submap: &str,
+        state: CaptureState,
+        fake: std::rc::Rc<FakeHyprctl>,
+    ) -> (std::os::unix::net::UnixStream, HyprlandCaptureSession) {
+        let (s1, s2) = std::os::unix::net::UnixStream::pair().unwrap();
+        s1.set_nonblocking(true).unwrap();
+        let guard = HyprlandHookGuard::new_uninstalled("tok".into(), saved_submap.into())
+            .with_client(Hyprctl::Fake(fake));
+        let session = HyprlandCaptureSession {
+            stream: s1,
+            guard,
+            policy: HyprlandCapturePolicy::Suppress,
+            saved_submap: saved_submap.into(),
+            keymap: None,
+            group: 0,
+            locked_caps: false,
+            locked_num: false,
+            keyboard_state_dirty: false,
+            layout_uncertain: false,
+            buffer: String::new(),
+            held_keys: HashSet::new(),
+            current_modifier_mask: 0,
+            state,
+        };
+        (s2, session)
+    }
+
+    fn eval_err(message: &str) -> io::Result<String> {
+        Err(io::Error::other(message))
+    }
+
+    #[test]
+    fn arm_rejects_a_false_dispatcher_result() {
+        let fake = FakeHyprctl::with_submap("default");
+        fake.eval_results
+            .borrow_mut()
+            .push_back(eval_err("dispatch returned false"));
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        let result = session.arm(HyprlandCapturePolicy::Suppress);
+        assert!(result.is_err(), "a false dispatcher must not arm");
+        assert!(
+            result.unwrap_err().contains("dispatch returned false"),
+            "the dispatcher evidence must reach the error"
+        );
+        assert_ne!(session.state(), CaptureState::Armed);
+    }
+
+    #[test]
+    fn arm_rejects_an_error_table_dispatcher_result() {
+        let fake = FakeHyprctl::with_submap("default");
+        fake.eval_results
+            .borrow_mut()
+            .push_back(eval_err("dispatch returned not ok"));
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        let result = session.arm(HyprlandCapturePolicy::Suppress);
+        assert!(result.is_err(), "an error table must not arm");
+        assert_ne!(session.state(), CaptureState::Armed);
+    }
+
+    #[test]
+    fn arm_rejects_success_without_an_observed_submap_change() {
+        // The install eval claims success, but the compositor never entered
+        // the private submap: the owner-side postcondition must refuse Armed.
+        let fake = FakeHyprctl::with_submap("default");
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        let result = session.arm(HyprlandCapturePolicy::Suppress);
+        assert!(result.is_err(), "an unobserved submap must not arm");
+        assert!(
+            result.unwrap_err().contains("not observed"),
+            "the postcondition failure must be named"
+        );
+        assert_ne!(session.state(), CaptureState::Armed);
+    }
+
+    #[test]
+    fn arm_reaches_armed_only_after_postcondition_and_armed_event() {
+        let fake = FakeHyprctl::with_submap("__whykey_capture");
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        session.buffer.push_str("custom>>whykey-probe,tok,armed\n");
+        session
+            .arm(HyprlandCapturePolicy::Suppress)
+            .expect("postcondition plus armed event must arm");
+        assert_eq!(session.state(), CaptureState::Armed);
+        assert!(session.is_suppressing());
+    }
+
+    #[test]
+    fn arm_reports_socket_loss_while_installing() {
+        let fake = FakeHyprctl::with_submap("__whykey_capture");
+        let (peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        drop(peer);
+        let result = session.arm(HyprlandCapturePolicy::Suppress);
+        assert!(result.is_err(), "socket loss must not arm");
+        assert!(
+            result.unwrap_err().contains("armed confirmation"),
+            "the failure must name the missing armed event"
+        );
+        assert_ne!(session.state(), CaptureState::Armed);
+    }
+
+    #[test]
+    fn cleanup_retries_once_failing_attempt_then_closes() {
+        let fake = FakeHyprctl::with_submap("default");
+        fake.eval_results.borrow_mut().push_back(eval_err("boom"));
+        fake.eval_results.borrow_mut().push_back(Ok("ok".into()));
+        let (_peer, mut session) = fake_session("default", CaptureState::Armed, fake.clone());
+        session.close().expect("second attempt must close");
+        assert_eq!(session.state(), CaptureState::Closed);
+        assert_eq!(fake.eval_calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn permanent_cleanup_failure_stays_restore_pending() {
+        let fake = FakeHyprctl::with_submap("__whykey_capture");
+        for _ in 0..3 {
+            fake.eval_results.borrow_mut().push_back(eval_err("boom"));
+        }
+        let (_peer, mut session) = fake_session("default", CaptureState::Armed, fake.clone());
+        let result = session.close();
+        assert!(result.is_err(), "permanent failure must surface");
+        assert_eq!(session.state(), CaptureState::RestorePending);
+        assert_eq!(
+            fake.eval_calls.borrow().len(),
+            3,
+            "cleanup retries twice through the owner-checked route"
+        );
+    }
+
+    #[test]
+    fn close_after_reload_restores_and_closes() {
+        let fake = FakeHyprctl::with_submap("default");
+        let (_peer, mut session) = fake_session("default", CaptureState::Armed, fake.clone());
+        session.buffer.push_str("configreloaded>>\n");
+        let observed = session.next_observed_event(true);
+        assert!(observed.is_err(), "a reload must stop capture loudly");
+        session.close().expect("post-reload cleanup must close");
+        assert_eq!(session.state(), CaptureState::Closed);
+    }
+
+    #[test]
+    fn close_restores_a_custom_original_submap() {
+        let fake = FakeHyprctl::with_submap("gaming");
+        let (_peer, mut session) = fake_session("gaming", CaptureState::Armed, fake.clone());
+        session.close().expect("custom submap must restore");
+        assert_eq!(session.state(), CaptureState::Closed);
+        assert!(
+            fake.eval_calls.borrow()[0].contains("gaming"),
+            "cleanup must target the recorded custom submap"
+        );
+    }
+
+    #[test]
+    fn close_with_unknown_original_refuses_to_guess() {
+        let fake = FakeHyprctl::with_submap("__whykey_capture");
+        let (_peer, mut session) = fake_session("", CaptureState::Armed, fake.clone());
+        let result = session.close();
+        assert!(result.is_err(), "an unknown original must not restore");
+        assert!(
+            result.unwrap_err().to_string().contains("unknown"),
+            "the refusal must name the missing original"
+        );
+        assert_eq!(session.state(), CaptureState::RestorePending);
+        assert!(
+            fake.eval_calls.borrow().is_empty(),
+            "no Lua may run without a known target"
+        );
+    }
+
+    #[test]
+    fn stale_token_never_restores_another_session() {
+        let fake = FakeHyprctl::with_submap("__whykey_capture");
+        for _ in 0..3 {
+            fake.eval_results
+                .borrow_mut()
+                .push_back(eval_err("cleanup: not capture owner"));
+        }
+        let (_peer, mut session) = fake_session("default", CaptureState::Armed, fake.clone());
+        let result = session.close();
+        assert!(result.is_err(), "a stale token must not close");
+        assert_eq!(session.state(), CaptureState::RestorePending);
+        assert_eq!(
+            fake.eval_calls.borrow().len(),
+            3,
+            "every retry stays on the owner-checked Lua route"
+        );
+        assert!(
+            fake.eval_calls.borrow()[0].contains("tok"),
+            "retries present the stale token for the owner check"
+        );
+    }
+
+    #[test]
+    fn lua_state_loss_recovery_needs_a_known_original() {
+        let known = cleanup_lua_code("tok", HyprlandCapturePolicy::Suppress, "gaming");
+        assert!(known.contains("do_dispatch_submap(\"gaming\")"));
+        let unknown = cleanup_lua_code("tok", HyprlandCapturePolicy::Suppress, "");
+        let stateless = unknown
+            .find("state == nil and cur_submap == \"__whykey_capture\"")
+            .expect("the stateless recovery branch must exist");
+        assert!(
+            unknown[stateless..].contains("original submap unknown; refusing recovery"),
+            "recovery without a recorded original must refuse"
         );
     }
 }
