@@ -405,6 +405,37 @@ mod tests {
         let _ = fs::remove_file(file);
     }
 
+    #[test]
+    fn replay_and_diff_render_stored_data_without_querying_the_desktop() {
+        // These modules import no command or socket access: rendering a
+        // document that names a live compositor must echo stored strings,
+        // never fresh IPC results.
+        let stored = serde_json::json!({
+            "schema_version": 2,
+            "operation": "inspect",
+            "input": {"key_display": "CTRL + SUPER + RETURN"},
+            "assessment": {"confidence": "conditional"},
+            "path": [{
+                "layer": "Hyprland",
+                "status": "Handled",
+                "propagation": "Indeterminate",
+                "summary": "stored conclusion",
+                "evidence": [{"kind": "detail", "text": "stored binding detail"}],
+            }],
+        });
+        let text = render_text(std::slice::from_ref(&stored));
+        assert!(text.contains("stored conclusion"));
+        assert!(text.contains("stored binding detail"));
+        let changes = crate::diff::compare(&stored, &stored);
+        assert!(changes.is_empty(), "identical stored data must not differ");
+        let mut changed = stored.clone();
+        changed["path"][0]["summary"] = serde_json::json!("new stored conclusion");
+        let changes = crate::diff::compare(&stored, &changed);
+        assert!(!changes.is_empty(), "stored differences must surface");
+        let diff_text = crate::diff::render_text(&changes);
+        assert!(diff_text.contains("new stored conclusion"));
+    }
+
     fn tempfile_path() -> std::path::PathBuf {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(

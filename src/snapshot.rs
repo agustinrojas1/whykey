@@ -1,8 +1,12 @@
-//! Reproducible, offline-safe diagnostic snapshots.
+//! Diagnostic report snapshots for replay and comparison.
 //!
-//! A snapshot records the inputs and structured result of one static
-//! inspection. Replaying it only renders the stored report; it never sends a
-//! key event, queries the desktop, or executes a dispatcher.
+//! A snapshot stores one redacted schema-v2 report plus its request context.
+//! Replaying it only renders the stored report; it never sends a key event,
+//! queries the desktop, re-runs adapter analysis, or executes a dispatcher.
+//! The stored adapter outputs are conclusions, not the raw IPC or
+//! configuration inputs analysis would need to run again offline.
+//! Inspect a snapshot before sharing it: redaction is fixed and mechanical,
+//! not a review of your data.
 
 use std::fs;
 use std::path::Path;
@@ -72,7 +76,81 @@ fn redact_private_data(snapshot: &mut Value) {
     if redact_paths(snapshot) {
         redactions.push("private paths in captured evidence");
     }
+    if redact_secrets(snapshot) {
+        redactions.push("secret-bearing assignments and command arguments");
+    }
     snapshot["redactions"] = serde_json::json!(redactions);
+}
+
+/// Keys whose values are secrets more often than not. The match is
+/// case-insensitive and covers `KEY=value`, `KEY: value`, and `--key value`
+/// spellings; the value runs to the next whitespace, quote, comma, or
+/// semicolon boundary.
+const SECRET_KEYS: &[&str] = &[
+    "token", "password", "passwd", "secret", "api_key", "apikey", "api-key",
+];
+
+fn redact_secrets(value: &mut Value) -> bool {
+    match value {
+        Value::String(text) => redact_secret_string(text),
+        Value::Array(items) => {
+            let mut redacted = false;
+            for item in items {
+                redacted |= redact_secrets(item);
+            }
+            redacted
+        }
+        Value::Object(items) => {
+            let mut redacted = false;
+            for item in items.values_mut() {
+                redacted |= redact_secrets(item);
+            }
+            redacted
+        }
+        _ => false,
+    }
+}
+
+fn redact_secret_string(text: &mut String) -> bool {
+    let mut redacted = false;
+    for key in SECRET_KEYS {
+        let mut search_from = 0;
+        loop {
+            let lower = text.to_ascii_lowercase();
+            let Some(found) = lower[search_from..].find(key) else {
+                break;
+            };
+            let start = search_from + found;
+            let after_key = &text[start + key.len()..];
+            // `--key value` spelling: dashes before the key, spaces after.
+            let flag_form = start >= 2 && text[..start].ends_with("--");
+            let separator = after_key
+                .chars()
+                .next()
+                .filter(|next| *next == '=' || *next == ':' || (flag_form && next.is_whitespace()));
+            let Some(separator) = separator else {
+                search_from = start + key.len();
+                continue;
+            };
+            let value_start = start + key.len() + separator.len_utf8();
+            let rest = &text[value_start..];
+            // Skip whitespace and quote characters around the value.
+            let trimmed = rest.trim_start_matches([' ', '\t', '"', '\'']);
+            let skipped = rest.len() - trimmed.len();
+            let value_end = trimmed
+                .find([' ', '\t', '"', '\'', ',', ';'])
+                .unwrap_or(trimmed.len());
+            if value_end == 0 {
+                search_from = start + key.len();
+                continue;
+            }
+            let absolute_start = value_start + skipped;
+            text.replace_range(absolute_start..absolute_start + value_end, "[redacted]");
+            redacted = true;
+            search_from = absolute_start + "[redacted]".len();
+        }
+    }
+    redacted
 }
 
 fn redact_paths(value: &mut Value) -> bool {
@@ -107,6 +185,7 @@ mod tests {
     fn creates_a_versioned_snapshot_without_observation_injection() {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: crate::layers::LayerId::Compositor,
@@ -167,5 +246,68 @@ mod tests {
         assert_eq!(snapshot["evidence"][0], "[redacted: private path]");
         assert_eq!(snapshot["evidence"][1]["path"], "[redacted: private path]");
         assert_eq!(snapshot["evidence"][2], "unrelated detail");
+    }
+
+    #[test]
+    fn redacts_every_private_path_and_the_shell_path() {
+        let mut snapshot = serde_json::json!({
+            "context": {"shell": "/bin/fish"},
+            "report": {"path": [{"evidence": [
+                {"text": "config: /home/alice/.config/hypr/bindings.lua"},
+                {"text": "socket: /run/user/1000/hypr/alice/.socket2.sock"},
+                {"text": "nested /home/alice/first and /home/alice/second"},
+            ]}]}
+        });
+
+        redact_private_data(&mut snapshot);
+
+        let texts: Vec<_> = snapshot["report"]["path"][0]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["text"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .all(|text| !text.contains("/home/") && !text.contains("/run/user/")),
+            "every private path must go, got {texts:?}"
+        );
+        assert_eq!(snapshot["context"]["shell"], "[redacted]");
+    }
+
+    #[test]
+    fn redacts_secret_assignments_but_keeps_binding_descriptions() {
+        let mut snapshot = serde_json::json!({
+            "report": {"path": [{"evidence": [
+                {"text": "exec pass --token s3cr3t-value"},
+                {"text": "env: API_KEY=abcdef12345"},
+                {"text": "export PASSWORD=hunter2"},
+                {"text": "description: Password Manager"},
+                {"text": "binding: exec foot; Herdr"},
+            ]}]}
+        });
+
+        redact_private_data(&mut snapshot);
+
+        let texts: Vec<_> = snapshot["report"]["path"][0]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["text"].as_str().unwrap().to_string())
+            .collect();
+        assert!(!texts.iter().any(|text| text.contains("s3cr3t-value")));
+        assert!(!texts.iter().any(|text| text.contains("abcdef12345")));
+        assert!(!texts.iter().any(|text| text.contains("hunter2")));
+        assert!(
+            texts.iter().any(|text| text.contains("Password Manager")),
+            "ordinary descriptions survive, got {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("binding: exec foot; Herdr")),
+            "binding actions survive, got {texts:?}"
+        );
     }
 }
