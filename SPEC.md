@@ -10,14 +10,14 @@ whykey inspect ctrl+x ctrl+s
 whykey extension ./my-editor-whykey ctrl+x
 ```
 
-`whykey` inspects state and prints an explanation. It never changes configuration or reloads Hyprland.
+`whykey` inspects state and prints an explanation. Static inspection never changes configuration or reloads Hyprland. `listen` with native Hyprland capture temporarily installs a private submap to observe the event, then restores the recorded submap before reporting; configuration files are never edited.
 
 Dependency versions are pinned by `Cargo.lock`; registry checksums and the
 toolchains/host covered by repository verification are recorded in
 `DEPENDENCY_PROVENANCE.md`. This provenance does not claim that every native
 distribution package or release target has been built.
 
-Capture mode is available with `whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--ndjson]` and an optional Linux-only `whykey listen --evdev [--device /dev/input/eventN]`. The default observes the terminal-side event that reaches `whykey`; evdev observes read-only `EV_KEY` events before compositor processing and never grabs the device. `--timeout` is a wall-clock deadline for the capture and `--count` stops after the requested number of reports. `--events all` includes modifier-only and release events in evdev mode. A key consumed by Hyprland or Ghostty before it reaches the terminal cannot be observed by the default listener, so the static command remains the fallback for those shortcuts. Capture observations and normal downstream bytes are separate values. Captured JSON includes the source (`Terminal` or `Evdev` with device name/path), the raw event, and `physical_keycode` for evdev; text output labels the event source explicitly. `whykey shell-init <bash|zsh|fish>` can install an optional wrapper that passes current shell editing snapshots through environment variables. Add `--json` to emit machine-readable reports; interactive diagnostics remain on stderr in JSON capture mode. `--ndjson` implies JSON and emits one compact schema-v2 `listen` record per stdout line.
+Capture mode is available with `whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--ndjson]` and an optional Linux-only `whykey listen --evdev [--device /dev/input/eventN]`. Native Hyprland capture is preferred when the compositor IPC is reachable: it temporarily suppresses the shortcut via a private submap and restores the recorded submap before reporting. `--pass-through` captures without suppression. When native capture is unavailable, `listen` falls back to terminal capture of the event that reaches `whykey`; pass `--terminal` to force terminal-only capture. `listen --evdev` observes read-only `EV_KEY` events before compositor processing and never grabs the device. `--timeout` is a wall-clock deadline for the capture and `--count` stops after the requested number of reports. `--events all` includes modifier-only and release events in evdev mode. A key consumed before it reaches the terminal cannot be observed by terminal capture, so native capture or the static command remains the fallback for those shortcuts. Capture observations and normal downstream bytes are separate values. Captured JSON includes the source (`Hyprland`, `Terminal`, or `Evdev` with device name/path), the raw event, and `physical_keycode` for evdev; text output labels the event source explicitly. Normal text reports fit one screen: key, assessment, one result statement, capture source, matching layer, binding action, and concrete uncertainty. Raw events, probe bytes, encoding internals, full modifier state, XKB candidates, keyboard inventory, inactive submaps, and alternate keys stay behind `--verbose`; JSON always carries the full evidence. `whykey shell-init <bash|zsh|fish>` can install an optional wrapper that passes current shell editing snapshots through environment variables. Add `--json` to emit machine-readable reports; interactive diagnostics remain on stderr in JSON capture mode. `--ndjson` implies JSON and emits one compact schema-v2 `listen` record per stdout line.
 
 JSON reports have a top-level `schema_version` field. Version 1 remains the
 default for compatibility. `--json --schema-version 2` (or `--json-v2`) opts
@@ -77,10 +77,14 @@ The declared minimum compiler is Rust 1.85.0; the locked dependency set and
 the full test suite are checked with that toolchain in CI.
 
 `whykey bindings` emits a versioned read-only inventory from the detected
-compositor adapters. Entries contain source, key, action, context, and
-certainty. `complete` is intentionally false: application/plugin bindings,
-input inhibitors, and firmware transformations can remain outside the
-observable desktop APIs. Adapter errors are listed under `unavailable`.
+compositor adapters. Entries contain source, key, action, context, certainty,
+and optional typed `device` and `submap` fields read from the adapter payload,
+never inferred from context strings. `--key`, `--action`, `--source`,
+`--device`, and `--submap` filter case-insensitively with AND logic; missing
+metadata never matches an active filter. `complete` is intentionally false:
+application/plugin bindings, input inhibitors, and firmware transformations
+can remain outside the observable desktop APIs. Adapter errors are listed
+under `unavailable`.
 
 `whykey conflicts` consumes the same inventory and groups entries only when
 source, key, and context all match. Different actions are reported as
@@ -100,7 +104,14 @@ remain conditional.
 including the pretty-printed documents emitted by `listen --json`. It validates
 the report shape and renders stored evidence only; it never opens an input
 device, executes a configured action, or injects a key. Files are limited to
-16 MiB.
+16 MiB. `whykey snapshot <combination> --output <file>` stores one redacted
+schema-v2 report for later replay and comparison. A snapshot preserves the
+observed conclusion, not the raw IPC or configuration inputs that adapter
+analysis would need to run again offline; replaying it never queries the
+desktop. Snapshots redact shell identity, private paths, and secret-bearing
+assignments mechanically. Inspect a snapshot before sharing it.
+`whykey diff <before> <after>` compares two stored snapshots or reports
+without querying the desktop.
 
 `whykey extension <program> <combination>` runs one explicitly selected
 application extension. Whykey writes a schema-v1 `inspect` request to the
@@ -124,7 +135,7 @@ Parsing is case-insensitive. The display order is `CTRL`, `ALT`, `SHIFT`, `SUPER
 5. Determine handling and propagation separately. Use Hyprland's `non_consuming`, `auto_consuming`, `release`, and `longPress` flags, the `pass` and `submap` dispatchers, and any dispatcher result visible through the runtime API. A `pass` binding is reported as redirected because its target window is not necessarily the next layer in the inspected chain.
 6. Include active same-key bindings with different modifiers as possible matches. `hyprctl binds -j` does not expose whether those bindings have `ignore_mods` enabled. When a conventional declarative config is available, follow literal `source`/`include` files and simple variables to recover an explicit `bind[i]` hint. Scan balanced single- and multi-line literal `o.bind`/`hl.bind` calls in discovered Lua files for source/description evidence and a literal `ignore_mods` value, including the helper default of `false`, without executing Lua. Unresolved variables, globs, and dynamic key or options expressions remain possible matches. Surface `locked`, `dont_inhibit`, and `allow_input_capture` when present because they qualify inhibitor/capture behavior.
 7. Report every active exact match, including its dispatcher, argument, and description when present. Mark `__lua` and plugin-style dispatchers as runtime-opaque and never execute them; their handling/propagation remains conditional.
-8. Query `hyprctl devices -j` when available and include active keyboard names, main-device status, and keymap in the evidence. Accept both legacy string and structured per-device fields in `hyprctl binds -j`. In evdev capture mode, correlate the captured device name and physical keycode with those scopes and consider both raw evdev and conventional XKB (`+8`) keycode representations; retain the candidates as evidence rather than claiming a complete layout translation.
+8. Query `hyprctl devices -j` when available and include active keyboard names, main-device status, and keymap in the evidence. Accept both legacy string and structured per-device fields in `hyprctl binds -j`. Kernel keycodes enter as evdev and convert once to the XKB namespace (`+8`); Hyprland socket events and numeric binding fields are already XKB. Missing RMLVO or layout data yields explicit uncertainty, never a guessed US layout.
 
 ## Sway and i3 inspection
 
@@ -165,15 +176,16 @@ If no terminal identity is exported, the implementation must not assume Ghostty 
 - `1`: a required layer or prerequisite is unavailable. A detected Hyprland IPC failure is represented as an indeterminate compositor result so downstream layers can still be inspected; the report remains conditional rather than claiming that the shortcut is unbound.
 - `2`: invalid CLI input.
 
-`whykey listen` uses the same statuses. It restores the terminal settings before returning, including after normal errors and when the user presses `Esc` twice.
+`whykey listen` uses the same statuses. It restores the terminal settings before returning, including after normal errors and when the user presses `Esc` twice. Native Hyprland capture restores the recorded submap before reporting and retries a failed restoration twice; a restoration that still fails stays pending with an explicit error, and a final best-effort attempt on exit warns instead of failing silently. A process killed with `SIGKILL` cannot run restoration code, in which case the compositor keeps the private submap until the capture lease expires or the user resets it manually.
 
 ## Interactive capture
 
+0. Prefer native Hyprland capture when the compositor IPC is reachable: record the active submap, install the private `__whykey_capture` submap, and consider the hook armed only after dispatcher success, the observed submap postcondition, and the token-specific armed event. Restore the recorded submap before reporting each event and re-arm only for the next one. A stale token never restores another session.
 1. Open `/dev/tty`, save its `termios`, and temporarily disable canonical input, echo, signal processing, and software flow control.
 2. Push all currently specified Kitty capture enhancements (`CSI > 31 u`: disambiguation, event types, alternate keys, all-keys reporting, and associated text) when the terminal supports them, and pop them with `CSI < u` on exit. Legacy terminals simply ignore these private control sequences and continue with their normal encoding. The original flags are retained separately for downstream byte prediction.
 3. Read one event. A lone `Esc` is an Escape key; `Esc Esc` exits within a 300 ms cancellation window. CSI and Kitty protocol sequences are buffered for a short bounded interval.
 4. Decode control bytes, UTF-8 text, Alt-prefixed bytes, common cursor/navigation CSI sequences, and Kitty `u` sequences (including Unicode/function/keypad/media keys, alternate key fields, associated text, and press/repeat/release events) into `KeyCombo`. Preserve unrecognized input as a raw observed key with an explicit unknown-origin warning rather than aborting capture; mark UTF-8 text as potentially produced by Compose/dead-key/layout processing.
-5. Keep capture mode active while rendering repeated reports, but inspect the TTY layer against the saved `termios` snapshot. This prevents capture mode from changing the explanation of `Ctrl+Z` and avoids a restore/reopen gap between reports. Restore the terminal and keyboard protocol on normal exit, cancellation, handled signals, and errors. A process killed with `SIGKILL` cannot run restoration code.
+5. Restore the Hyprland hook before rendering each report and re-arm it only for the next captured event, but keep terminal capture mode active while rendering repeated reports, inspecting the TTY layer against the saved `termios` snapshot. This prevents capture mode from changing the explanation of `Ctrl+Z` and avoids a restore/reopen gap between reports. Restore the terminal and keyboard protocol on normal exit, cancellation, handled signals, and errors. A process killed with `SIGKILL` cannot run restoration code.
 6. Run the Hyprland → Ghostty → TTY → session/multiplexer → interactive application → selected shell adapter chain. A consuming layer stops downstream analysis. When a layer is uncertain, later results are retained but marked conditional by the report. The observed event proves that it reached the terminal, so Hyprland/Ghostty forwarding is reported as observed; capture mode does not prove forwarding through the TTY, multiplexer, application, or shell. Ghostty resolves a separate normal terminal input for the downstream layers. If that input cannot be inferred, the report labels the downstream result as based on captured bytes or unknown.
 7. When an ancestor is Neovim or Vim, query the current `mode()` and live `maparg()` state through the editor's remote-expression interface when a server address is available; otherwise inspect common mappings in the relevant init/vimrc files. For Emacs, query `key-binding` through `emacsclient` when a server is available, then inspect common `global-set-key` and `define-key` declarations in standard init files. For Helix, Micro, and Kakoune, inspect their conventional static keymap files. Detect common full-screen TUIs such as fzf, less, lazygit, btop, ranger, and yazi as intermediate applications even when their mappings are not parsed. For VS Code/VSCodium, parse literal single-key entries from user `keybindings.json`; for recognized JetBrains IDEs, parse literal `keyboard-shortcut` entries from the selected XML keymap. Chords, `when` clauses, plugins, modes, and runtime overrides remain indeterminate. Plugin precedence and mappings that are not visible through the available RPC endpoint or static parser remain indeterminate.
 

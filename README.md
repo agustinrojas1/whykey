@@ -56,12 +56,18 @@ whykey snapshot ctrl+super+return --output whykey-snapshot.json
 whykey diff before.json after.json
 ```
 
-Use `--verbose` for the full route. Use `--json` for stable schema-v1 output
-or `--json-v2` for structured context and evidence. `snapshot` saves a
+Normal reports fit one screen: key, assessment, one result statement,
+capture source, matching layer, binding action, and concrete uncertainty.
+Use `--verbose` for the full route with raw events, probe bytes, encoding
+internals, full modifier state, XKB candidates, keyboard inventory, inactive
+submaps, and alternate keys. Use `--json` for stable schema-v1 output
+or `--json-v2` for structured context and evidence; JSON always carries the
+full evidence including verbose-only lines. `snapshot` saves a
 versioned static report for later offline replay; it never captures or injects
-input. New snapshots redact shell identity and private paths in captured
-evidence. They preserve the observed conclusion for comparison, not raw IPC or
-configuration inputs required to re-run every adapter offline.
+input. New snapshots redact shell identity, private paths, and secret-bearing
+assignments in captured evidence. They preserve the observed conclusion for
+comparison, not raw IPC or configuration inputs required to re-run every
+adapter offline. Inspect a snapshot before sharing it.
 
 Run `whykey --help` for every command and option.
 

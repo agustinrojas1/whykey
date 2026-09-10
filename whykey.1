@@ -137,8 +137,12 @@ it scans
 .TP
 .B snapshot combination [--output path]
 Save a versioned static diagnostic snapshot for one key combination. The
-snapshot records the structured inspection result and its context; this
-command does not capture or inject keyboard input. Use
+snapshot records the redacted inspection conclusion and its context for later
+replay and comparison, not the raw IPC or configuration inputs that adapter
+analysis would need to run again offline; this
+command does not capture or inject keyboard input. Snapshots redact shell
+identity, private paths, and secret-bearing assignments mechanically. Inspect
+a snapshot before sharing it. Use
 .B replay
 to render the saved snapshot offline.
 .TP
@@ -219,9 +223,12 @@ Select the opt-in JSON v2 shape. Version 1 remains the default for compatibility
 is an equivalent shorthand.
 .TP
 .B --verbose
-Show every route layer in human-readable reports. By default only matching,
-consuming, unavailable, or uncertain layers are shown, with the conclusion
-first; JSON output always keeps full structured evidence.
+Show every route layer and all diagnostic evidence in human-readable reports.
+By default only matching, consuming, unavailable, or uncertain layers are
+shown, with the conclusion first, and raw events, probe bytes, encoding
+internals, full modifier state, XKB candidates, keyboard inventory, inactive
+submaps, and alternate keys are hidden; JSON output always keeps full
+structured evidence.
 .TP
 .B --all
 List the complete adapter inventory with

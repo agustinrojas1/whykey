@@ -17,10 +17,10 @@ Sobre `rebuilt-main`, commit `f55ff6f`, inicialmente limpio:
 - `cargo fmt --all -- --check`: pasó.
 - Comprobaciones de matriz de soporte, procedencia de dependencias y versiones de paquetes: pasaron.
 - `cargo run --locked -- --help`: funcionó.
-- Reproducción aislada del renderer: `HandledUncertain` en una captura suprimida puede generar `would handle and consume` si no hay un detalle de binding reconocido. Con la descripción Herdr, genera `would run Herdr`.
-- Reproducción XKB con `xkbcli compile-keymap --include-defaults --rules evdev --model pc105 --layout us`: `symbols_for_evdev_keycode(..., 28, 0)` devuelve `Return, T, t`; consultar explícitamente XKB 36 devuelve `Return`.
+- Reproducción histórica del renderer (antes de `BindingEvidence`): `HandledUncertain` en una captura suprimida generaba `would handle and consume` sin detalle reconocido, o `would run Herdr` con la descripción. Ahora la conclusión lee evidencia tipada y un dispatcher opaco nunca se presenta como ejecutado.
+- Reproducción XKB histórica (antes de los tipos `EvdevKeycode`/`XkbKeycode`): `symbols_for_evdev_keycode(..., 28, 0)` devolvía `Return, T, t` por consultar ambos namespaces; ahora sólo XKB 36 devuelve `Return`.
 
-Advertencia sobre los tests: la suite común contiene llamadas a Hyprland real. Se descubrió después de ejecutarla que `restore_submap_verifies_table_result_and_res_false` restaura el submap y `live_config_reload_recovers_submap_cleanly` puede armar captura y recargar el compositor. Ambos figuran como exitosos, pero el segundo puede retornar temprano y el log no permite distinguir ese caso. No se puede presentar la suite como completamente aislada. Se informó al usuario y `hyprctl submap` devolvió `default` al verificar el estado posterior.
+Estado actual: las pruebas con Hyprland real viven en `tests/hyprland_live.rs`, marcadas `#[ignore]` y condicionadas a `WHYKEY_RUN_LIVE_TESTS=1` más `WHYKEY_LIVE_INSTANCE_SIGNATURE` igual a la firma activa. La suite común ya no contacta ni modifica el compositor; fuera de una sesión dedicada, las live fallan con mensaje de prerrequisito en vez de pasar en silencio.
 
 No se ejecutó una matriz completa de versiones de Hyprland, ni se verificó MSRV en esta revisión. Los fallos de activación y recuperación descritos abajo son rutas identificadas por lectura de código, no incidentes provocados en el escritorio.
 
@@ -44,11 +44,11 @@ Archivos: `src/hyprland_capture.rs:1442`, `src/hyprland_capture.rs:1498`, tests 
 3. No contabilizar un retorno temprano por falta de entorno como validación del comportamiento live. Informar que no se ejecutó.
 4. Documentar qué prueba modifica qué estado y cómo se recupera.
 
-Aceptación:
+Aceptación (cumplida en 1.0.1):
 
-- La suite estándar no puede contactar ni modificar el compositor real, incluso si hereda `HYPRLAND_INSTANCE_SIGNATURE`.
+- La suite estándar no contacta ni modifica el compositor real: las pruebas live están en `tests/hyprland_live.rs` con triple opt-in.
 - Funciona sin Hyprland instalado.
-- Las pruebas live requieren opt-in y comprueban restauración del submap original, no sólo ausencia de `__whykey_capture`.
+- Las pruebas live requieren opt-in y comprueban restauración del submap original registrado, no sólo ausencia de `__whykey_capture`.
 
 ## Fase 1. Corregir precisión y certezas falsas
 
@@ -175,3 +175,19 @@ No reinventar funciones existentes: `doctor`, `bindings`, `conflicts`, `replay`,
 6. Refactor selectivo y ampliación de adaptadores sólo donde haya casos verificables.
 
 No agregaría ahora una GUI, ejecución automática de shortcuts, privilegios elevados por defecto ni más adaptadores nominales. El valor de Whykey depende primero de acertar y de no dejar el teclado en un estado inesperado.
+
+## Verificación por fase (1.0.1)
+
+Cada fase cierra con su commit y este gate, sin contar retornos tempranos
+por falta de entorno como validación live:
+
+- Fase 0 (tests live aislados): `test(hyprland): isolate compositor-mutating tests`. `cargo test --all-targets --locked` nunca muta Hyprland; `cargo test --test hyprland_live -- --ignored` falla con mensaje claro fuera de una sesión dedicada (`WHYKEY_RUN_LIVE_TESTS=1` + `WHYKEY_LIVE_INSTANCE_SIGNATURE`).
+- Fase 1A (keycodes): `fix(input): separate evdev and XKB keycodes`. Evdev 28 produce Return y nunca coincide con XKB 28; niveles Shift/AltGr/NumLock y grupos cubiertos; sin RMLVO hay incertidumbre, no layout US.
+- Fase 1B + 2 (captura y certeza): `fix(hyprland): model capture and restoration states` y `refactor(report): use typed binding evidence`. `CaptureState` con reintentos acotados y `RestorePending` ante fallos; la conclusión lee `BindingEvidence` tipada y un dispatcher opaco nunca se presenta como ejecutado.
+- Fase 3 (salida legible): `refactor(report): keep normal output concise`. El reporte normal cabe en una pantalla; `--verbose` conserva todo el diagnóstico; texto y JSON comparten conclusión.
+- Fase 4 (filtros): `feat(filters): add device and submap filters`. `--device`/`--submap` con AND insensible a mayúsculas; sin metadatos no hay coincidencia.
+- Snapshot (contrato aceptado): `docs(snapshot): define the diagnostic snapshot contract`. El snapshot guarda un reporte redactado para replay y comparación, no entradas reproducibles para reejecutar adaptadores offline. Requiere retener salidas de comandos y extractos de configuración por adaptador, más un proveedor de entradas para replay: queda programado después de 1.0.1.
+
+Comportamiento live (captura sin abrir Herdr, Escape/Ctrl+C, repeat, reload,
+SIGKILL, segundo listener, `--pass-through`) sólo se da por verificado con
+la sesión dedicada: `WHYKEY_RUN_LIVE_TESTS=1 cargo test --test hyprland_live -- --ignored --nocapture`.

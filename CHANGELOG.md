@@ -4,11 +4,20 @@
 
 ### Fixes
 
+- Isolate compositor-mutating Hyprland tests behind `--ignored`, `WHYKEY_RUN_LIVE_TESTS=1`, and an explicit test instance signature; the ordinary suite never touches the compositor.
+- Separate evdev and XKB keycodes with typed conversions; a captured evdev code converts once and never matches a raw XKB number.
+- Model capture as an explicit `CaptureState`: arming requires dispatcher success, the observed submap postcondition, and the token-specific armed event; cleanup retries twice and only reaches `Closed` after verifying the restored submap.
+- Decide universal scope, action wording, and dispatcher uncertainty from typed binding evidence instead of parsing detail text; opaque dispatchers are never reported as executed.
+- Keep normal reports to one screen behind `--verbose` for raw events, modifier state, XKB internals, inventory, inactive submaps, and alternate keys; JSON keeps the full evidence.
 - Prevent a stale Hyprland capture cleanup from restoring another listener's submap.
 - Treat an unconfirmed chord release as a timeout and suppress the normal report.
 - Make replay v1-to-v2 conversion independent of the machine that renders it.
 - Compare snapshot/report sequences and repeated route layers without collapsing entries.
-- Redact shell identity and private paths from newly created snapshots.
+- Redact shell identity, private paths, and secret-bearing assignments from newly created snapshots.
+
+### Features
+
+- Add `--device` and `--submap` filters to `whykey bindings` and `whykey conflicts`, backed by typed adapter metadata.
 
 ### Compatibility and packaging
 
