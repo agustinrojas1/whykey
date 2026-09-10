@@ -54,6 +54,7 @@ impl Gnome {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "GNOME",
                     id: LayerId::Compositor,
@@ -70,6 +71,7 @@ impl Gnome {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "GNOME",
                 id: LayerId::Compositor,
@@ -97,6 +99,7 @@ impl Gnome {
             ));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "GNOME",
             id: LayerId::Compositor,

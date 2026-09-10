@@ -45,6 +45,7 @@ impl Sxhkd {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "sxhkd",
                 id: LayerId::Compositor,
@@ -57,6 +58,7 @@ impl Sxhkd {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "sxhkd",
                     id: LayerId::Compositor,
@@ -77,6 +79,7 @@ impl Sxhkd {
                     .into(),
             );
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "sxhkd",
                 id: LayerId::Compositor,
@@ -89,6 +92,7 @@ impl Sxhkd {
             details.push(format!("binding: {}", binding.command));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "sxhkd",
             id: LayerId::Compositor,

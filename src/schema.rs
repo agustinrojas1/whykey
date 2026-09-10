@@ -44,7 +44,7 @@ pub fn path(layers: &[LayerResult]) -> Vec<Value> {
                 "status": status,
                 "propagation": propagation,
                 "summary": layer.summary,
-                "evidence": layer.details.iter().map(|detail| json!({
+                "evidence": layer.all_details().map(|detail| json!({
                     "kind": "detail",
                     "text": detail,
                 })).collect::<Vec<_>>(),
@@ -69,6 +69,7 @@ mod tests {
     #[test]
     fn evidence_preserves_layer_details() {
         let layer = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "test",
             id: crate::layers::LayerId::Diagnostic,
@@ -84,6 +85,7 @@ mod tests {
     #[test]
     fn path_omits_binding_without_evidence_and_carries_it_with() {
         let plain = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "test",
             id: crate::layers::LayerId::Diagnostic,
@@ -94,6 +96,7 @@ mod tests {
         let value = path(&[plain]);
         assert!(value[0].get("binding").is_none());
         let evidenced = LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(crate::layers::BindingEvidence {
                 dispatcher: Some("__lua".into()),
                 action: Some("__lua 285".into()),

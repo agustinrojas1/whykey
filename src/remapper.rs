@@ -73,6 +73,7 @@ pub fn inspect_with_detections(
 ) -> LayerResult {
     if detections.is_empty() {
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Input remapper",
             id: LayerId::Remapper,
@@ -115,6 +116,7 @@ pub fn inspect_with_detections(
             .into(),
     );
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Input remapper",
         id: LayerId::Remapper,

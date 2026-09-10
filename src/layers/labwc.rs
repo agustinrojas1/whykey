@@ -46,6 +46,7 @@ impl Labwc {
             Ok(value) => value,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "labwc",
                     id: LayerId::Compositor,
@@ -66,6 +67,7 @@ impl Labwc {
                     .into(),
             );
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "labwc",
                 id: LayerId::Compositor,
@@ -78,6 +80,7 @@ impl Labwc {
             details.push(format!("binding: {}", binding.action));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "labwc",
             id: LayerId::Compositor,

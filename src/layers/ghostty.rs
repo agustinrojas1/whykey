@@ -67,6 +67,7 @@ impl Ghostty {
                 format!("TERM_PROGRAM={program}; Ghostty bindings were skipped")
             };
             let layer = LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
@@ -91,6 +92,7 @@ impl Ghostty {
             Err(message) => {
                 return (
                     LayerResult {
+                        verbose_details: Vec::new(),
                         binding: None,
                         layer: "Ghostty",
                         id: LayerId::Terminal,
@@ -239,6 +241,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
         if let Some(trigger) = unresolved_single_key_trigger(config, key) {
             details.push(format!("possible physical binding: {trigger}"));
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
@@ -250,6 +253,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
         if let Some(encoding) = default_encoding(key) {
             details.push(format_encoding_detail(&encoding));
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
@@ -261,6 +265,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
 
         details.push("default key encoding is layout-dependent or unsupported".into());
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Ghostty",
             id: LayerId::Terminal,
@@ -285,6 +290,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
         details.push(format_encoding_detail(&encoding));
         if binding.unconsumed {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
@@ -294,6 +300,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
             };
         }
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Ghostty",
             id: LayerId::Terminal,
@@ -305,6 +312,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
 
     if binding.action == "ignore" {
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Ghostty",
             id: LayerId::Terminal,
@@ -317,6 +325,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
     if binding.performable {
         details.push("action may pass through when it is not performable".into());
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Ghostty",
             id: LayerId::Terminal,
@@ -328,6 +337,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
 
     if binding.unconsumed {
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Ghostty",
             id: LayerId::Terminal,
@@ -338,6 +348,7 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
     }
 
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Ghostty",
         id: LayerId::Terminal,

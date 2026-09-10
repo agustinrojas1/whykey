@@ -52,6 +52,7 @@ impl Mate {
         let (bindings, errors) = load_bindings();
         if bindings.is_empty() && !errors.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "MATE",
                 id: LayerId::Compositor,
@@ -71,6 +72,7 @@ impl Mate {
                 .collect::<Vec<_>>();
             details.extend(errors);
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "MATE",
                 id: LayerId::Compositor,
@@ -97,6 +99,7 @@ impl Mate {
         }
         details.extend(errors);
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "MATE",
             id: LayerId::Compositor,

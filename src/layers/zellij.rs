@@ -46,6 +46,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         details.push(format!("binding: {}", binding));
         let continues = binding.starts_with("WriteChars") || binding.starts_with("Write ");
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Zellij",
             id: LayerId::Multiplexer,
@@ -70,6 +71,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         );
     }
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Zellij",
         id: LayerId::Multiplexer,
@@ -90,6 +92,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
 
 fn unavailable(message: String) -> LayerResult {
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Zellij",
         id: LayerId::Multiplexer,

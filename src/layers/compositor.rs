@@ -60,6 +60,7 @@ pub fn inspect() -> LayerResult {
         details.push(format!("display server: {display_server}"));
     }
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Desktop compositor",
         id: LayerId::Compositor,
@@ -74,6 +75,7 @@ pub fn inspect() -> LayerResult {
 /// there is no desktop compositor to query.
 pub fn not_detected() -> LayerResult {
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Desktop compositor",
         id: LayerId::Compositor,

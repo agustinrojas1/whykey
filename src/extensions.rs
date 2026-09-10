@@ -190,6 +190,7 @@ fn to_layer(program: &str, result: ExtensionResult) -> LayerResult {
     let mut details = vec![format!("extension: {program}")];
     details.extend(result.details);
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "External extension",
         id: crate::layers::LayerId::Diagnostic,

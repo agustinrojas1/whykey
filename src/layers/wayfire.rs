@@ -46,6 +46,7 @@ impl Wayfire {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "Wayfire",
                     id: LayerId::Compositor,
@@ -61,6 +62,7 @@ impl Wayfire {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Wayfire",
                 id: LayerId::Compositor,
@@ -78,6 +80,7 @@ impl Wayfire {
                 .into(),
         );
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Wayfire",
             id: LayerId::Compositor,

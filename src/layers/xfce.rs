@@ -46,6 +46,7 @@ impl Xfce {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "Xfce",
                     id: LayerId::Compositor,
@@ -62,6 +63,7 @@ impl Xfce {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Xfce",
                 id: LayerId::Compositor,
@@ -76,6 +78,7 @@ impl Xfce {
             details.push(format!("binding: {} ({})", binding.action, binding.context));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Xfce",
             id: LayerId::Compositor,

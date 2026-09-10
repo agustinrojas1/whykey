@@ -108,6 +108,7 @@ impl Sway {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "Sway",
                     id: LayerId::Compositor,
@@ -144,6 +145,7 @@ impl Sway {
 
         if exact_matches.is_empty() && possible_matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Sway",
                 id: LayerId::Compositor,
@@ -185,6 +187,7 @@ impl Sway {
             }
         };
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Sway",
             id: LayerId::Compositor,

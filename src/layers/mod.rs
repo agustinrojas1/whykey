@@ -251,9 +251,11 @@ pub struct LayerResult {
     pub outcome: Outcome,
     pub summary: String,
     pub details: Vec<String>,
+    /// Diagnostic evidence shown only with `--verbose` in human output.
+    /// JSON always combines both lists so machine output stays complete.
+    pub verbose_details: Vec<String>,
     pub binding: Option<BindingEvidence>,
 }
-
 impl Serialize for LayerResult {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let (status, propagation) = self.outcome.as_parts();
@@ -293,6 +295,12 @@ impl LayerResult {
             self.outcome,
             Outcome::Consumed | Outcome::Redirected | Outcome::Unavailable
         )
+    }
+    /// Every evidence line, normal then verbose. JSON renderers use this so
+    /// machine-readable output stays complete while human output filters by
+    /// verbosity through the field, never by searching detail text.
+    pub fn all_details(&self) -> impl Iterator<Item = &String> {
+        self.details.iter().chain(self.verbose_details.iter())
     }
 }
 
@@ -681,6 +689,7 @@ fn inspect_default_chain_inner_without_remapper(
 
 fn deadline_result() -> LayerResult {
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Diagnostic budget",
         id: LayerId::Diagnostic,
@@ -789,6 +798,7 @@ mod tests {
     #[test]
     fn ime_result_is_placed_before_the_tty_stage() {
         let tty = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "TTY driver",
             id: LayerId::Tty,
@@ -797,6 +807,7 @@ mod tests {
             details: Vec::new(),
         };
         let ime = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "IME",
             id: LayerId::Ime,

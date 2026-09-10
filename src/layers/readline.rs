@@ -11,6 +11,7 @@ impl Readline {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         if !is_bash() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -22,6 +23,7 @@ impl Readline {
 
         let Some(bytes) = readline_key_bytes(key) else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -32,6 +34,7 @@ impl Readline {
         };
         let Some((sequence, default_binding)) = readline_binding(&bytes) else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -46,6 +49,7 @@ impl Readline {
         if let Some(binding) = configured {
             details.push(format!("binding source: {}", binding_source(sequence)));
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -57,6 +61,7 @@ impl Readline {
         if readline_mode_is_emacs() {
             details.push("binding source: Readline default".into());
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -67,6 +72,7 @@ impl Readline {
         }
         details.push("Emacs defaults were not applied because the active keymap is vi".into());
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Bash / Readline",
             id: LayerId::Shell,
@@ -81,6 +87,7 @@ impl Readline {
     pub fn inspect_input(&self, input: &TerminalInput) -> LayerResult {
         if !is_bash() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -92,6 +99,7 @@ impl Readline {
 
         let Some((sequence, default_binding)) = readline_binding(&input.bytes) else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -107,6 +115,7 @@ impl Readline {
             let mut details = vec![format_input(input)];
             append_mode_detail(&mut details);
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -121,6 +130,7 @@ impl Readline {
         ];
         append_mode_detail(&mut details);
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Bash / Readline",
             id: LayerId::Shell,

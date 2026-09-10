@@ -94,6 +94,7 @@ pub fn inspect() -> LayerResult {
 pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     if detections.is_empty() {
         return LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Input method",
             id: LayerId::Ime,
@@ -136,6 +137,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         "committed text may differ from the physical key; Compose/dead-key history and application-side preedit state remain unobserved".into(),
     );
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Input method",
         id: LayerId::Ime,

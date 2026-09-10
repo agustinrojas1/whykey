@@ -83,6 +83,7 @@ impl Programmable {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(desktop) = detect() else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Programmable X11 WM",
                 id: LayerId::Compositor,
@@ -93,6 +94,7 @@ impl Programmable {
         };
         let Some(path) = config_path(desktop) else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: desktop.name(),
                 id: LayerId::Compositor,
@@ -108,6 +110,7 @@ impl Programmable {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: desktop.name(),
                     id: LayerId::Compositor,
@@ -127,6 +130,7 @@ impl Programmable {
                 "no matching literal binding found; executable helpers, modes, and runtime reload state remain unknown".into(),
             );
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: desktop.name(),
                 id: LayerId::Compositor,
@@ -139,6 +143,7 @@ impl Programmable {
             details.push(format!("{}: {}", binding.context, binding.action));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: desktop.name(),
             id: LayerId::Compositor,

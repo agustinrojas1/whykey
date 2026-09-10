@@ -47,6 +47,7 @@ impl Cinnamon {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "Cinnamon",
                     id: LayerId::Compositor,
@@ -62,6 +63,7 @@ impl Cinnamon {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Cinnamon",
                 id: LayerId::Compositor,
@@ -88,6 +90,7 @@ impl Cinnamon {
             ));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Cinnamon",
             id: LayerId::Compositor,

@@ -106,6 +106,7 @@ impl I3 {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "i3",
                     id: LayerId::Compositor,
@@ -136,6 +137,7 @@ impl I3 {
 
         if exact_matches.is_empty() && possible_matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "i3",
                 id: LayerId::Compositor,
@@ -175,6 +177,7 @@ impl I3 {
             }
         };
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "i3",
             id: LayerId::Compositor,

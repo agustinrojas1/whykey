@@ -122,6 +122,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                 Propagation::Indeterminate
             };
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Session context",
                 id: LayerId::Session,
@@ -133,6 +134,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     }
 
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Session context",
         id: LayerId::Session,

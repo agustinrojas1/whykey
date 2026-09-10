@@ -49,6 +49,7 @@ impl Niri {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "Niri",
                     id: LayerId::Compositor,
@@ -64,6 +65,7 @@ impl Niri {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Niri",
                 id: LayerId::Compositor,
@@ -80,6 +82,7 @@ impl Niri {
             "Niri runtime reload state, inhibitor state, and active mode remain conditional".into(),
         );
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Niri",
             id: LayerId::Compositor,

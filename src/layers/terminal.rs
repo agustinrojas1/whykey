@@ -10,6 +10,7 @@ impl Terminal {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(byte) = control_byte_for_key(key) else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -24,6 +25,7 @@ impl Terminal {
             Ok(state) => state,
             Err(message) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "TTY driver",
                     id: LayerId::Tty,
@@ -41,6 +43,7 @@ impl Terminal {
     pub fn inspect_input(&self, input: &TerminalInput) -> LayerResult {
         let [byte] = input.bytes.as_slice() else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -53,6 +56,7 @@ impl Terminal {
             Ok(state) => state,
             Err(message) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "TTY driver",
                     id: LayerId::Tty,
@@ -80,6 +84,7 @@ impl Terminal {
     fn inspect_input_with_state(&self, input: &TerminalInput, state: &TtyState) -> LayerResult {
         let [byte] = input.bytes.as_slice() else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -94,6 +99,7 @@ impl Terminal {
     fn inspect_byte(&self, byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
         let Some(control) = control_character_byte(byte, state) else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -113,6 +119,7 @@ impl Terminal {
 
         match control.kind {
             ControlKind::Signal if !state.signal_processing => LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -125,6 +132,7 @@ impl Terminal {
                 },
             },
             ControlKind::Signal => LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -140,6 +148,7 @@ impl Terminal {
                 },
             },
             ControlKind::Flow if !state.input_flow_control => LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -152,6 +161,7 @@ impl Terminal {
                 },
             },
             ControlKind::Flow => LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -164,6 +174,7 @@ impl Terminal {
                 },
             },
             ControlKind::Line if !state.canonical => LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,
@@ -179,6 +190,7 @@ impl Terminal {
                 if matches!(control.name, "VLNEXT" | "VDISCARD") && !state.extended_processing =>
             {
                 LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "TTY driver",
                     id: LayerId::Tty,
@@ -192,6 +204,7 @@ impl Terminal {
                 }
             }
             ControlKind::Line => LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "TTY driver",
                 id: LayerId::Tty,

@@ -46,6 +46,7 @@ impl Openbox {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Openbox",
                 id: LayerId::Compositor,
@@ -58,6 +59,7 @@ impl Openbox {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    verbose_details: Vec::new(),
                     binding: None,
                     layer: "Openbox",
                     id: LayerId::Compositor,
@@ -78,6 +80,7 @@ impl Openbox {
                     .into(),
             );
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Openbox",
                 id: LayerId::Compositor,
@@ -90,6 +93,7 @@ impl Openbox {
             details.push(format!("binding: {}", binding.action));
         }
         LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Openbox",
             id: LayerId::Compositor,

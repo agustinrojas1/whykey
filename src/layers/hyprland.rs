@@ -100,6 +100,7 @@ impl Hyprland {
     ) -> LayerResult {
         if remote_session_without_compositor() {
             return LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -133,6 +134,7 @@ fn ipc_uncertain_result(message: String) -> LayerResult {
         "the active submap, runtime overrides, and input-inhibitor state remain unknown".into(),
     );
     LayerResult {
+        verbose_details: Vec::new(),
         binding: None,
         layer: "Hyprland",
         id: LayerId::Compositor,
@@ -241,11 +243,11 @@ fn inspect_system(
     }
     if let Some(devices_json) = devices_json.as_deref() {
         if let Some(summary) = summarize_keyboards(devices_json) {
-            result.details.push(summary);
+            result.verbose_details.push(summary);
         }
         if let Some(group) = main_keyboard_active_layout_index(devices_json) {
             result
-                .details
+                .verbose_details
                 .push(format!("active XKB layout group index: {group}"));
         } else {
             result.details.push(
@@ -255,19 +257,19 @@ fn inspect_system(
         }
         if let Some(input) = physical_input {
             match xkb_symbols_for_physical_key(input.keycode, devices_json) {
-                Some(symbols) if !symbols.is_empty() => result.details.push(format!(
+                Some(symbols) if !symbols.is_empty() => result.verbose_details.push(format!(
                     "active XKB keymap maps evdev keycode {} to symbols: {}",
                     input.keycode.get(),
                     symbols.join(", ")
                 )),
-                _ => result.details.push(format!(
+                _ => result.verbose_details.push(format!(
                     "active XKB keymap did not resolve evdev keycode {} to a symbol",
                     input.keycode.get()
                 )),
             }
         }
         if keycodes.len() == 1 {
-            result.details.push(format!(
+            result.verbose_details.push(format!(
                 "XKB layout resolves {key} to keycode {} for the main keyboard",
                 keycodes[0].get()
             ));
@@ -277,7 +279,7 @@ fn inspect_system(
                 .map(|code| code.get().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            result.details.push(format!(
+            result.verbose_details.push(format!(
                 "XKB layout resolves {key} to multiple keycodes ({values}) for the main keyboard"
             ));
         }
@@ -1365,6 +1367,7 @@ fn inspect_json_with_keycode(
     if matches.is_empty() {
         if skipped_bindings > 0 {
             return Ok(LayerResult {
+                verbose_details: inactive_submap_details(&inactive_bindings),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -1379,26 +1382,20 @@ fn inspect_json_with_keycode(
                         ),
                     ],
                     physical_input,
-                )
-                .into_iter()
-                .chain(inactive_submap_details(&inactive_bindings))
-                .collect(),
+                ),
             });
         }
-        let details = details_with_physical_input(
-            vec![format!("active submap: {active_submap}")],
-            physical_input,
-        )
-        .into_iter()
-        .chain(inactive_submap_details(&inactive_bindings))
-        .collect();
         return Ok(LayerResult {
+            verbose_details: inactive_submap_details(&inactive_bindings),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Pass,
             summary: "no active binding found".into(),
-            details,
+            details: details_with_physical_input(
+                vec![format!("active submap: {active_submap}")],
+                physical_input,
+            ),
         });
     }
 
@@ -1406,6 +1403,9 @@ fn inspect_json_with_keycode(
         vec![format!("active submap: {active_submap}")],
         physical_input,
     );
+    // Same-key bindings from other submaps explain mode-dependent setups;
+    // they stay one `--verbose` away in normal reports.
+    let mut verbose_details: Vec<String> = Vec::new();
     if skipped_bindings > 0 {
         details.push(format!(
             "could not parse {skipped_bindings} effective binding entr{}; other bindings may be missing",
@@ -1460,10 +1460,11 @@ fn inspect_json_with_keycode(
         }
     }
     if !inactive_bindings.is_empty() {
-        details.push(format!(
+        verbose_details.push(format!(
             "{} matching binding(s) exist in inactive submap(s); current submap is {active_submap}",
             inactive_bindings.len()
         ));
+        verbose_details.extend(inactive_submap_details(&inactive_bindings));
     }
     if !has_exact_match {
         details.push(format!("no exact binding for {key}"));
@@ -1569,6 +1570,7 @@ fn inspect_json_with_keycode(
         primary_match(&matches).map(|matched| binding_evidence(matched.binding, lua_hints));
 
     Ok(LayerResult {
+        verbose_details,
         layer: "Hyprland",
         id: LayerId::Compositor,
         outcome,
@@ -2338,9 +2340,16 @@ mod tests {
         assert_eq!(result.propagation(), Propagation::Continues);
         assert!(
             result
+                .verbose_details
+                .iter()
+                .any(|detail| detail.contains("inactive submap binding")),
+            "inactive submaps stay behind --verbose"
+        );
+        assert!(
+            result
                 .details
                 .iter()
-                .any(|detail| detail.contains("inactive submap binding"))
+                .all(|detail| !detail.contains("inactive submap binding"))
         );
     }
 

@@ -161,8 +161,7 @@ pub fn render_ndjson(
                 summary: &layer.summary,
                 binding: layer.binding.as_ref(),
                 evidence: layer
-                    .details
-                    .iter()
+                    .all_details()
                     .map(|detail| NdjsonEvidence {
                         kind: "detail",
                         text: detail,
@@ -307,85 +306,87 @@ fn render_inner(
         terminal_observed,
     ));
     if let Some(observation) = observation {
-        let raw_display = observation
-            .raw_display
-            .clone()
-            .unwrap_or_else(|| format_raw_bytes(&observation.raw));
-        let raw_label = if observation.source.confirms_terminal() {
-            "probe bytes"
-        } else {
-            "raw event"
-        };
-        let universal_match = layers.iter().any(|l| {
-            l.binding
-                .as_ref()
-                .is_some_and(BindingEvidence::is_universal)
-        });
-        let encoding_note = match observation.disposition {
-            crate::listen::CaptureDisposition::Suppressed => {
-                if universal_match {
-                    "  Whykey captured this event, but universal Hyprland bindings may execute.".to_owned()
-                } else {
-                    "  Whykey captured and suppressed this event.".to_owned()
-                }
-            }
-            crate::listen::CaptureDisposition::PassedThrough
-            | crate::listen::CaptureDisposition::ObservedOnly => match &observation.source {
-                crate::listen::CaptureSource::Terminal => {
-                    match crate::layers::terminal_identity() {
-                        Some(name) => {
-                            format!("  downstream analysis uses {name}'s normal encoding when available")
-                        }
-                        None => "  downstream analysis uses the terminal's normal encoding when available"
-                            .to_owned(),
-                    }
-                }
-                crate::listen::CaptureSource::Hyprland => {
-                    "  compositor capture proves the key reached Hyprland, but does not prove forwarding".to_owned()
-                }
-                crate::listen::CaptureSource::Evdev { .. } => {
-                    "  physical capture does not prove compositor or terminal forwarding".to_owned()
-                }
-            },
-        };
+        // Normal reports name the capture source, key, and event. Raw bytes,
+        // encoding internals, full modifier state, and alternate keys stay
+        // behind `--verbose`; JSON always carries everything.
         output.push_str(&format!(
-            "Capture\n  source: {}\n  observed key: {}\n  event: {}\n  encoding: {}\n  {raw_label}: {}\n{}\n",
+            "Capture\n  source: {}\n  observed key: {}\n  event: {}\n",
             observation.source.label(),
             observation.combo,
             observation.event_type.label(),
-            observation.encoding,
-            raw_display,
-            encoding_note
         ));
-        if let Some(text) = &observation.associated_text {
-            output.push_str(&format!("  associated text: {text}\n"));
-        }
-        if let Some(state) = &observation.modifier_state {
-            let pressed = if state.pressed.is_empty() {
-                "none".into()
-            } else {
-                state.pressed.join(", ")
-            };
-            let locked = if state.locked.is_empty() {
-                "none".into()
-            } else {
-                state.locked.join(", ")
-            };
-            output.push_str(&format!(
-                "  modifiers pressed: {pressed}\n  modifiers locked: {locked}\n"
-            ));
-            if state.latched.is_none() {
-                let from = match &observation.source {
-                    crate::listen::CaptureSource::Terminal => "terminal",
-                    crate::listen::CaptureSource::Hyprland => "compositor",
-                    crate::listen::CaptureSource::Evdev { .. } => "evdev",
+        // The conclusion already states suppression once; repeating it here
+        // printed "captured and suppressed" twice.
+        match observation.disposition {
+            crate::listen::CaptureDisposition::Suppressed => {}
+            crate::listen::CaptureDisposition::PassedThrough
+            | crate::listen::CaptureDisposition::ObservedOnly => {
+                let note = match &observation.source {
+                    crate::listen::CaptureSource::Terminal => {
+                        match crate::layers::terminal_identity() {
+                            Some(name) => {
+                                format!("  downstream analysis uses {name}'s normal encoding when available")
+                            }
+                            None => "  downstream analysis uses the terminal's normal encoding when available"
+                                .to_owned(),
+                        }
+                    }
+                    crate::listen::CaptureSource::Hyprland => {
+                        "  compositor capture proves the key reached Hyprland, but does not prove forwarding".to_owned()
+                    }
+                    crate::listen::CaptureSource::Evdev { .. } => {
+                        "  physical capture does not prove compositor or terminal forwarding".to_owned()
+                    }
                 };
-                output.push_str(&format!("  modifiers latched: unavailable from {from}\n"));
+                output.push_str(&note);
+                output.push('\n');
             }
         }
-        if let Some(alternate) = &observation.alternate_key {
-            output.push_str(&format!("  alternate key: {alternate}\n\n"));
+        if verbose {
+            let raw_display = observation
+                .raw_display
+                .clone()
+                .unwrap_or_else(|| format_raw_bytes(&observation.raw));
+            let raw_label = if observation.source.confirms_terminal() {
+                "probe bytes"
+            } else {
+                "raw event"
+            };
+            output.push_str(&format!(
+                "  {raw_label}: {raw_display}\n  encoding: {}\n",
+                observation.encoding,
+            ));
+            if let Some(text) = &observation.associated_text {
+                output.push_str(&format!("  associated text: {text}\n"));
+            }
+            if let Some(state) = &observation.modifier_state {
+                let pressed = if state.pressed.is_empty() {
+                    "none".into()
+                } else {
+                    state.pressed.join(", ")
+                };
+                let locked = if state.locked.is_empty() {
+                    "none".into()
+                } else {
+                    state.locked.join(", ")
+                };
+                output.push_str(&format!(
+                    "  modifiers pressed: {pressed}\n  modifiers locked: {locked}\n"
+                ));
+                if state.latched.is_none() {
+                    let from = match &observation.source {
+                        crate::listen::CaptureSource::Terminal => "terminal",
+                        crate::listen::CaptureSource::Hyprland => "compositor",
+                        crate::listen::CaptureSource::Evdev { .. } => "evdev",
+                    };
+                    output.push_str(&format!("  modifiers latched: unavailable from {from}\n"));
+                }
+            }
+            if let Some(alternate) = &observation.alternate_key {
+                output.push_str(&format!("  alternate key: {alternate}\n"));
+            }
         }
+        output.push('\n');
     }
     output.push_str("Path\n");
 
@@ -418,12 +419,17 @@ fn render_inner(
             _ => "? ",
         });
         output.push_str(&layer.summary);
-        output.push('\n');
-
         for detail in &layer.details {
             output.push_str("    ");
             output.push_str(detail);
             output.push('\n');
+        }
+        if verbose {
+            for detail in &layer.verbose_details {
+                output.push_str("    ");
+                output.push_str(detail);
+                output.push('\n');
+            }
         }
         output.push('\n');
     }
@@ -662,6 +668,7 @@ mod tests {
     fn renders_a_forwarded_result() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layer = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -687,6 +694,7 @@ mod tests {
         let key: KeyCombo = "ctrl+z".parse().unwrap();
         let layers = [
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -695,6 +703,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Readline",
                 id: LayerId::Shell,
@@ -715,6 +724,7 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -723,6 +733,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
@@ -742,6 +753,7 @@ mod tests {
     fn explains_a_redirected_key() {
         let key: KeyCombo = "ctrl+p".parse().unwrap();
         let layer = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -761,6 +773,7 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -769,6 +782,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
@@ -789,6 +803,7 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -797,6 +812,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
@@ -816,6 +832,7 @@ mod tests {
     fn renders_unavailable_before_indeterminate_propagation() {
         let key: KeyCombo = "ctrl+z".parse().unwrap();
         let layer = LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -835,6 +852,7 @@ mod tests {
         let key: KeyCombo = "ctrl+f".parse().unwrap();
         let layers = [
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -843,6 +861,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Readline",
                 id: LayerId::Shell,
@@ -901,6 +920,7 @@ mod tests {
         };
         let layers = [
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -909,6 +929,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Readline",
                 id: LayerId::Shell,
@@ -918,10 +939,13 @@ mod tests {
             },
         ];
 
-        let output = render_observed(&observed, &layers, false);
+        let output = render_observed(&observed, &layers, true);
 
         assert!(output.contains("earlier forwarding is confirmed"));
         assert!(output.contains("probe bytes: ESC [ 1 ; 5 D"));
+        let normal = render_observed(&observed, &layers, false);
+        assert!(normal.contains("earlier forwarding is confirmed"));
+        assert!(!normal.contains("probe bytes"));
         assert!(output.contains("Readline handles and consumes CTRL + LEFT."));
         assert!(!output.contains("Assuming earlier uncertain layers"));
     }
@@ -948,6 +972,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -987,6 +1012,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::PassedThrough,
         };
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -995,10 +1021,14 @@ mod tests {
             details: vec!["binding: __lua 285; Herdr".into()],
         }];
 
-        let output = render_observed(&observed, &layers, false);
+        let output = render_observed(&observed, &layers, true);
         assert!(output.contains("source: Hyprland"));
         assert!(output.contains("observed key: CTRL + SUPER + RETURN"));
         assert!(output.contains("encoding: Hyprland XKB key event"));
+        let normal = render_observed(&observed, &layers, false);
+        assert!(normal.contains("source: Hyprland"));
+        assert!(!normal.contains("encoding: Hyprland XKB key event"));
+        assert!(!normal.contains("modifiers latched"));
         assert!(
             output.contains(
                 "The key event was captured by Hyprland, but forwarding is not confirmed."
@@ -1043,6 +1073,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1086,6 +1117,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1130,6 +1162,7 @@ mod tests {
             ..opaque_herdr_evidence()
         };
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(universal),
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1148,6 +1181,144 @@ mod tests {
         assert!(
             output.contains("The normal configuration indicates that Hyprland may execute Herdr.")
         );
+    }
+
+    #[test]
+    fn normal_report_fits_one_screen_while_verbose_keeps_diagnostics() {
+        let observed = suppressed_observed();
+        let observed = ObservedKey {
+            modifier_state: Some(crate::listen::ModifierState {
+                pressed: vec!["CTRL".into(), "SUPER".into()],
+                locked: vec![],
+                latched: None,
+                devices: vec![],
+            }),
+            alternate_key: Some("physical keycode 28 (RETURN)".into()),
+            ..observed
+        };
+        let layers = [LayerResult {
+            verbose_details: vec![
+                "main keyboard: at-translated-set-2-keyboard".into(),
+                "active XKB layout group index: 0".into(),
+                "2 matching binding(s) exist in inactive submap(s); current submap is default"
+                    .into(),
+            ],
+            binding: Some(opaque_herdr_evidence()),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+        let normal = render_observed(&observed, &layers, false);
+        assert!(
+            normal.lines().count() < 24,
+            "normal report must fit roughly one screen, got {} lines:\n{normal}",
+            normal.lines().count()
+        );
+        for diagnostic in [
+            "main keyboard",
+            "group index",
+            "inactive submap",
+            "raw event",
+            "modifiers pressed",
+        ] {
+            assert!(
+                !normal.contains(diagnostic),
+                "normal report must not carry {diagnostic:?}"
+            );
+        }
+        assert!(normal.contains("may execute Herdr"));
+        let verbose = render_observed(&observed, &layers, true);
+        for diagnostic in [
+            "main keyboard",
+            "group index",
+            "inactive submap",
+            "raw event",
+            "modifiers pressed",
+        ] {
+            assert!(
+                verbose.contains(diagnostic),
+                "--verbose must retain {diagnostic:?}"
+            );
+        }
+        assert_eq!(
+            conclusion_lines(&normal),
+            conclusion_lines(&verbose),
+            "verbosity changes evidence depth, never the conclusion"
+        );
+    }
+
+    #[test]
+    fn text_and_json_share_the_conclusion() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let observed = suppressed_observed();
+        let layers = [LayerResult {
+            verbose_details: vec!["main keyboard: test".into()],
+            binding: Some(opaque_herdr_evidence()),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+        let text = render_observed(&observed, &layers, false);
+        let assessment = text
+            .lines()
+            .find_map(|line| line.strip_prefix("Assessment: "))
+            .expect("text report names the assessment");
+        for version in [1, 2] {
+            let json: serde_json::Value =
+                serde_json::from_str(&render_listen_json(&key, &layers, Some(&observed), version))
+                    .unwrap();
+            let confidence = if version == 1 {
+                json["confidence"].as_str().unwrap()
+            } else {
+                json["assessment"]["confidence"].as_str().unwrap()
+            };
+            assert_eq!(
+                assessment, confidence,
+                "v{version} JSON must agree with text"
+            );
+        }
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_listen_json(&key, &layers, Some(&observed), 2)).unwrap();
+        assert!(
+            v2["path"][0]["evidence"]
+                .as_array()
+                .is_some_and(|evidence| evidence
+                    .iter()
+                    .any(|item| item["text"] == "main keyboard: test")),
+            "JSON keeps verbose evidence even in normal mode"
+        );
+    }
+
+    #[test]
+    fn inactive_ime_stays_context_not_a_traversed_handler() {
+        let observed = suppressed_observed();
+        let layers = [
+            LayerResult {
+                verbose_details: Vec::new(),
+                binding: None,
+                layer: "Hyprland",
+                id: LayerId::Compositor,
+                outcome: Outcome::Pass,
+                summary: "no active binding found".into(),
+                details: vec![],
+            },
+            LayerResult {
+                verbose_details: Vec::new(),
+                binding: None,
+                layer: "Input method",
+                id: LayerId::Ime,
+                outcome: Outcome::UncertainContinues,
+                summary: "input method was detected but inactive or closed; application-side text transformation remains unobserved".into(),
+                details: vec!["runtime state: inactive".into()],
+            },
+        ];
+        let output = render_observed(&observed, &layers, false);
+        assert!(!output.contains("Final handler: Input method"));
+        assert!(output.contains("inactive or closed"));
     }
     fn suppressed_observed() -> ObservedKey {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
@@ -1190,6 +1361,7 @@ mod tests {
     fn detail_wording_never_changes_the_conclusion() {
         let observed = suppressed_observed();
         let plain = [LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1198,6 +1370,7 @@ mod tests {
             details: vec!["binding: __lua 285; Herdr".into()],
         }];
         let reworded = [LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1216,6 +1389,7 @@ mod tests {
     fn schema_v2_carries_binding_evidence_while_v1_omits_it() {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1255,6 +1429,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult {
+            verbose_details: Vec::new(),
             binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
@@ -1283,6 +1458,7 @@ mod tests {
         let sequence: KeySequence = "ctrl+x ctrl+s".parse().unwrap();
         let reports = vec![
             vec![LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
@@ -1291,6 +1467,7 @@ mod tests {
                 details: vec![],
             }],
             vec![LayerResult {
+                verbose_details: Vec::new(),
                 binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
