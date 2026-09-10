@@ -7,6 +7,8 @@ continues to the next layer.
 
 It inspects the active compositor, terminal, TTY, multiplexer, application,
 and shell. It never executes the shortcut or changes your configuration.
+Native Hyprland listening temporarily changes the compositor session to capture
+the event, then restores the previous submap before reporting it.
 
 ```console
 $ whykey ctrl+left
@@ -47,12 +49,18 @@ whykey listen --repeat              # inspect one deliberate shortcut at a time
 whykey listen --terminal            # force terminal-only capture
 whykey listen --evdev               # observe a physical Linux input device
 whykey doctor                       # check available integrations
-whykey bindings                     # list detected desktop bindings
-whykey conflicts                    # find conflicts in that inventory
+whykey bindings --key ctrl+x        # list matching desktop bindings
+whykey conflicts --source hyprland  # find matching conflicts
+whykey snapshot ctrl+super+return --output whykey-snapshot.json
+whykey diff before.json after.json
 ```
 
 Use `--verbose` for the full route. Use `--json` for stable schema-v1 output
-or `--json-v2` for structured context and evidence.
+or `--json-v2` for structured context and evidence. `snapshot` saves a
+versioned static report for later offline replay; it never captures or injects
+input. New snapshots redact shell identity and private paths in captured
+evidence. They preserve the observed conclusion for comparison, not raw IPC or
+configuration inputs required to re-run every adapter offline.
 
 Run `whykey --help` for every command and option.
 
@@ -80,8 +88,22 @@ If native Hyprland capture is unavailable, Whykey falls back to terminal capture
 observing keys that reach the terminal. Pass `--terminal` to explicitly force
 terminal-only capture. Pass `--evdev` to read Linux input events before the
 compositor (may require permission to access `/dev/input/event*`). Whykey
-never grabs an input device and cleans up temporary hooks on exit. Press
-Escape or Ctrl+C to exit.
+never grabs an evdev input device and cleans up temporary Hyprland hooks
+on exit. Press Escape or Ctrl+C to exit. If native Hyprland capture is used,
+the compositor session is temporarily changed; configuration files are not.
+
+Replay a snapshot without querying the current desktop:
+
+```sh
+whykey replay whykey-snapshot.json
+```
+
+Compare two saved snapshots without querying the current desktop:
+
+```sh
+whykey diff before.json after.json
+whykey diff --json before.json after.json
+```
 
 ## Support
 
@@ -121,6 +143,18 @@ through `whykey completions bash|zsh|fish`.
 cargo test --all-targets --locked
 cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all -- --check
+```
+
+Live Hyprland tests mutate the compositor and never run in the ordinary
+suite. They live in `tests/hyprland_live.rs`, require `--ignored`,
+`WHYKEY_RUN_LIVE_TESTS=1`, and an explicit test instance signature
+(`WHYKEY_LIVE_INSTANCE_SIGNATURE` equal to `HYPRLAND_INSTANCE_SIGNATURE`),
+and fail with a prerequisite message otherwise. Run them only in a dedicated
+Hyprland session; each records the original submap and verifies its exact
+restoration:
+```sh
+WHYKEY_RUN_LIVE_TESTS=1 WHYKEY_LIVE_INSTANCE_SIGNATURE="$HYPRLAND_INSTANCE_SIGNATURE" \
+cargo test --test hyprland_live -- --ignored
 ```
 
 The [specification](SPEC.md) documents output and inspection behavior.
