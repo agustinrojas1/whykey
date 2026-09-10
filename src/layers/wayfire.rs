@@ -46,6 +46,7 @@ impl Wayfire {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "Wayfire",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -60,6 +61,7 @@ impl Wayfire {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "Wayfire",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -76,6 +78,7 @@ impl Wayfire {
                 .into(),
         );
         LayerResult {
+            binding: None,
             layer: "Wayfire",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

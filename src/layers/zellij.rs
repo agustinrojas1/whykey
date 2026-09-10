@@ -46,6 +46,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         details.push(format!("binding: {}", binding));
         let continues = binding.starts_with("WriteChars") || binding.starts_with("Write ");
         return LayerResult {
+            binding: None,
             layer: "Zellij",
             id: LayerId::Multiplexer,
             outcome: if continues {
@@ -69,6 +70,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         );
     }
     LayerResult {
+        binding: None,
         layer: "Zellij",
         id: LayerId::Multiplexer,
         outcome: if complete {
@@ -88,6 +90,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
 
 fn unavailable(message: String) -> LayerResult {
     LayerResult {
+        binding: None,
         layer: "Zellij",
         id: LayerId::Multiplexer,
         outcome: Outcome::Unavailable,

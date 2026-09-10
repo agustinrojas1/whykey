@@ -31,12 +31,15 @@ pub fn context() -> Value {
     })
 }
 
+/// Schema v2 path entries. Schema v1 serializes `LayerResult` directly and
+/// stays byte-compatible; only v2 gains the optional `binding` object.
+/// Replaying a report without one never invents typed evidence.
 pub fn path(layers: &[LayerResult]) -> Vec<Value> {
     layers
         .iter()
         .map(|layer| {
             let (status, propagation) = (layer.status(), layer.propagation());
-            json!({
+            let mut entry = json!({
                 "layer": layer.layer,
                 "status": status,
                 "propagation": propagation,
@@ -45,7 +48,11 @@ pub fn path(layers: &[LayerResult]) -> Vec<Value> {
                     "kind": "detail",
                     "text": detail,
                 })).collect::<Vec<_>>(),
-            })
+            });
+            if let Some(binding) = &layer.binding {
+                entry["binding"] = json!(binding);
+            }
+            entry
         })
         .collect()
 }
@@ -62,6 +69,7 @@ mod tests {
     #[test]
     fn evidence_preserves_layer_details() {
         let layer = LayerResult {
+            binding: None,
             layer: "test",
             id: crate::layers::LayerId::Diagnostic,
             outcome: crate::layers::Outcome::Consumed,
@@ -71,5 +79,37 @@ mod tests {
         let value = path(&[layer]);
         assert_eq!(value[0]["evidence"][0]["kind"], "detail");
         assert_eq!(value[0]["evidence"][0]["text"], "source: fixture");
+    }
+
+    #[test]
+    fn path_omits_binding_without_evidence_and_carries_it_with() {
+        let plain = LayerResult {
+            binding: None,
+            layer: "test",
+            id: crate::layers::LayerId::Diagnostic,
+            outcome: crate::layers::Outcome::Consumed,
+            summary: "handled".into(),
+            details: vec!["source: fixture".into()],
+        };
+        let value = path(&[plain]);
+        assert!(value[0].get("binding").is_none());
+        let evidenced = LayerResult {
+            binding: Some(crate::layers::BindingEvidence {
+                dispatcher: Some("__lua".into()),
+                action: Some("__lua 285".into()),
+                description: Some("Herdr".into()),
+                submap: Some("default".into()),
+                scope: crate::layers::BindingScope::Universal,
+                source: None,
+            }),
+            layer: "Hyprland",
+            id: crate::layers::LayerId::Compositor,
+            outcome: crate::layers::Outcome::HandledUncertain,
+            summary: "matching binding; runtime effect unknown".into(),
+            details: vec!["opaque runtime hook".into()],
+        };
+        let value = path(&[evidenced]);
+        assert_eq!(value[0]["binding"]["dispatcher"], "__lua");
+        assert_eq!(value[0]["binding"]["scope"], "Universal");
     }
 }

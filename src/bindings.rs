@@ -94,6 +94,33 @@ pub fn current() -> Inventory {
     inventory
 }
 
+pub fn filter(
+    mut inventory: Inventory,
+    key: Option<&str>,
+    action: Option<&str>,
+    source: Option<&str>,
+) -> Inventory {
+    inventory.bindings.retain(|binding| {
+        key.is_none_or(|needle| {
+            binding
+                .key
+                .to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase())
+        }) && action.is_none_or(|needle| {
+            binding
+                .action
+                .to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase())
+        }) && source.is_none_or(|needle| {
+            binding
+                .source
+                .to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase())
+        })
+    });
+    inventory
+}
+
 /// Whether a bindings-capable adapter contributes to this session. The X11
 /// and programmable X11 adapters only expose bindings when their
 /// configuration is readable, mirroring their original applicability rules.
@@ -576,5 +603,36 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&render_json(&inventory, 1)).unwrap();
         assert_eq!(value["complete"], false);
         assert_eq!(value["schema_version"], 1);
+    }
+
+    #[test]
+    fn filters_bindings_by_case_insensitive_key_action_and_source() {
+        let inventory = Inventory {
+            schema_version: 1,
+            complete: false,
+            bindings: vec![
+                BindingEntry {
+                    source: "Hyprland".into(),
+                    key: "CTRL+X".into(),
+                    action: "Open terminal".into(),
+                    context: None,
+                    certainty: "configured".into(),
+                },
+                BindingEntry {
+                    source: "GNOME".into(),
+                    key: "SUPER+X".into(),
+                    action: "Open overview".into(),
+                    context: None,
+                    certainty: "configured".into(),
+                },
+            ],
+            unavailable: Vec::new(),
+            limitations: Vec::new(),
+        };
+
+        let filtered = filter(inventory, Some("ctrl+x"), Some("terminal"), Some("hypr"));
+
+        assert_eq!(filtered.bindings.len(), 1);
+        assert_eq!(filtered.bindings[0].source, "Hyprland");
     }
 }

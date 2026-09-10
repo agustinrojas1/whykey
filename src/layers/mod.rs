@@ -194,6 +194,56 @@ pub enum Propagation {
 /// and `outcome` is the single control value. The legacy `status` and
 /// `propagation` pair exists only as derived serialization output for
 /// schema v1/v2 compatibility.
+///
+/// Typed evidence for the binding a layer matched, when the adapter can name
+/// it. Renderers must decide universal scope, action wording, and dispatcher
+/// uncertainty from these fields, never by parsing human-readable details.
+/// Only adapters with runtime binding data populate it; the rest leave
+/// `LayerResult::binding` absent, and replaying an older report never
+/// invents it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BindingEvidence {
+    pub dispatcher: Option<String>,
+    pub action: Option<String>,
+    pub description: Option<String>,
+    pub submap: Option<String>,
+    pub scope: BindingScope,
+    pub source: Option<SourceLocation>,
+}
+
+impl BindingEvidence {
+    /// Dispatchers whose runtime effect Whykey cannot observe or execute:
+    /// Lua/plugin hooks and colon-namespaced plugin calls.
+    pub fn dispatcher_is_opaque(dispatcher: &str) -> bool {
+        dispatcher == "__lua" || dispatcher.contains(':')
+    }
+
+    pub fn is_opaque(&self) -> bool {
+        self.dispatcher
+            .as_deref()
+            .is_some_and(Self::dispatcher_is_opaque)
+    }
+
+    pub fn is_universal(&self) -> bool {
+        self.scope == BindingScope::Universal
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum BindingScope {
+    Universal,
+    Submap(String),
+    Unknown,
+}
+
+/// Static configuration hint for a runtime binding, when an adapter can
+/// link the two without guessing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceLocation {
+    pub file: String,
+    pub line: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerResult {
     pub layer: &'static str,
@@ -201,6 +251,7 @@ pub struct LayerResult {
     pub outcome: Outcome,
     pub summary: String,
     pub details: Vec<String>,
+    pub binding: Option<BindingEvidence>,
 }
 
 impl Serialize for LayerResult {
@@ -630,6 +681,7 @@ fn inspect_default_chain_inner_without_remapper(
 
 fn deadline_result() -> LayerResult {
     LayerResult {
+        binding: None,
         layer: "Diagnostic budget",
         id: LayerId::Diagnostic,
         outcome: Outcome::Unavailable,
@@ -737,6 +789,7 @@ mod tests {
     #[test]
     fn ime_result_is_placed_before_the_tty_stage() {
         let tty = LayerResult {
+            binding: None,
             layer: "TTY driver",
             id: LayerId::Tty,
             outcome: Outcome::Pass,
@@ -744,6 +797,7 @@ mod tests {
             details: Vec::new(),
         };
         let ime = LayerResult {
+            binding: None,
             layer: "IME",
             id: LayerId::Ime,
             outcome: Outcome::HandledAndPassed,

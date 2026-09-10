@@ -10,7 +10,10 @@ use serde::Deserialize;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, LayerStatus, Outcome, PhysicalInput, Propagation};
+use crate::layers::{
+    BindingEvidence, BindingScope, LayerId, LayerResult, LayerStatus, Outcome, PhysicalInput,
+    Propagation, SourceLocation,
+};
 use crate::xkb;
 
 pub struct Hyprland;
@@ -97,6 +100,7 @@ impl Hyprland {
     ) -> LayerResult {
         if remote_session_without_compositor() {
             return LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -129,6 +133,7 @@ fn ipc_uncertain_result(message: String) -> LayerResult {
         "the active submap, runtime overrides, and input-inhibitor state remain unknown".into(),
     );
     LayerResult {
+        binding: None,
         layer: "Hyprland",
         id: LayerId::Compositor,
         outcome: Outcome::UncertainContinues,
@@ -1360,6 +1365,7 @@ fn inspect_json_with_keycode(
     if matches.is_empty() {
         if skipped_bindings > 0 {
             return Ok(LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -1387,6 +1393,7 @@ fn inspect_json_with_keycode(
         .chain(inactive_submap_details(&inactive_bindings))
         .collect();
         return Ok(LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Pass,
@@ -1558,12 +1565,67 @@ fn inspect_json_with_keycode(
         }
     };
 
+    let binding =
+        primary_match(&matches).map(|matched| binding_evidence(matched.binding, lua_hints));
+
     Ok(LayerResult {
         layer: "Hyprland",
         id: LayerId::Compositor,
         outcome,
         summary: summary.into(),
         details,
+        binding,
+    })
+}
+
+/// The match the conclusion describes: an exact binding when one exists,
+/// otherwise the first candidate. Evidence never invents a stronger match.
+fn primary_match<'a>(matches: &'a [BindingMatch<'a>]) -> Option<BindingMatch<'a>> {
+    matches
+        .iter()
+        .find(|matched| {
+            matches!(
+                matched.certainty,
+                MatchCertainty::Exact | MatchCertainty::ModifierInsensitive
+            )
+        })
+        .or_else(|| matches.first())
+        .copied()
+}
+
+/// Typed binding evidence for the renderer and schema v2. The human-readable
+/// `details` stay untouched; decisions must read these fields instead.
+fn binding_evidence(binding: &Binding, lua_hints: &[LuaBindHint]) -> BindingEvidence {
+    let action = format!("{} {}", binding.dispatcher, binding.arg);
+    BindingEvidence {
+        dispatcher: none_if_empty(&binding.dispatcher),
+        action: none_if_empty(&action),
+        description: none_if_empty(&binding.description),
+        submap: Some(normalize_submap(&binding.submap).to_string()),
+        scope: if binding.submap_universal {
+            BindingScope::Universal
+        } else {
+            BindingScope::Submap(normalize_submap(&binding.submap).to_string())
+        },
+        source: hint_source(binding, lua_hints),
+    }
+}
+
+fn none_if_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Link a runtime binding to its static config hint only on an exact
+/// description match. Anything weaker would be a guessed file hint.
+fn hint_source(binding: &Binding, lua_hints: &[LuaBindHint]) -> Option<SourceLocation> {
+    let description = none_if_empty(&binding.description)?;
+    let hint = lua_hints
+        .iter()
+        .find(|hint| hint.description.as_deref() == Some(&description))?;
+    Some(SourceLocation {
+        file: hint.source.display().to_string(),
+        line: u32::try_from(hint.line_number).ok(),
     })
 }
 
@@ -1850,9 +1912,8 @@ fn dispatcher_outcomes(binding: &Binding) -> Vec<DispatcherOutcome> {
         redirects: false,
     }]
 }
-
 fn dispatcher_is_opaque(binding: &Binding) -> bool {
-    binding.dispatcher == "__lua" || binding.dispatcher.contains(':')
+    BindingEvidence::dispatcher_is_opaque(&binding.dispatcher)
 }
 
 fn dispatcher_is_special(binding: &Binding) -> bool {
@@ -2450,6 +2511,68 @@ mod tests {
                 .details
                 .iter()
                 .any(|detail| detail.contains("captured evdev device"))
+        );
+    }
+
+    #[test]
+    fn matched_binding_populates_typed_evidence() {
+        let combo: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let bindings = r#"[{
+            "modmask": 68,
+            "key": "Return",
+            "dispatcher": "__lua",
+            "arg": "285",
+            "description": "Herdr",
+            "submap": "default",
+            "submap_universal": true
+        }]"#;
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], false, None).unwrap();
+        let evidence = result.binding.expect("a match must carry evidence");
+        assert_eq!(evidence.dispatcher.as_deref(), Some("__lua"));
+        assert_eq!(evidence.action.as_deref(), Some("__lua 285"));
+        assert_eq!(evidence.description.as_deref(), Some("Herdr"));
+        assert_eq!(evidence.submap.as_deref(), Some("default"));
+        assert_eq!(evidence.scope, BindingScope::Universal);
+        assert!(evidence.is_universal());
+        assert!(evidence.is_opaque());
+    }
+
+    #[test]
+    fn evidence_links_a_config_hint_only_on_exact_description() {
+        let combo: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let bindings = r#"[{
+            "modmask": 68,
+            "key": "Return",
+            "dispatcher": "__lua",
+            "arg": "285",
+            "description": "Herdr",
+            "submap": "default"
+        }]"#;
+        let hints = vec![LuaBindHint {
+            combo: combo.clone(),
+            description: Some("Herdr".into()),
+            action: None,
+            ignore_mods: None,
+            source: PathBuf::from("/home/user/.config/hypr/bindings.lua"),
+            line_number: 42,
+        }];
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &hints, false, None)
+                .unwrap();
+        let evidence = result.binding.expect("a match must carry evidence");
+        assert_eq!(evidence.scope, BindingScope::Submap("default".into()));
+        let source = evidence.source.expect("an exact hint must link");
+        assert_eq!(source.file, "/home/user/.config/hypr/bindings.lua");
+        assert_eq!(source.line, Some(42));
+        let unrelated =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], false, None).unwrap();
+        assert!(
+            unrelated
+                .binding
+                .as_ref()
+                .is_some_and(|evidence| evidence.source.is_none()),
+            "no hint must mean no file guess"
         );
     }
 

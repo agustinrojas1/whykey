@@ -83,6 +83,7 @@ impl Programmable {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(desktop) = detect() else {
             return LayerResult {
+                binding: None,
                 layer: "Programmable X11 WM",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -92,6 +93,7 @@ impl Programmable {
         };
         let Some(path) = config_path(desktop) else {
             return LayerResult {
+                binding: None,
                 layer: desktop.name(),
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -106,6 +108,7 @@ impl Programmable {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: desktop.name(),
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -124,6 +127,7 @@ impl Programmable {
                 "no matching literal binding found; executable helpers, modes, and runtime reload state remain unknown".into(),
             );
             return LayerResult {
+                binding: None,
                 layer: desktop.name(),
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -135,6 +139,7 @@ impl Programmable {
             details.push(format!("{}: {}", binding.context, binding.action));
         }
         LayerResult {
+            binding: None,
             layer: desktop.name(),
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

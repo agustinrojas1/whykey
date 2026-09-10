@@ -42,6 +42,7 @@ pub fn inspect_input_for_pid(input: &TerminalInput, target_pid: u32) -> LayerRes
 
 fn unsupported(shell: &str) -> LayerResult {
     LayerResult {
+        binding: None,
         layer: "Shell input",
         id: LayerId::Shell,
         outcome: Outcome::Unavailable,
@@ -138,6 +139,7 @@ fn inspect_configured_shell_binding(
         "binding source: common shell default (inferred)"
     };
     LayerResult {
+        binding: None,
         layer,
         id: LayerId::Shell,
         outcome: if configured {
@@ -206,6 +208,7 @@ fn inspect_dynamic_shell_binding(
         append_fish_mode_detail(&mut details);
     }
     LayerResult {
+        binding: None,
         layer,
         id: LayerId::Shell,
         outcome: Outcome::Consumed,
@@ -216,6 +219,7 @@ fn inspect_dynamic_shell_binding(
 
 fn no_shell_binding(layer: &'static str, input: &TerminalInput) -> LayerResult {
     LayerResult {
+        binding: None,
         layer,
         id: LayerId::Shell,
         outcome: Outcome::Pass,
@@ -241,6 +245,7 @@ fn shell_sequence_literal(bytes: &[u8]) -> String {
 fn inspect_zsh(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
     let Some((sequence, default_binding)) = zsh_known_key(key) else {
         return LayerResult {
+            binding: None,
             layer: "Zsh / ZLE",
             id: LayerId::Shell,
             outcome: Outcome::Pass,
@@ -253,6 +258,7 @@ fn inspect_zsh(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
     } else {
         let binding = zsh_binding(sequence).unwrap_or_else(|| default_binding.into());
         LayerResult {
+            binding: None,
             layer: "Zsh / ZLE",
             id: LayerId::Shell,
             outcome: Outcome::Unknown,
@@ -268,6 +274,7 @@ fn inspect_zsh(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
 fn inspect_fish(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
     let Some((sequence, default_binding)) = fish_known_key(key) else {
         return LayerResult {
+            binding: None,
             layer: "Fish",
             id: LayerId::Shell,
             outcome: Outcome::Pass,
@@ -287,6 +294,7 @@ fn inspect_fish(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
     } else {
         let binding = fish_binding(sequence).unwrap_or_else(|| default_binding.into());
         LayerResult {
+            binding: None,
             layer: "Fish",
             id: LayerId::Shell,
             outcome: Outcome::Unknown,

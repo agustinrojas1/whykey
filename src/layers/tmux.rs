@@ -43,6 +43,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                 Err(message) => {
                     details.push(format!("could not read active table {table}: {message}"));
                     return LayerResult {
+                        binding: None,
                         layer: "tmux",
                         id: LayerId::Multiplexer,
                         outcome: Outcome::Unknown,
@@ -53,6 +54,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             }
             details.push(format!("active table {table} has no binding for this key"));
             return LayerResult {
+                binding: None,
                 layer: "tmux",
                 id: LayerId::Multiplexer,
                 outcome: Outcome::Pass,
@@ -90,6 +92,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     {
         details.push("the configured prefix starts a tmux key sequence".into());
         return LayerResult {
+            binding: None,
             layer: "tmux",
             id: LayerId::Multiplexer,
             outcome: Outcome::Consumed,
@@ -99,6 +102,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     }
 
     LayerResult {
+        binding: None,
         layer: "tmux",
         id: LayerId::Multiplexer,
         outcome: Outcome::Pass,
@@ -137,6 +141,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>) -> LayerResult {
     if action == "send-keys" || action.starts_with("send-keys ") {
         details.push("tmux emits another key sequence downstream".into());
         return LayerResult {
+            binding: None,
             layer: "tmux",
             id: LayerId::Multiplexer,
             outcome: Outcome::HandledAndPassed,
@@ -145,6 +150,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>) -> LayerResult {
         };
     }
     LayerResult {
+        binding: None,
         layer: "tmux",
         id: LayerId::Multiplexer,
         outcome: Outcome::Consumed,
@@ -155,6 +161,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>) -> LayerResult {
 
 fn unavailable(message: String) -> LayerResult {
     LayerResult {
+        binding: None,
         layer: "tmux",
         id: LayerId::Multiplexer,
         outcome: Outcome::Unavailable,

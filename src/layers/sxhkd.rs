@@ -45,6 +45,7 @@ impl Sxhkd {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
             return LayerResult {
+                binding: None,
                 layer: "sxhkd",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -56,6 +57,7 @@ impl Sxhkd {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "sxhkd",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -75,6 +77,7 @@ impl Sxhkd {
                     .into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "sxhkd",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -86,6 +89,7 @@ impl Sxhkd {
             details.push(format!("binding: {}", binding.command));
         }
         LayerResult {
+            binding: None,
             layer: "sxhkd",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

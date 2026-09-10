@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::schema;
+use crate::snapshot;
 
 const MAX_REPLAY_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -69,14 +69,15 @@ pub fn load(path: &Path) -> Result<Vec<Value>, ReplayError> {
 pub fn render_text(documents: &[Value]) -> String {
     let mut output = String::from("whykey replay\nReplayed reports; no input was injected.\n\n");
     for (index, document) in documents.iter().enumerate() {
+        let report = snapshot::report(document);
         if index > 0 {
             output.push('\n');
         }
-        if let Some(steps) = document.get("steps").and_then(Value::as_array) {
-            let sequence = document
+        if let Some(steps) = report.get("steps").and_then(Value::as_array) {
+            let sequence = report
                 .get("sequence_display")
                 .or_else(|| {
-                    document
+                    report
                         .get("input")
                         .and_then(|input| input.get("sequence_display"))
                 })
@@ -100,19 +101,19 @@ pub fn render_text(documents: &[Value]) -> String {
                 render_layers(&mut output, step.get("layers").or_else(|| step.get("path")));
             }
         } else {
-            let key = document
+            let key = report
                 .get("key_display")
                 .or_else(|| {
-                    document
+                    report
                         .get("input")
                         .and_then(|input| input.get("key_display"))
                 })
                 .and_then(Value::as_str)
                 .unwrap_or("unknown key");
-            let confidence = document
+            let confidence = report
                 .get("confidence")
                 .or_else(|| {
-                    document
+                    report
                         .get("assessment")
                         .and_then(|assessment| assessment.get("confidence"))
                 })
@@ -121,7 +122,7 @@ pub fn render_text(documents: &[Value]) -> String {
             output.push_str(&format!("Key: {key}\nAssessment: {confidence}\n"));
             render_layers(
                 &mut output,
-                document.get("layers").or_else(|| document.get("path")),
+                report.get("layers").or_else(|| report.get("path")),
             );
         }
     }
@@ -132,7 +133,7 @@ pub fn render_json(documents: &[Value], schema_version: u8) -> String {
     documents
         .iter()
         .map(|document| {
-            let document = if schema_version == 2 {
+            let document = if schema_version == 2 && !snapshot::is_snapshot(document) {
                 v2_document(document)
             } else {
                 document.clone()
@@ -152,7 +153,7 @@ fn v2_document(document: &Value) -> Value {
         return serde_json::json!({
             "schema_version": 2,
             "operation": "inspect",
-            "context": schema::context(),
+            "context": stored_context(document),
             "input": {
                 "kind": "sequence",
                 "sequence": document.get("sequence"),
@@ -170,7 +171,7 @@ fn v2_document(document: &Value) -> Value {
     serde_json::json!({
         "schema_version": 2,
         "operation": "inspect",
-        "context": schema::context(),
+        "context": stored_context(document),
         "input": {
             "kind": "key",
             "key": document.get("key"),
@@ -180,6 +181,13 @@ fn v2_document(document: &Value) -> Value {
         "observation": document.get("observed"),
         "path": document.get("layers"),
     })
+}
+
+fn stored_context(document: &Value) -> Value {
+    document
+        .get("context")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({"recorded": false}))
 }
 
 fn validate(value: &Value, document: usize) -> Result<(), ReplayError> {
@@ -192,6 +200,25 @@ fn validate(value: &Value, document: usize) -> Result<(), ReplayError> {
             document,
             "only schema_version 1 or 2 reports can be replayed",
         ));
+    }
+    if snapshot::is_snapshot(value) {
+        if schema_version != Some(u64::from(snapshot::SNAPSHOT_SCHEMA_VERSION)) {
+            return Err(invalid(document, "unsupported diagnostic snapshot schema"));
+        }
+        let Some(report) = object.get("report").filter(|value| value.is_object()) else {
+            return Err(invalid(document, "snapshot is missing its report object"));
+        };
+        if !object.get("tool").is_some_and(Value::is_object)
+            || !object.get("context").is_some_and(Value::is_object)
+            || !object.get("request").is_some_and(Value::is_object)
+        {
+            return Err(invalid(
+                document,
+                "snapshot requires tool, context, request, and report objects",
+            ));
+        }
+        validate(report, document)?;
+        return Ok(());
     }
     let static_report = if schema_version == Some(2) {
         object.get("input").is_some_and(Value::is_object)
@@ -341,11 +368,41 @@ mod tests {
     }
 
     #[test]
+    fn v1_upgrade_does_not_invent_renderer_context() {
+        let upgraded = v2_document(&static_report());
+
+        assert_eq!(upgraded["context"], serde_json::json!({"recorded": false}));
+    }
+
+    #[test]
     fn renders_stored_layer_evidence_without_injecting_input() {
         let output = render_text(&[static_report()]);
         assert!(output.contains("no input was injected"));
         assert!(output.contains("Readline"));
         assert!(output.contains("bound to forward-char"));
+    }
+
+    #[test]
+    fn replays_a_diagnostic_snapshot_envelope_without_losing_metadata() {
+        let file = tempfile_path();
+        let snapshot = serde_json::json!({
+            "schema_version": 1,
+            "kind": "whykey.diagnostic_snapshot",
+            "tool": {"name": "whykey", "version": "1.0.0"},
+            "context": {},
+            "request": {"kind": "key", "key_display": "CTRL + X"},
+            "report": static_report(),
+        });
+        fs::write(&file, serde_json::to_string_pretty(&snapshot).unwrap()).unwrap();
+
+        let documents = load(&file).unwrap();
+        let text = render_text(&documents);
+        assert!(text.contains("CTRL + X"));
+        assert!(text.contains("Readline"));
+        let json: Value = serde_json::from_str(&render_json(&documents, 2)).unwrap();
+        assert_eq!(json["kind"], "whykey.diagnostic_snapshot");
+        assert_eq!(json["report"]["key_display"], "CTRL + X");
+        let _ = fs::remove_file(file);
     }
 
     fn tempfile_path() -> std::path::PathBuf {

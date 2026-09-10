@@ -46,6 +46,7 @@ impl Labwc {
             Ok(value) => value,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "labwc",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -65,6 +66,7 @@ impl Labwc {
                     .into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "labwc",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -76,6 +78,7 @@ impl Labwc {
             details.push(format!("binding: {}", binding.action));
         }
         LayerResult {
+            binding: None,
             layer: "labwc",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

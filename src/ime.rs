@@ -94,6 +94,7 @@ pub fn inspect() -> LayerResult {
 pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     if detections.is_empty() {
         return LayerResult {
+            binding: None,
             layer: "Input method",
             id: LayerId::Ime,
             outcome: Outcome::Pass,
@@ -104,6 +105,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
 
     let mut details = Vec::new();
     let mut runtime_active = false;
+    let mut runtime_inactive = false;
     for detection in detections {
         details.push(format!("detected: {}", detection.engine));
         details.extend(
@@ -123,6 +125,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         }
         if let Some(state) = &detection.state {
             runtime_active |= state == "active";
+            runtime_inactive |= matches!(state.as_str(), "inactive" | "closed");
             details.push(format!("runtime state: {state}"));
         }
         if let Some(error) = &detection.query_error {
@@ -133,11 +136,14 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         "committed text may differ from the physical key; Compose/dead-key history and application-side preedit state remain unobserved".into(),
     );
     LayerResult {
+        binding: None,
         layer: "Input method",
         id: LayerId::Ime,
         outcome: Outcome::UncertainContinues,
         summary: if runtime_active {
             "an active input method may transform this input before text is committed".into()
+        } else if runtime_inactive {
+            "input method was detected but inactive or closed; application-side text transformation remains unobserved".into()
         } else {
             "an input-method context may transform this input before text is committed".into()
         },
@@ -433,6 +439,22 @@ mod tests {
         assert_eq!(fcitx5_state(Some(1)).as_deref(), Some("inactive"));
         assert_eq!(fcitx5_state(Some(2)).as_deref(), Some("active"));
         assert_eq!(fcitx5_state(Some(3)), None);
+    }
+
+    #[test]
+    fn inactive_fcitx_is_not_described_as_an_active_transformer() {
+        let result = inspect_with_detections(&[Detection {
+            engine: "fcitx5".into(),
+            sources: vec!["GTK_IM_MODULE=fcitx".into()],
+            processes: vec!["fcitx5".into()],
+            active_engine: Some("keyboard-us".into()),
+            state: Some("inactive".into()),
+            query_error: None,
+        }]);
+
+        assert!(result.summary.contains("inactive or closed"));
+        assert!(!result.summary.contains("active input method"));
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
     }
 
     #[test]

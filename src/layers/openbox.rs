@@ -46,6 +46,7 @@ impl Openbox {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
             return LayerResult {
+                binding: None,
                 layer: "Openbox",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -57,6 +58,7 @@ impl Openbox {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "Openbox",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -76,6 +78,7 @@ impl Openbox {
                     .into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "Openbox",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -87,6 +90,7 @@ impl Openbox {
             details.push(format!("binding: {}", binding.action));
         }
         LayerResult {
+            binding: None,
             layer: "Openbox",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

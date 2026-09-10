@@ -106,6 +106,7 @@ impl I3 {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "i3",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -135,6 +136,7 @@ impl I3 {
 
         if exact_matches.is_empty() && possible_matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "i3",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -173,6 +175,7 @@ impl I3 {
             }
         };
         LayerResult {
+            binding: None,
             layer: "i3",
             id: LayerId::Compositor,
             outcome,

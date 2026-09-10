@@ -25,6 +25,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             Ok(value) => value,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: kind.layer_name(),
                     id: LayerId::Terminal,
                     outcome: Outcome::Unknown,
@@ -40,6 +41,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             Ok(value) => value,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: kind.layer_name(),
                     id: LayerId::Terminal,
                     outcome: Outcome::Unknown,
@@ -52,6 +54,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     }
     let Some(path) = config_path(kind) else {
         return LayerResult {
+            binding: None,
             layer: kind.layer_name(),
             id: LayerId::Terminal,
             outcome: Outcome::Unknown,
@@ -63,6 +66,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         Ok(content) => content,
         Err(error) => {
             return LayerResult {
+                binding: None,
                 layer: kind.layer_name(),
                 id: LayerId::Terminal,
                 outcome: Outcome::Unknown,
@@ -87,6 +91,7 @@ fn inspect_bindings(
         .find(|binding| &binding.trigger == key)
     else {
         return LayerResult {
+            binding: None,
             layer: kind.layer_name(),
             id: LayerId::Terminal,
             outcome: Outcome::Pass,
@@ -104,6 +109,7 @@ fn inspect_bindings(
             "this binding belongs to a non-default WezTerm key table; its active state is runtime-dependent".into(),
         );
         return LayerResult {
+            binding: None,
             layer: kind.layer_name(),
             id: LayerId::Terminal,
             outcome: Outcome::Unknown,
@@ -114,6 +120,7 @@ fn inspect_bindings(
     if let Some(output) = &binding.output {
         details.push(format!("sequence: {}", format_bytes(output)));
         return LayerResult {
+            binding: None,
             layer: kind.layer_name(),
             id: LayerId::Terminal,
             outcome: Outcome::HandledAndPassed,
@@ -123,6 +130,7 @@ fn inspect_bindings(
     }
     if action_forwards(&binding.action) {
         return LayerResult {
+            binding: None,
             layer: kind.layer_name(),
             id: LayerId::Terminal,
             outcome: Outcome::HandledAndPassed,
@@ -132,6 +140,7 @@ fn inspect_bindings(
     }
     if action_is_consuming(&binding.action) {
         return LayerResult {
+            binding: None,
             layer: kind.layer_name(),
             id: LayerId::Terminal,
             outcome: Outcome::Consumed,
@@ -141,6 +150,7 @@ fn inspect_bindings(
     }
     details.push("action semantics are terminal-specific".into());
     LayerResult {
+        binding: None,
         layer: kind.layer_name(),
         id: LayerId::Terminal,
         outcome: Outcome::Unknown,
@@ -162,6 +172,7 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
             Err(error) => {
                 return (
                     LayerResult {
+                        binding: None,
                         layer: kind.layer_name(),
                         id: LayerId::Terminal,
                         outcome: Outcome::Unknown,
@@ -191,6 +202,7 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
             Err(error) => {
                 return (
                     LayerResult {
+                        binding: None,
                         layer: kind.layer_name(),
                         id: LayerId::Terminal,
                         outcome: Outcome::Unknown,
@@ -213,6 +225,7 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
     let Some(path) = config_path(kind) else {
         return (
             LayerResult {
+                binding: None,
                 layer: kind.layer_name(),
                 id: LayerId::Terminal,
                 outcome: Outcome::Unknown,
@@ -227,6 +240,7 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
         Err(error) => {
             return (
                 LayerResult {
+                    binding: None,
                     layer: kind.layer_name(),
                     id: LayerId::Terminal,
                     outcome: Outcome::Unknown,
@@ -262,6 +276,7 @@ pub fn detected_name() -> Option<&'static str> {
 
 fn not_applicable(message: &str) -> LayerResult {
     LayerResult {
+        binding: None,
         layer: "Terminal adapter",
         id: LayerId::Terminal,
         outcome: Outcome::Pass,

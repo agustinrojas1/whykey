@@ -46,6 +46,7 @@ impl River {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "River",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -60,6 +61,7 @@ impl River {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "River",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -78,6 +80,7 @@ impl River {
             "River init reload state, mode, and runtime map precedence remain conditional".into(),
         );
         LayerResult {
+            binding: None,
             layer: "River",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

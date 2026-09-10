@@ -453,6 +453,25 @@ fn doctor_returns_structured_json() {
 }
 
 #[test]
+fn doctor_schema_v2_includes_safe_next_steps() {
+    let output = binary()
+        .args(["--json", "--schema-version", "2", "doctor"])
+        .output()
+        .unwrap();
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["operation"], "doctor");
+    assert!(value["next_steps"].is_array());
+    let next_steps = value["next_steps"].as_array().unwrap();
+    assert!(
+        next_steps
+            .iter()
+            .all(|step| step.as_str().is_some_and(|text| !text.contains("reload")))
+    );
+}
+
+#[test]
 fn doctor_reports_a_keyd_configuration_as_remapper_evidence() {
     let base = temp_dir("doctor-keyd");
     fs::create_dir_all(&base).unwrap();
@@ -693,6 +712,102 @@ fn replay_preserves_json_documents() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["schema_version"], 1);
     assert_eq!(value["key_display"], "CTRL + Z");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn snapshot_writes_a_replayable_static_envelope() {
+    let base = temp_dir("snapshot");
+    fs::create_dir_all(&base).unwrap();
+    let path = base.join("diagnostic.json");
+
+    let output = binary()
+        .args(["snapshot", "ctrl+z", "--output", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(matches!(output.status.code(), Some(0 | 1)));
+    assert!(output.stdout.is_empty());
+    let snapshot: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(snapshot["kind"], "whykey.diagnostic_snapshot");
+    assert_eq!(snapshot["request"]["key_display"], "CTRL + Z");
+    assert_eq!(snapshot["report"]["operation"], "inspect");
+
+    let replay = binary()
+        .args(["replay", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(replay.status.success());
+    assert!(String::from_utf8_lossy(&replay.stdout).contains("CTRL + Z"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn diff_compares_saved_reports_without_querying_the_desktop() {
+    let base = temp_dir("diff");
+    fs::create_dir_all(&base).unwrap();
+    let before = base.join("before.json");
+    let after = base.join("after.json");
+    let report = |summary: &str| {
+        serde_json::json!({
+            "schema_version": 1,
+            "key": {"modifiers": 4, "key": "X"},
+            "key_display": "CTRL + X",
+            "confidence": "configured",
+            "layers": [{
+                "layer": "Hyprland",
+                "status": "Handled",
+                "propagation": "Stops",
+                "summary": summary,
+                "details": []
+            }]
+        })
+    };
+    fs::write(&before, serde_json::to_string(&report("before")).unwrap()).unwrap();
+    fs::write(&after, serde_json::to_string(&report("after")).unwrap()).unwrap();
+
+    let output = binary()
+        .args(["diff", before.to_str().unwrap(), after.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("path[0].Hyprland"));
+    assert!(text.contains("before"));
+    assert!(text.contains("after"));
+
+    let json_output = binary()
+        .args([
+            "--json",
+            "diff",
+            before.to_str().unwrap(),
+            after.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(json_output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(value["operation"], "diff");
+    assert!(
+        value["changes"]
+            .as_array()
+            .is_some_and(|changes| !changes.is_empty())
+    );
+
+    let v2_output = binary()
+        .args([
+            "--json",
+            "--schema-version",
+            "2",
+            "diff",
+            before.to_str().unwrap(),
+            after.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(v2_output.status.success());
+    let v2: serde_json::Value = serde_json::from_slice(&v2_output.stdout).unwrap();
+    assert_eq!(v2["schema_version"], 2);
     let _ = fs::remove_dir_all(base);
 }
 

@@ -122,6 +122,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                 Propagation::Indeterminate
             };
             return LayerResult {
+                binding: None,
                 layer: "Session context",
                 id: LayerId::Session,
                 outcome: Outcome::from_parts(&status, &propagation),
@@ -132,6 +133,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     }
 
     LayerResult {
+        binding: None,
         layer: "Session context",
         id: LayerId::Session,
         outcome: Outcome::Pass,

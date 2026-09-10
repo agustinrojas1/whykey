@@ -40,6 +40,7 @@ impl X11 {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
             return LayerResult {
+                binding: None,
                 layer: "X11 xbindkeys",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -54,6 +55,7 @@ impl X11 {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "X11 xbindkeys",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -73,6 +75,7 @@ impl X11 {
                     .into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "X11 xbindkeys",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -84,6 +87,7 @@ impl X11 {
             details.push(format!("binding: {}", binding.command));
         }
         LayerResult {
+binding: None,
             layer: "X11 xbindkeys",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

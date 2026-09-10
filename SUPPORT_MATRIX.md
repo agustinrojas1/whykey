@@ -15,6 +15,8 @@ contract shared by the capability registry and tests.
 | `cli.bindings` | cli | Implemented | Enumerate effective bindings from supported adapters. |
 | `cli.conflicts` | cli | Implemented | Compare bindings within matching source and context. |
 | `cli.replay` | cli | Implemented | Render saved schema-v1 and schema-v2 reports without input injection. |
+| `cli.snapshot` | cli | Implemented | Save a versioned static diagnostic snapshot without capturing or injecting input. |
+| `cli.diff` | cli | Implemented | Compare saved snapshots or reports without querying the desktop. |
 | `cli.output.schema-v2` | cli | Implemented | Emit structured context and evidence while preserving schema v1. |
 | `cli.extensions` | cli | Implemented | Run one explicitly selected adapter through the bounded JSON protocol. |
 | `capture.terminal` | capture | Implemented | Capture terminal input when a controlling terminal is available. |

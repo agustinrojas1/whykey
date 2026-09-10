@@ -60,6 +60,7 @@ pub fn inspect() -> LayerResult {
         details.push(format!("display server: {display_server}"));
     }
     LayerResult {
+        binding: None,
         layer: "Desktop compositor",
         id: LayerId::Compositor,
         outcome: Outcome::UncertainContinues,
@@ -73,6 +74,7 @@ pub fn inspect() -> LayerResult {
 /// there is no desktop compositor to query.
 pub fn not_detected() -> LayerResult {
     LayerResult {
+        binding: None,
         layer: "Desktop compositor",
         id: LayerId::Compositor,
         outcome: Outcome::Pass,

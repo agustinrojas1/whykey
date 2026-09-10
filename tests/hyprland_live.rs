@@ -56,7 +56,10 @@ fn restore_submap_verifies_table_result_and_res_false() {
     let mut session =
         HyprlandCaptureSession::open().expect("live Hyprland capture session must open");
     let original = session.saved_submap().to_owned();
-    assert_eq!(original, before, "session must record the pre-test submap exactly");
+    assert_eq!(
+        original, before,
+        "session must record the pre-test submap exactly"
+    );
     assert_eq!(raw_current_submap(), "__whykey_capture");
     session
         .restore_submap()

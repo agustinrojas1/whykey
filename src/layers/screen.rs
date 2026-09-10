@@ -22,6 +22,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     if screen_key_bytes(key).is_some_and(|bytes| bytes == prefix) {
         details.push("this is Screen's command prefix; the next key is read by Screen".into());
         return LayerResult {
+            binding: None,
             layer: "GNU Screen",
             id: LayerId::Multiplexer,
             outcome: Outcome::Consumed,
@@ -47,6 +48,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             || binding.action.starts_with("process")
             || binding.action.starts_with("writebuf");
         return LayerResult {
+            binding: None,
             layer: "GNU Screen",
             id: LayerId::Multiplexer,
             outcome: if forwards {
@@ -75,6 +77,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         ));
         details.push(format!("binding source: {}", binding.source));
         return LayerResult {
+            binding: None,
             layer: "GNU Screen",
             id: LayerId::Multiplexer,
             outcome: Outcome::UncertainContinues,
@@ -84,6 +87,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     }
 
     LayerResult {
+        binding: None,
         layer: "GNU Screen",
         id: LayerId::Multiplexer,
         outcome: Outcome::Pass,

@@ -73,6 +73,7 @@ pub fn inspect_with_detections(
 ) -> LayerResult {
     if detections.is_empty() {
         return LayerResult {
+            binding: None,
             layer: "Input remapper",
             id: LayerId::Remapper,
             outcome: Outcome::Pass,
@@ -114,6 +115,7 @@ pub fn inspect_with_detections(
             .into(),
     );
     LayerResult {
+        binding: None,
         layer: "Input remapper",
         id: LayerId::Remapper,
         outcome: Outcome::UncertainContinues,

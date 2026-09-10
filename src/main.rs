@@ -6,6 +6,7 @@ use whykey::bindings;
 use whykey::capabilities;
 use whykey::command;
 use whykey::conflicts;
+use whykey::diff;
 use whykey::extensions;
 use whykey::focus;
 use whykey::key::{KeyCombo, KeySequence};
@@ -17,6 +18,7 @@ use whykey::listen;
 use whykey::replay;
 use whykey::report;
 use whykey::schema;
+use whykey::snapshot;
 
 /// One source of truth for command vocabulary. Help text, the argument
 /// parser below, and shell completions all derive from [`COMMANDS`]; the
@@ -26,6 +28,26 @@ struct CommandSpec {
     usage: &'static str,
     summary: &'static str,
     advanced: bool,
+}
+
+#[derive(Default)]
+struct InventoryFilters {
+    key: Option<String>,
+    action: Option<String>,
+    source: Option<String>,
+}
+
+struct DoctorState {
+    tty: bool,
+    compositor_context: bool,
+    ghostty: bool,
+    generic_terminal: bool,
+    xkb: bool,
+    evdev: bool,
+    shell_snapshot: bool,
+    ssh: bool,
+    remapper: bool,
+    ime: bool,
 }
 
 const COMMANDS: &[CommandSpec] = &[
@@ -55,13 +77,13 @@ const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "bindings",
-        usage: "whykey bindings [--json] [--schema-version 2]",
+        usage: "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
         summary: "enumerate effective bindings",
         advanced: true,
     },
     CommandSpec {
         name: "conflicts",
-        usage: "whykey conflicts [--json] [--schema-version 2]",
+        usage: "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
         summary: "group duplicate actions",
         advanced: true,
     },
@@ -75,6 +97,18 @@ const COMMANDS: &[CommandSpec] = &[
         name: "replay",
         usage: "whykey replay <file> [--json]",
         summary: "re-render saved reports without injecting input",
+        advanced: true,
+    },
+    CommandSpec {
+        name: "snapshot",
+        usage: "whykey snapshot <combination> [--output PATH]",
+        summary: "save a static diagnostic snapshot without capturing input",
+        advanced: true,
+    },
+    CommandSpec {
+        name: "diff",
+        usage: "whykey diff <before> <after> [--json]",
+        summary: "compare saved snapshots without querying the desktop",
         advanced: true,
     },
     CommandSpec {
@@ -109,6 +143,8 @@ const LISTEN_COMPLETION_OPTIONS: &[&str] = &[
     "--output",
     "--verbose",
 ];
+const SNAPSHOT_COMPLETION_OPTIONS: &[&str] = &["--output"];
+const INVENTORY_FILTER_OPTIONS: &[&str] = &["--key", "--action", "--source"];
 
 /// Primary help leads with the common use; advanced commands follow.
 /// Every usage line comes from [`COMMANDS`], so help, the parser, and
@@ -125,9 +161,30 @@ fn help_text() -> String {
         output.push_str(&format!("  {}\n    {}\n", command.usage, command.summary));
     }
     output.push_str(
-        "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey is read-only. It never changes configuration.",
+        "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey does not edit configuration or execute shortcuts. Native Hyprland listen temporarily changes the compositor session and restores it when capture ends.",
     );
     output
+}
+
+fn parse_inventory_filters(
+    arguments: Vec<String>,
+    usage: &str,
+) -> Result<InventoryFilters, String> {
+    let mut filters = InventoryFilters::default();
+    let mut arguments = arguments.into_iter();
+    while let Some(option) = arguments.next() {
+        let target = match option.as_str() {
+            "--key" => &mut filters.key,
+            "--action" => &mut filters.action,
+            "--source" => &mut filters.source,
+            _ => return Err(format!("usage is `{usage}`")),
+        };
+        let Some(value) = arguments.next().filter(|value| !value.is_empty()) else {
+            return Err(format!("{option} requires a non-empty value"));
+        };
+        *target = Some(value);
+    }
+    Ok(filters)
 }
 
 fn main() -> ExitCode {
@@ -328,18 +385,30 @@ fn main() -> ExitCode {
         return run_capabilities(json, all, schema_version);
     }
     if argument == "bindings" {
-        if arguments.next().is_some() {
-            eprintln!("error: usage is `whykey bindings [--json]`");
-            return ExitCode::from(2);
-        }
-        return run_bindings(json, schema_version);
+        let filters = match parse_inventory_filters(
+            arguments.collect(),
+            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
+        ) {
+            Ok(filters) => filters,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        return run_bindings(json, schema_version, filters);
     }
     if argument == "conflicts" {
-        if arguments.next().is_some() {
-            eprintln!("error: usage is `whykey conflicts [--json]`");
-            return ExitCode::from(2);
-        }
-        return run_conflicts(json, schema_version);
+        let filters = match parse_inventory_filters(
+            arguments.collect(),
+            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--json] [--schema-version 2]",
+        ) {
+            Ok(filters) => filters,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::from(2);
+            }
+        };
+        return run_conflicts(json, schema_version, filters);
     }
     if argument == "extension" {
         let Some(program) = arguments.next() else {
@@ -363,6 +432,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
         return run_replay(path, json, schema_version);
+    }
+    if argument == "snapshot" {
+        return run_snapshot(arguments.collect());
+    }
+    if argument == "diff" {
+        let paths: Vec<_> = arguments.collect();
+        if paths.len() != 2 {
+            eprintln!("error: usage is `whykey diff <before> <after> [--json]`");
+            return ExitCode::from(2);
+        }
+        return run_diff(paths, json, schema_version);
     }
     if argument == "shell-init" {
         match arguments.next().as_deref() {
@@ -466,8 +546,12 @@ fn completions(shell: &str) -> String {
     COMPREPLY=( $(compgen -W "__LISTEN_OPTIONS__ __COMMON_OPTIONS__" -- "$cur") )
   elif [[ "${COMP_WORDS[1]}" == "inspect" ]]; then
     COMPREPLY=( $(compgen -W "__INSPECT_OPTIONS__ __COMMON_OPTIONS__" -- "$cur") )
-  elif [[ "${COMP_WORDS[1]}" == "doctor" || "${COMP_WORDS[1]}" == "bindings" || "${COMP_WORDS[1]}" == "conflicts" ]]; then
+  elif [[ "${COMP_WORDS[1]}" == "doctor" || "${COMP_WORDS[1]}" == "diff" ]]; then
     COMPREPLY=( $(compgen -W "__COMMON_OPTIONS__" -- "$cur") )
+  elif [[ "${COMP_WORDS[1]}" == "bindings" || "${COMP_WORDS[1]}" == "conflicts" ]]; then
+    COMPREPLY=( $(compgen -W "__COMMON_OPTIONS__ __INVENTORY_FILTER_OPTIONS__" -- "$cur") )
+  elif [[ "${COMP_WORDS[1]}" == "snapshot" ]]; then
+    COMPREPLY=( $(compgen -W "__SNAPSHOT_OPTIONS__" -- "$cur") )
   elif [[ "${COMP_WORDS[1]}" == "capabilities" ]]; then
     COMPREPLY=( $(compgen -W "__COMMON_OPTIONS__ --all" -- "$cur") )
   elif [[ "${COMP_WORDS[1]}" == "shell-init" || "${COMP_WORDS[1]}" == "completions" ]]; then
@@ -486,6 +570,9 @@ _whykey() {
     '--schema-version[select JSON schema version]:version:(1 2)' \
     '--verbose[show every route layer]' \
     '--all[list the complete adapter inventory]' \
+    '--key[filter by key]:text:' \
+    '--action[filter by action]:text:' \
+    '--source[filter by source]:text:' \
     '--pid[inspect process ancestry]:pid:' \
     '--focused[inspect focused window]' \
     '--instance[select a Hyprland instance]:instance:' \
@@ -509,6 +596,9 @@ complete -c whykey -l json -d 'emit JSON'
 complete -c whykey -l json-v2 -d 'emit JSON schema v2'
 complete -c whykey -l schema-version -r -a '1 2' -d 'select JSON schema version'
 complete -c whykey -l verbose -d 'show every route layer'
+complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l key -r -d 'filter by key'
+complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l action -r -d 'filter by action'
+complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l source -r -d 'filter by source'
 complete -c whykey -n '__fish_seen_subcommand_from capabilities' -l all -d 'list the complete adapter inventory'
 complete -c whykey -l pid -r -d 'inspect the process ancestry rooted at this PID'
 complete -c whykey -l focused -d 'inspect the focused window process'
@@ -523,6 +613,7 @@ complete -c whykey -s e -l evdev -d 'capture Linux input events before the compo
 complete -c whykey -l device -r -d 'read one /dev/input/event device'
 complete -c whykey -n '__fish_seen_subcommand_from listen' -l ndjson -d 'emit one compact schema-v2 JSON record per captured event'
 complete -c whykey -n '__fish_seen_subcommand_from listen' -l output -r -d 'write captured JSON reports to a file'
+complete -c whykey -n '__fish_seen_subcommand_from snapshot' -l output -r -d 'write a static diagnostic snapshot to a file'
 "#,
         _ => unreachable!("completions only accepts supported shells"),
     }
@@ -534,6 +625,14 @@ complete -c whykey -n '__fish_seen_subcommand_from listen' -l output -r -d 'writ
         ("__COMMON_OPTIONS__", common_options),
         ("__INSPECT_OPTIONS__", inspect_options),
         ("__LISTEN_OPTIONS__", listen_options),
+        (
+            "__SNAPSHOT_OPTIONS__",
+            SNAPSHOT_COMPLETION_OPTIONS.join(" "),
+        ),
+        (
+            "__INVENTORY_FILTER_OPTIONS__",
+            INVENTORY_FILTER_OPTIONS.join(" "),
+        ),
     ] {
         script = script.replace(placeholder, &value);
     }
@@ -687,9 +786,14 @@ fn run_capabilities(json: bool, all: bool, schema_version: u8) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_bindings(json: bool, schema_version: u8) -> ExitCode {
+fn run_bindings(json: bool, schema_version: u8, filters: InventoryFilters) -> ExitCode {
     let inventory = command::with_deadline(command::configured_diagnostic_timeout(), || {
-        bindings::current()
+        bindings::filter(
+            bindings::current(),
+            filters.key.as_deref(),
+            filters.action.as_deref(),
+            filters.source.as_deref(),
+        )
     });
     if json {
         print!("{}", bindings::render_json(&inventory, schema_version));
@@ -703,9 +807,14 @@ fn run_bindings(json: bool, schema_version: u8) -> ExitCode {
     }
 }
 
-fn run_conflicts(json: bool, schema_version: u8) -> ExitCode {
+fn run_conflicts(json: bool, schema_version: u8, filters: InventoryFilters) -> ExitCode {
     let report = command::with_deadline(command::configured_diagnostic_timeout(), || {
-        conflicts::current()
+        conflicts::filter(
+            conflicts::current(),
+            filters.key.as_deref(),
+            filters.action.as_deref(),
+            filters.source.as_deref(),
+        )
     });
     if json {
         print!("{}", conflicts::render_json(&report, schema_version));
@@ -765,6 +874,102 @@ fn run_replay(path: String, json: bool, schema_version: u8) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_snapshot(arguments: Vec<String>) -> ExitCode {
+    let mut arguments = arguments.into_iter();
+    let Some(combination) = arguments.next() else {
+        eprintln!("error: usage is `whykey snapshot <combination> [--output PATH]`");
+        return ExitCode::from(2);
+    };
+    if combination == "-h" || combination == "--help" {
+        println!("Usage: whykey snapshot <combination> [--output PATH]");
+        println!("\nSave a static diagnostic snapshot. No key is captured or injected.");
+        return ExitCode::SUCCESS;
+    }
+    let mut output_path = None;
+    while let Some(argument) = arguments.next() {
+        if argument != "--output" {
+            eprintln!("error: usage is `whykey snapshot <combination> [--output PATH]`");
+            return ExitCode::from(2);
+        }
+        let Some(path) = arguments.next() else {
+            eprintln!("error: --output requires a path");
+            return ExitCode::from(2);
+        };
+        if path.is_empty() {
+            eprintln!("error: --output requires a non-empty path");
+            return ExitCode::from(2);
+        }
+        output_path = Some(path);
+    }
+
+    let key: KeyCombo = match combination.parse() {
+        Ok(key) => key,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let results = command::with_deadline(command::configured_diagnostic_timeout(), || {
+        inspect_default_chain(&key)
+    });
+    let unavailable = results
+        .iter()
+        .any(|result| result.outcome == Outcome::Unavailable);
+    let value = snapshot::create(&key, &results);
+    if let Some(path) = output_path {
+        if let Err(error) = snapshot::save(std::path::Path::new(&path), &value) {
+            eprintln!("whykey snapshot: could not write {path}: {error}");
+            return ExitCode::from(1);
+        }
+        eprintln!("whykey snapshot: wrote {path}");
+    } else {
+        print!("{}", snapshot::render(&value));
+    }
+    if unavailable {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn run_diff(paths: Vec<String>, json: bool, schema_version: u8) -> ExitCode {
+    let load_one = |path: &str| -> Result<serde_json::Value, String> {
+        let documents =
+            replay::load(std::path::Path::new(path)).map_err(|error| error.to_string())?;
+        if documents.len() != 1 {
+            return Err(format!(
+                "{path} contains {} reports; expected exactly one",
+                documents.len()
+            ));
+        }
+        Ok(documents
+            .into_iter()
+            .next()
+            .expect("one report was validated"))
+    };
+    let before = match load_one(&paths[0]) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("whykey diff: could not read before report: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let after = match load_one(&paths[1]) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("whykey diff: could not read after report: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let changes = diff::compare(&before, &after);
+    if json {
+        print!("{}", diff::render_json(&changes, schema_version));
+    } else {
+        print!("{}", diff::render_text(&changes));
+    }
+    ExitCode::SUCCESS
+}
+
 fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     // One snapshot per command: desktop discovery runs once here.
     let environment = whykey::environment::Environment::collect();
@@ -802,6 +1007,28 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         multiplexer_names.push("zellij");
     }
     let multiplexer_display = &environment.multiplexer;
+
+    let compositor_context_available = ssh
+        || generic_compositor
+        || whykey::registry::DESKTOPS.iter().any(|entry| {
+            entry.doctor.is_some() && {
+                let status = environment.desktop(entry.id);
+                status.applicable && status.ipc
+            }
+        });
+    let doctor_state = DoctorState {
+        tty,
+        compositor_context: compositor_context_available,
+        ghostty,
+        generic_terminal: generic_terminal_fallback,
+        xkb,
+        evdev,
+        shell_snapshot,
+        ssh,
+        remapper: !remappers.is_empty(),
+        ime: !ime.is_empty(),
+    };
+    let next_steps = doctor_next_steps(&doctor_state);
 
     if json {
         // Desktop detection and IPC status come from the registry; the
@@ -858,6 +1085,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 "operation": "doctor",
                 "context": schema::context(),
                 "checks": legacy_value,
+                "next_steps": next_steps.clone(),
             })
         } else {
             legacy_value
@@ -1006,21 +1234,47 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         if ssh {
             println!("  SSH session: yes");
         }
-    }
-
-    let compositor_context_available = ssh
-        || generic_compositor
-        || whykey::registry::DESKTOPS.iter().any(|entry| {
-            entry.doctor.is_some() && {
-                let status = environment.desktop(entry.id);
-                status.applicable && status.ipc
+        if !next_steps.is_empty() {
+            println!("\nNext steps:");
+            for step in &next_steps {
+                println!("- {step}");
             }
-        });
+        }
+    }
     if tty && compositor_context_available && (ghostty || generic_terminal_fallback) {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
     }
+}
+
+fn doctor_next_steps(state: &DoctorState) -> Vec<&'static str> {
+    let mut steps = Vec::new();
+    if !state.tty {
+        steps.push("run whykey from a controlling terminal");
+    }
+    if !state.compositor_context && !state.ssh {
+        steps.push("run whykey inside the desktop session to identify the compositor");
+    }
+    if !state.ghostty && !state.generic_terminal {
+        steps.push("install or configure a supported terminal adapter");
+    }
+    if !state.xkb {
+        steps.push("install xkbcommon-tools for layout-aware keycode translation");
+    }
+    if !state.evdev {
+        steps.push("grant read access to /dev/input/event* before using --evdev");
+    }
+    if !state.shell_snapshot {
+        steps.push("load shell-init in the current shell for live shell bindings");
+    }
+    if state.remapper {
+        steps.push("compare remapper evidence with the physical capture; timing and routing remain conditional");
+    }
+    if state.ime {
+        steps.push("check application-side Compose/dead-key or preedit state when text differs");
+    }
+    steps
 }
 
 fn shell_snapshot_available(shell: &str) -> bool {
@@ -1087,5 +1341,48 @@ mod tests {
         let names: Vec<_> = COMMANDS.iter().map(|command| command.name).collect();
         assert!(names.contains(&"inspect"));
         assert!(names.contains(&"doctor"));
+    }
+
+    #[test]
+    fn doctor_next_steps_are_specific_and_safe() {
+        let steps = doctor_next_steps(&DoctorState {
+            tty: false,
+            compositor_context: false,
+            ghostty: false,
+            generic_terminal: false,
+            xkb: false,
+            evdev: false,
+            shell_snapshot: false,
+            ssh: false,
+            remapper: true,
+            ime: true,
+        });
+        assert!(
+            steps
+                .iter()
+                .any(|step| step.contains("controlling terminal"))
+        );
+        assert!(steps.iter().any(|step| step.contains("xkbcommon-tools")));
+        assert!(steps.iter().any(|step| step.contains("physical capture")));
+        assert!(steps.iter().all(|step| !step.contains("reload")));
+    }
+
+    #[test]
+    fn parses_inventory_filter_options_without_normalizing_values() {
+        let filters = parse_inventory_filters(
+            vec![
+                "--key".into(),
+                "CTRL+X".into(),
+                "--action".into(),
+                "Open Terminal".into(),
+                "--source".into(),
+                "Hyprland".into(),
+            ],
+            "usage",
+        )
+        .unwrap();
+        assert_eq!(filters.key.as_deref(), Some("CTRL+X"));
+        assert_eq!(filters.action.as_deref(), Some("Open Terminal"));
+        assert_eq!(filters.source.as_deref(), Some("Hyprland"));
     }
 }

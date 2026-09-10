@@ -1,3 +1,9 @@
+whykey (1.0.1) unstable; urgency=medium
+
+  * Harden temporary Hyprland capture cleanup and offline diagnostics.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Wed, 09 Sep 2026 12:00:00 +0000
+
 whykey (1.0.0) unstable; urgency=medium
 
   * Initial release.

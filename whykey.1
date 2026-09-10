@@ -1,4 +1,4 @@
-.TH WHYKEY 1 "September 2026" "whykey 1.0.0" "User Commands"
+.TH WHYKEY 1 "September 2026" "whykey 1.0.1" "User Commands"
 .SH NAME
 whykey \- explain which layer handles a keyboard shortcut
 .B whykey
@@ -84,8 +84,9 @@ literal modifier-insensitivity option; Lua is never executed. Same-key
 bindings in inactive submaps are listed as inactive,
 while dynamic configuration, unknown application modes, and
 device-specific physical origins remain conditional unless an evdev capture
-provides a matching device and keycode; layout-dependent mappings are still
-shown with their possible XKB offset. Malformed individual
+provides a matching device and keycode; evdev keycodes are converted to the
+XKB namespace exactly once. If the active layout is not exposed, Whykey does
+not invent a US layout. Malformed individual
 Hyprland binding entries are reported and lower confidence rather than
 discarding valid entries.
 .SH COMMANDS
@@ -113,8 +114,11 @@ running. The selection is scoped to this inspection and does not change the
 user's environment.
 .TP
 .B listen
-Capture the next key reaching the terminal and inspect it. Press Escape twice
-within 300 milliseconds to exit. Use
+Capture the next key reaching the terminal or, when available, through a
+temporary Hyprland hook. Native Hyprland capture changes the compositor
+session state temporarily and restores the previous submap before reporting;
+it does not edit configuration files. Press Escape twice within 300
+milliseconds to exit. Use
 .B --repeat
 to capture more than one event.
 .B --timeout seconds
@@ -130,6 +134,18 @@ compositor. This mode is read-only and does not grab devices; without
 .B --device
 it scans
 .IR /dev/input/event* .
+.TP
+.B snapshot combination [--output path]
+Save a versioned static diagnostic snapshot for one key combination. The
+snapshot records the structured inspection result and its context; this
+command does not capture or inject keyboard input. Use
+.B replay
+to render the saved snapshot offline.
+.TP
+.B diff before after [--json]
+Compare two saved snapshots or reports without querying the current desktop.
+The text form lists changed context, request, and route layers; the JSON form
+emits a versioned list of before/after values.
 .TP
 .B doctor
 Check read-only prerequisites and report which integrations are available.
@@ -147,12 +163,18 @@ from integrations unavailable in the current session.
 .B bindings
 Enumerate effective bindings exposed by detected compositor adapters. The
 versioned output marks the inventory incomplete when application, plugin,
-inhibitor, or firmware state is not observable.
+inhibitor, or firmware state is not observable. Use
+.B --key , --action , and
+.B --source
+to filter the enumerated fields case-insensitively.
 .TP
 .B conflicts
 Compare the enumerated bindings for duplicate actions in the same source,
 key, and context. Precedence and runtime activation that cannot be observed
-are reported as possible conflicts.
+are reported as possible conflicts. The same
+.B --key , --action , and
+.B --source
+filters apply to the conflict list.
 .TP
 .BI extension\ program\ combination
 Run one explicitly selected application extension through the versioned JSON

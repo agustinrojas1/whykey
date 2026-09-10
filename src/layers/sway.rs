@@ -108,6 +108,7 @@ impl Sway {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "Sway",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -143,6 +144,7 @@ impl Sway {
 
         if exact_matches.is_empty() && possible_matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "Sway",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -183,6 +185,7 @@ impl Sway {
             }
         };
         LayerResult {
+            binding: None,
             layer: "Sway",
             id: LayerId::Compositor,
             outcome,

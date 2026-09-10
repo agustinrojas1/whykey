@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.1] - 2026-09-09
+
+### Fixes
+
+- Prevent a stale Hyprland capture cleanup from restoring another listener's submap.
+- Treat an unconfirmed chord release as a timeout and suppress the normal report.
+- Make replay v1-to-v2 conversion independent of the machine that renders it.
+- Compare snapshot/report sequences and repeated route layers without collapsing entries.
+- Redact shell identity and private paths from newly created snapshots.
+
+### Compatibility and packaging
+
+- `whykey diff --json --schema-version 2` now emits a schema-v2 envelope.
+- Validate the declared Rust 1.85 MSRV with Clippy and make CI derive source archive names from Cargo metadata.
+
 ## [1.0.0] - 2026-09-07
 
 First general-availability release of Whykey following release-candidate verification.

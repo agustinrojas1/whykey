@@ -52,6 +52,7 @@ impl Mate {
         let (bindings, errors) = load_bindings();
         if bindings.is_empty() && !errors.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "MATE",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -70,6 +71,7 @@ impl Mate {
                 .collect::<Vec<_>>();
             details.extend(errors);
             return LayerResult {
+                binding: None,
                 layer: "MATE",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -95,6 +97,7 @@ impl Mate {
         }
         details.extend(errors);
         LayerResult {
+            binding: None,
             layer: "MATE",
             id: LayerId::Compositor,
             outcome: Outcome::Consumed,

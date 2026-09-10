@@ -31,6 +31,7 @@ pub fn inspect_for_pid_with_source(
                 details.push(format!("target selection source: {source}"));
             }
             return LayerResult {
+                binding: None,
                 layer: "Interactive application",
                 id: LayerId::Application,
                 outcome: Outcome::Unavailable,
@@ -43,6 +44,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("target selection source: {source}"));
         }
         return LayerResult {
+            binding: None,
             layer: "Interactive application",
             id: LayerId::Application,
             outcome: Outcome::Pass,
@@ -64,6 +66,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("runtime mapping: {mapping}"));
             details.push("mapping queried through Neovim RPC".into());
             return LayerResult {
+                binding: None,
                 layer: "Neovim",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -75,6 +78,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("mapping: {mapping}"));
             details.push("Neovim mode and plugin precedence are runtime-dependent".into());
             return LayerResult {
+                binding: None,
                 layer: "Neovim",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -85,6 +89,7 @@ pub fn inspect_for_pid_with_source(
         details.push("no matching mapping found in Neovim RPC or init.lua/init.vim".into());
         details.push("plugins and runtime mappings were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "Neovim",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -97,6 +102,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("runtime mapping: {mapping}"));
             details.push("mapping queried through Vim remote expression".into());
             return LayerResult {
+                binding: None,
                 layer: "Vim",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -108,6 +114,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("mapping: {mapping}"));
             details.push("Vim mode and plugin precedence are runtime-dependent".into());
             return LayerResult {
+                binding: None,
                 layer: "Vim",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -118,6 +125,7 @@ pub fn inspect_for_pid_with_source(
         details.push("no matching mapping found in Vim RPC or vimrc".into());
         details.push("plugins and runtime mappings were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "Vim",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -130,6 +138,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("runtime mapping: {mapping}"));
             details.push("mapping queried through emacsclient key-binding".into());
             return LayerResult {
+                binding: None,
                 layer: "Emacs",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -142,6 +151,7 @@ pub fn inspect_for_pid_with_source(
             details
                 .push("Emacs major/minor mode and keymap precedence are runtime-dependent".into());
             return LayerResult {
+                binding: None,
                 layer: "Emacs",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -152,6 +162,7 @@ pub fn inspect_for_pid_with_source(
         details.push("no matching mapping found in Emacs init files".into());
         details.push("major/minor mode and package mappings were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "Emacs",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -164,6 +175,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("mapping: {mapping}"));
             details.push("Helix mode and runtime/plugin precedence are conditional".into());
             return LayerResult {
+                binding: None,
                 layer: "Helix",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -174,6 +186,7 @@ pub fn inspect_for_pid_with_source(
         details.push("no matching mapping found in Helix config.toml".into());
         details.push("mode and runtime/plugin mappings were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "Helix",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -186,6 +199,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("mapping: {mapping}"));
             details.push("Micro mode and plugin precedence are conditional".into());
             return LayerResult {
+                binding: None,
                 layer: "Micro",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -196,6 +210,7 @@ pub fn inspect_for_pid_with_source(
         details.push("no matching mapping found in Micro bindings.json".into());
         details.push("plugin and mode mappings were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "Micro",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -208,6 +223,7 @@ pub fn inspect_for_pid_with_source(
             details.push(format!("mapping: {mapping}"));
             details.push("Kakoune context and runtime/plugin precedence are conditional".into());
             return LayerResult {
+                binding: None,
                 layer: "Kakoune",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -218,6 +234,7 @@ pub fn inspect_for_pid_with_source(
         details.push("no matching mapping found in kakrc".into());
         details.push("runtime and plugin mappings were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "Kakoune",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -233,6 +250,7 @@ pub fn inspect_for_pid_with_source(
                     .into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "VS Code",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -245,6 +263,7 @@ pub fn inspect_for_pid_with_source(
             "chords, `when` clauses, extensions, and runtime context were not inspected".into(),
         );
         return LayerResult {
+            binding: None,
             layer: "VS Code",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -260,6 +279,7 @@ pub fn inspect_for_pid_with_source(
                     .into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "JetBrains IDE",
                 id: LayerId::Application,
                 outcome: Outcome::HandledUncertain,
@@ -271,6 +291,7 @@ pub fn inspect_for_pid_with_source(
         details
             .push("IDE context, plugins, and runtime keymap overrides were not inspected".into());
         return LayerResult {
+            binding: None,
             layer: "JetBrains IDE",
             id: LayerId::Application,
             outcome: Outcome::Unknown,
@@ -280,6 +301,7 @@ pub fn inspect_for_pid_with_source(
     }
     details.push("application mappings are not inspected yet".into());
     LayerResult {
+        binding: None,
         layer: "Interactive application",
         id: LayerId::Application,
         outcome: Outcome::Unknown,

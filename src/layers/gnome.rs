@@ -54,6 +54,7 @@ impl Gnome {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "GNOME",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -69,6 +70,7 @@ impl Gnome {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "GNOME",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -95,6 +97,7 @@ impl Gnome {
             ));
         }
         LayerResult {
+            binding: None,
             layer: "GNOME",
             id: LayerId::Compositor,
             outcome: Outcome::Consumed,

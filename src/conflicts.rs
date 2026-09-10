@@ -96,6 +96,34 @@ pub fn current() -> Report {
     }
 }
 
+pub fn filter(
+    mut report: Report,
+    key: Option<&str>,
+    action: Option<&str>,
+    source: Option<&str>,
+) -> Report {
+    report.conflicts.retain(|conflict| {
+        key.is_none_or(|needle| {
+            conflict
+                .key
+                .to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase())
+        }) && action.is_none_or(|needle| {
+            conflict.actions.iter().any(|value| {
+                value
+                    .to_ascii_lowercase()
+                    .contains(&needle.to_ascii_lowercase())
+            })
+        }) && source.is_none_or(|needle| {
+            conflict
+                .source
+                .to_ascii_lowercase()
+                .contains(&needle.to_ascii_lowercase())
+        })
+    });
+    report
+}
+
 pub fn render_text(report: &Report) -> String {
     let mut output = String::from("whykey conflicts\n\n");
     if report.conflicts.is_empty() {
@@ -194,5 +222,35 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&render_json(&report, 1)).unwrap();
         assert_eq!(value["schema_version"], 1);
         assert!(value["conflicts"].is_array());
+    }
+
+    #[test]
+    fn filters_conflicts_by_key_action_and_source() {
+        let report = Report {
+            schema_version: 1,
+            conflicts: vec![
+                Conflict {
+                    key: "CTRL+X".into(),
+                    source: "Hyprland".into(),
+                    context: Some("default".into()),
+                    classification: "possible".into(),
+                    actions: vec!["Open terminal".into(), "Open editor".into()],
+                },
+                Conflict {
+                    key: "SUPER+X".into(),
+                    source: "GNOME".into(),
+                    context: Some("global".into()),
+                    classification: "possible".into(),
+                    actions: vec!["Open overview".into(), "Open settings".into()],
+                },
+            ],
+            unavailable: Vec::new(),
+            limitations: Vec::new(),
+        };
+
+        let filtered = filter(report, Some("ctrl+x"), Some("terminal"), Some("hypr"));
+
+        assert_eq!(filtered.conflicts.len(), 1);
+        assert_eq!(filtered.conflicts[0].source, "Hyprland");
     }
 }

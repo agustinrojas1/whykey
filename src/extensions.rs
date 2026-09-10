@@ -190,6 +190,7 @@ fn to_layer(program: &str, result: ExtensionResult) -> LayerResult {
     let mut details = vec![format!("extension: {program}")];
     details.extend(result.details);
     LayerResult {
+        binding: None,
         layer: "External extension",
         id: crate::layers::LayerId::Diagnostic,
         outcome: Outcome::from_parts(&status, &propagation),

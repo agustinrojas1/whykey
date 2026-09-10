@@ -30,6 +30,7 @@ jobs:
         run: |
           python3 tools/generate_support_matrix.py --check
           python3 tools/generate_dependency_provenance.py --check
+          tools/check_package_versions.sh
       - name: Build release binary
         run: cargo build --locked --release
       - name: Assemble release archives

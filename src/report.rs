@@ -1,5 +1,5 @@
 use crate::key::{KeyCombo, KeySequence};
-use crate::layers::{LayerResult, LayerStatus, Propagation, format_bytes};
+use crate::layers::{BindingEvidence, LayerResult, LayerStatus, Propagation, format_bytes};
 use crate::listen::ObservedKey;
 use crate::schema;
 use serde::Serialize;
@@ -61,6 +61,8 @@ struct NdjsonPathEntry<'a> {
     status: LayerStatus,
     propagation: Propagation,
     summary: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binding: Option<&'a BindingEvidence>,
     evidence: Vec<NdjsonEvidence<'a>>,
 }
 
@@ -157,6 +159,7 @@ pub fn render_ndjson(
                 status: layer.status(),
                 propagation: layer.propagation(),
                 summary: &layer.summary,
+                binding: layer.binding.as_ref(),
                 evidence: layer
                     .details
                     .iter()
@@ -314,7 +317,9 @@ fn render_inner(
             "raw event"
         };
         let universal_match = layers.iter().any(|l| {
-            l.layer == "Hyprland" && l.details.iter().any(|d| d.contains("(all submaps)"))
+            l.binding
+                .as_ref()
+                .is_some_and(BindingEvidence::is_universal)
         });
         let encoding_note = match observation.disposition {
             crate::listen::CaptureDisposition::Suppressed => {
@@ -439,7 +444,9 @@ fn render_conclusion(
         match observation.disposition {
             crate::listen::CaptureDisposition::Suppressed => {
                 let universal_match = layers.iter().any(|l| {
-                    l.layer == "Hyprland" && l.details.iter().any(|d| d.contains("(all submaps)"))
+                    l.binding
+                        .as_ref()
+                        .is_some_and(BindingEvidence::is_universal)
                 });
                 if universal_match {
                     output.push_str(
@@ -449,50 +456,63 @@ fn render_conclusion(
                     output.push_str("  Whykey captured and suppressed this event.\n");
                 }
                 if let Some(layer) = layers.iter().find(|l| l.status() == LayerStatus::Handled) {
-                    let action_summary = layer.details.iter().find_map(|d| {
-                        d.strip_prefix("binding: ")
-                            .or_else(|| d.strip_prefix("exact: "))
-                            .or_else(|| d.strip_prefix("device-specific binding: "))
-                            .map(|s| {
-                                let after_semi = s.split("; ").last().unwrap_or(s);
-                                let before_paren =
-                                    after_semi.split(" (").next().unwrap_or(after_semi);
-                                let before_bracket =
-                                    before_paren.split(" [").next().unwrap_or(before_paren);
-                                before_bracket.trim()
-                            })
+                    // Decisions read typed evidence only: detail wording never
+                    // changes the conclusion, and an opaque dispatcher never
+                    // becomes "executed" or "consumed".
+                    let evidence = layer.binding.as_ref();
+                    let action = evidence.and_then(|binding| {
+                        binding
+                            .description
+                            .clone()
+                            .or_else(|| binding.action.clone())
                     });
+                    let opaque = evidence.is_some_and(BindingEvidence::is_opaque);
                     if layer.propagation() == Propagation::Indeterminate {
                         output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
-                        if let Some(action) = action_summary {
+                        if let Some(action) = action {
                             output.push_str(&format!(
                                 "  The configuration describes the action as {action}; Whykey did not execute the dispatcher.\n"
                             ));
                         }
                         return output;
                     }
-                    if let Some(action) = action_summary {
-                        if universal_match {
+                    match (universal_match, opaque, action) {
+                        (true, _, Some(action)) => {
                             output.push_str(&format!(
                                 "  The normal configuration indicates that {} may execute {}.\n",
                                 layer.layer, action
                             ));
-                        } else {
+                        }
+                        (true, _, None) => {
+                            output.push_str(&format!(
+                                "  The normal configuration indicates that {} universal binding may handle {key}.\n",
+                                layer.layer
+                            ));
+                        }
+                        (false, true, Some(action)) => {
+                            output.push_str(&format!(
+                                "  The normal configuration indicates that {} may execute {}; Whykey did not execute the dispatcher.\n",
+                                layer.layer, action
+                            ));
+                        }
+                        (false, true, None) => {
+                            output.push_str(&format!(
+                                "  The normal configuration indicates that {} may handle {key}; Whykey did not execute the dispatcher.\n",
+                                layer.layer
+                            ));
+                        }
+                        (false, false, Some(action)) => {
                             output.push_str(&format!(
                                 "  The normal configuration indicates that {} would run {}.\n",
                                 layer.layer, action
                             ));
                         }
-                    } else if universal_match {
-                        output.push_str(&format!(
-                            "  The normal configuration indicates that {} universal binding may handle {key}.\n",
-                            layer.layer
-                        ));
-                    } else {
-                        output.push_str(&format!(
-                            "  The normal configuration indicates that {} would handle and consume {key}.\n",
-                            layer.layer
-                        ));
+                        (false, false, None) => {
+                            output.push_str(&format!(
+                                "  The normal configuration indicates that {} would handle and consume {key}.\n",
+                                layer.layer
+                            ));
+                        }
                     }
                     return output;
                 }
@@ -642,6 +662,7 @@ mod tests {
     fn renders_a_forwarded_result() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layer = LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Pass,
@@ -666,6 +687,7 @@ mod tests {
         let key: KeyCombo = "ctrl+z".parse().unwrap();
         let layers = [
             LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::HandledAndPassed,
@@ -673,6 +695,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                binding: None,
                 layer: "Readline",
                 id: LayerId::Shell,
                 outcome: Outcome::Consumed,
@@ -692,6 +715,7 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
             LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -699,6 +723,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                binding: None,
                 layer: "Bash / Readline",
                 id: LayerId::Shell,
                 outcome: Outcome::Consumed,
@@ -717,6 +742,7 @@ mod tests {
     fn explains_a_redirected_key() {
         let key: KeyCombo = "ctrl+p".parse().unwrap();
         let layer = LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Redirected,
@@ -735,6 +761,7 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
             LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::HandledAndPassed,
@@ -742,6 +769,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
                 outcome: Outcome::Pass,
@@ -761,6 +789,7 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
             LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::UncertainContinues,
@@ -768,6 +797,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                binding: None,
                 layer: "Ghostty",
                 id: LayerId::Terminal,
                 outcome: Outcome::HandledAndPassed,
@@ -786,6 +816,7 @@ mod tests {
     fn renders_unavailable_before_indeterminate_propagation() {
         let key: KeyCombo = "ctrl+z".parse().unwrap();
         let layer = LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Unavailable,
@@ -804,6 +835,7 @@ mod tests {
         let key: KeyCombo = "ctrl+f".parse().unwrap();
         let layers = [
             LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -811,6 +843,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                binding: None,
                 layer: "Readline",
                 id: LayerId::Shell,
                 outcome: Outcome::Pass,
@@ -868,6 +901,7 @@ mod tests {
         };
         let layers = [
             LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -875,6 +909,7 @@ mod tests {
                 details: vec![],
             },
             LayerResult {
+                binding: None,
                 layer: "Readline",
                 id: LayerId::Shell,
                 outcome: Outcome::Consumed,
@@ -913,6 +948,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
         let layers = [LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Pass,
@@ -951,6 +987,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::PassedThrough,
         };
         let layers = [LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Pass,
@@ -969,6 +1006,17 @@ mod tests {
         );
         assert!(!output.contains("earlier forwarding is confirmed"));
         assert!(output.contains("modifiers latched: unavailable from compositor"));
+    }
+
+    fn opaque_herdr_evidence() -> BindingEvidence {
+        BindingEvidence {
+            dispatcher: Some("__lua".into()),
+            action: Some("__lua 285".into()),
+            description: Some("Herdr".into()),
+            submap: Some("default".into()),
+            scope: crate::layers::BindingScope::Submap("default".into()),
+            source: None,
+        }
     }
 
     #[test]
@@ -995,6 +1043,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult {
+            binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Consumed,
@@ -1006,9 +1055,14 @@ mod tests {
         assert!(output.contains("source: Hyprland"));
         assert!(output.contains("observed key: CTRL + SUPER + RETURN"));
         assert!(output.contains("Whykey captured and suppressed this event."));
+        // An opaque dispatcher never becomes "executed": the conclusion may
+        // name the configured action but must qualify it as unexecuted.
         assert!(
-            output.contains("The normal configuration indicates that Hyprland would run Herdr.")
+            output.contains("The normal configuration indicates that Hyprland may execute Herdr")
         );
+        assert!(output.contains("Whykey did not execute the dispatcher"));
+        assert!(!output.contains("would run Herdr"));
+        assert!(!output.contains("would handle and consume"));
         assert!(!output.contains("forwarding is not confirmed"));
         assert!(!output.contains("earlier forwarding is confirmed"));
     }
@@ -1032,11 +1086,12 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult {
+            binding: Some(opaque_herdr_evidence()),
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,
             summary: "matching binding; runtime effect unknown".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
+            details: vec!["opaque runtime hook with a Herdr label".into()],
         }];
 
         let output = render_observed(&observed, &layers, false);
@@ -1070,12 +1125,19 @@ mod tests {
             source: crate::listen::CaptureSource::Hyprland,
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
+        let universal = BindingEvidence {
+            scope: crate::layers::BindingScope::Universal,
+            ..opaque_herdr_evidence()
+        };
         let layers = [LayerResult {
+            binding: Some(universal),
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Consumed,
             summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr (all submaps)".into()],
+            // No "(all submaps)" marker: the conclusion must follow the
+            // typed scope, never the detail wording.
+            details: vec!["opaque runtime hook with a Herdr label".into()],
         }];
 
         let output = render_observed(&observed, &layers, false);
@@ -1086,6 +1148,92 @@ mod tests {
         assert!(
             output.contains("The normal configuration indicates that Hyprland may execute Herdr.")
         );
+    }
+    fn suppressed_observed() -> ObservedKey {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        ObservedKey {
+            combo: key,
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=36 evdev=28 (press)".into()),
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(28)),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::Hyprland,
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        }
+    }
+
+    fn conclusion_lines(output: &str) -> Vec<&str> {
+        let mut lines = Vec::new();
+        let mut in_result = false;
+        for line in output.lines() {
+            if line == "Result:" {
+                in_result = true;
+                continue;
+            }
+            if in_result {
+                if line.is_empty() || !line.starts_with(' ') {
+                    break;
+                }
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn detail_wording_never_changes_the_conclusion() {
+        let observed = suppressed_observed();
+        let plain = [LayerResult {
+            binding: Some(opaque_herdr_evidence()),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+        let reworded = [LayerResult {
+            binding: Some(opaque_herdr_evidence()),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["a runtime hook labeled Herdr (all submaps)".into()],
+        }];
+        assert_eq!(
+            conclusion_lines(&render_observed(&observed, &plain, false)),
+            conclusion_lines(&render_observed(&observed, &reworded, false)),
+            "the conclusion follows typed evidence, not detail wording"
+        );
+    }
+
+    #[test]
+    fn schema_v2_carries_binding_evidence_while_v1_omits_it() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let layers = [LayerResult {
+            binding: Some(opaque_herdr_evidence()),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::Consumed,
+            summary: "active binding found".into(),
+            details: vec!["binding: __lua 285; Herdr".into()],
+        }];
+        let v1: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
+        assert!(v1["layers"][0].get("binding").is_none());
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 2)).unwrap();
+        let binding = &v2["path"][0]["binding"];
+        assert_eq!(binding["dispatcher"], "__lua");
+        assert_eq!(binding["scope"]["Submap"], "default");
+        assert_eq!(binding["description"], "Herdr");
+        assert_eq!(binding["submap"], "default");
+        assert_eq!(binding["action"], "__lua 285");
     }
 
     #[test]
@@ -1107,6 +1255,7 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult {
+            binding: None,
             layer: "Hyprland",
             id: LayerId::Compositor,
             outcome: Outcome::Pass,
@@ -1134,6 +1283,7 @@ mod tests {
         let sequence: KeySequence = "ctrl+x ctrl+s".parse().unwrap();
         let reports = vec![
             vec![LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -1141,6 +1291,7 @@ mod tests {
                 details: vec![],
             }],
             vec![LayerResult {
+                binding: None,
                 layer: "Hyprland",
                 id: LayerId::Compositor,
                 outcome: Outcome::Consumed,

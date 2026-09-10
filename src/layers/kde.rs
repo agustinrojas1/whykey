@@ -55,6 +55,7 @@ impl Kde {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
             return LayerResult {
+                binding: None,
                 layer: "KDE Plasma",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unavailable,
@@ -69,6 +70,7 @@ impl Kde {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "KDE Plasma",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -87,6 +89,7 @@ impl Kde {
                 "no matching static shortcut found; runtime D-Bus registrations may differ".into(),
             );
             return LayerResult {
+                binding: None,
                 layer: "KDE Plasma",
                 id: LayerId::Compositor,
                 outcome: Outcome::Unknown,
@@ -102,6 +105,7 @@ impl Kde {
             details.push(format!("{}: {action}", binding.group));
         }
         LayerResult {
+            binding: None,
             layer: "KDE Plasma",
             id: LayerId::Compositor,
             outcome: Outcome::HandledUncertain,

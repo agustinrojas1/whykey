@@ -46,6 +46,7 @@ impl Xfce {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "Xfce",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -61,6 +62,7 @@ impl Xfce {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "Xfce",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -74,6 +76,7 @@ impl Xfce {
             details.push(format!("binding: {} ({})", binding.action, binding.context));
         }
         LayerResult {
+            binding: None,
             layer: "Xfce",
             id: LayerId::Compositor,
             outcome: Outcome::Consumed,

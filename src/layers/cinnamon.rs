@@ -47,6 +47,7 @@ impl Cinnamon {
             Ok(bindings) => bindings,
             Err(error) => {
                 return LayerResult {
+                    binding: None,
                     layer: "Cinnamon",
                     id: LayerId::Compositor,
                     outcome: Outcome::Unavailable,
@@ -61,6 +62,7 @@ impl Cinnamon {
             .collect::<Vec<_>>();
         if matches.is_empty() {
             return LayerResult {
+                binding: None,
                 layer: "Cinnamon",
                 id: LayerId::Compositor,
                 outcome: Outcome::Pass,
@@ -86,6 +88,7 @@ impl Cinnamon {
             ));
         }
         LayerResult {
+            binding: None,
             layer: "Cinnamon",
             id: LayerId::Compositor,
             outcome: Outcome::Consumed,

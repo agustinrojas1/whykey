@@ -8,6 +8,8 @@
     {"id": "cli.bindings", "area": "cli", "implemented": true, "summary": "Enumerate effective bindings from supported adapters."},
     {"id": "cli.conflicts", "area": "cli", "implemented": true, "summary": "Compare bindings within matching source and context."},
     {"id": "cli.replay", "area": "cli", "implemented": true, "summary": "Render saved schema-v1 and schema-v2 reports without input injection."},
+    {"id": "cli.snapshot", "area": "cli", "implemented": true, "summary": "Save a versioned static diagnostic snapshot without capturing or injecting input."},
+    {"id": "cli.diff", "area": "cli", "implemented": true, "summary": "Compare saved snapshots or reports without querying the desktop."},
     {"id": "cli.output.schema-v2", "area": "cli", "implemented": true, "summary": "Emit structured context and evidence while preserving schema v1."},
     {"id": "cli.extensions", "area": "cli", "implemented": true, "summary": "Run one explicitly selected adapter through the bounded JSON protocol."},
     {"id": "capture.terminal", "area": "capture", "implemented": true, "summary": "Capture terminal input when a controlling terminal is available."},

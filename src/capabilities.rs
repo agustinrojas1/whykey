@@ -98,6 +98,16 @@ pub fn current() -> Vec<Capability> {
             "whykey replay re-renders saved schema-v1 and schema-v2 reports without injecting input",
         ),
         implemented(
+            "cli.snapshot",
+            "cli",
+            "whykey snapshot saves a versioned static diagnostic report without capturing or injecting input",
+        ),
+        implemented(
+            "cli.diff",
+            "cli",
+            "whykey diff compares saved snapshots or reports without querying the desktop",
+        ),
+        implemented(
             "cli.output.schema-v2",
             "cli",
             "--schema-version 2 (or --json-v2) emits structured context and evidence while v1 remains the default",
