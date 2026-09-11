@@ -530,11 +530,12 @@ pub enum SuppressedHandledOutcome {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapturePreamble {
     Suppressed { universal_match: bool },
     TerminalObserved,
     HyprlandObserved,
+    CompositorObserved { backend: String },
     EvdevObserved,
 }
 
@@ -597,13 +598,27 @@ pub fn evaluate_conclusion(
                 }
             }
             crate::listen::CaptureDisposition::PassedThrough => {
-                preamble = Some(CapturePreamble::HyprlandObserved);
+                preamble = Some(CapturePreamble::CompositorObserved {
+                    backend: observation
+                        .source
+                        .backend_name()
+                        .unwrap_or("compositor")
+                        .to_owned(),
+                });
             }
             crate::listen::CaptureDisposition::ObservedOnly => {
                 preamble = if observation.source.confirms_terminal() {
                     Some(CapturePreamble::TerminalObserved)
-                } else if observation.source.proves_compositor_receipt() {
+                } else if matches!(observation.source, crate::listen::CaptureSource::Hyprland) {
                     Some(CapturePreamble::HyprlandObserved)
+                } else if observation.source.proves_compositor_receipt() {
+                    Some(CapturePreamble::CompositorObserved {
+                        backend: observation
+                            .source
+                            .backend_name()
+                            .unwrap_or("compositor")
+                            .to_owned(),
+                    })
                 } else {
                     Some(CapturePreamble::EvdevObserved)
                 };
@@ -757,6 +772,11 @@ fn render_conclusion(
                 output.push_str(
                     "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
                 );
+            }
+            CapturePreamble::CompositorObserved { backend } => {
+                output.push_str(&format!(
+                    "  The key event was captured by {backend}, but forwarding is not confirmed.\n"
+                ));
             }
             CapturePreamble::TerminalObserved => {
                 output.push_str(
