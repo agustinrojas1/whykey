@@ -1,3 +1,9 @@
+whykey (1.2.0) unstable; urgency=medium
+
+  * Add whykey-vscode and whykey-emacs first-party extensions.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Fri, 11 Sep 2026 15:00:00 +0000
+
 whykey (1.1.0) unstable; urgency=medium
 
   * Add whykey-nvim first-party Neovim extension and read-only doctor check.
