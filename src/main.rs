@@ -64,7 +64,7 @@ const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "listen",
         usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
-        summary: "capture a key and explain its path",
+        summary: "capture a key and explain its path (Hyprland and Sway; Sway is pass-through-only)",
         advanced: false,
     },
     CommandSpec {
@@ -169,7 +169,7 @@ fn help_text() -> String {
         output.push_str(&format!("  {}\n    {}\n", command.usage, command.summary));
     }
     output.push_str(
-        "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen, currently backed by Hyprland, temporarily changes the compositor session and restores it when capture ends.",
+        "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
     );
     output
 }

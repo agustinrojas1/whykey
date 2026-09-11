@@ -1,3 +1,22 @@
+fn query_previous_submap_from_lua() -> Option<String> {
+    let output = run_hyprctl(&[
+        "repl",
+        "return (_G.__whykey_capture and _G.__whykey_capture.previous_submap ~= \"\" and _G.__whykey_capture.previous_submap) or \"default\"",
+    ])
+    .ok()?;
+    let trimmed = output.trim().to_string();
+    if trimmed.is_empty()
+        || trimmed == "default"
+        || trimmed == "unknown request"
+        || trimmed == "none"
+        || trimmed == "\"default\""
+    {
+        Some("default".into())
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// Check Hyprland IPC using the same instance selection as key inspection.
 /// This is public so `doctor` cannot disagree with the inspection path when
 /// the compositor was launched without exporting its instance signature.
