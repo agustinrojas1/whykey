@@ -92,6 +92,26 @@ pub struct XkbState {
 }
 
 impl XkbState {
+    /// Build typed state from a compositor modifier bitmask.  Hyprland's
+    /// socket uses the stable XKB bits for Shift and AltGr; lock state comes
+    /// from the compositor's keyboard snapshot rather than the event mask.
+    pub fn from_modifier_mask(
+        modifier_mask: u32,
+        group: Option<usize>,
+        caps_lock: bool,
+        num_lock: bool,
+        latched_shift: bool,
+    ) -> Self {
+        Self {
+            group,
+            shift: modifier_mask & 1 != 0,
+            altgr: modifier_mask & 128 != 0,
+            caps_lock,
+            num_lock,
+            latched_shift,
+        }
+    }
+
     /// Return the conservative level for the common two/three-level XKB
     /// layouts covered by the parser. Unknown group state is represented by
     /// `None`, so callers can retain conditional evidence.
@@ -620,6 +640,16 @@ xkb_symbols "pc" {
             .keypad_level(),
             Some(1)
         );
+    }
+
+    #[test]
+    fn compositor_modifier_mask_populates_typed_state_without_guessing_group() {
+        let state = XkbState::from_modifier_mask(1 | 128, None, true, false, false);
+        assert_eq!(state.group, None);
+        assert!(state.shift);
+        assert!(state.altgr);
+        assert!(state.caps_lock);
+        assert_eq!(state.level(), None);
     }
 
     #[test]

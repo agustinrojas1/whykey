@@ -1152,12 +1152,17 @@ impl HyprlandCaptureSession {
         let combo = KeyCombo::from_parts(combo_mods, &normalized_base);
 
         // 4. Shifted / AltGr level symbol for alternate display evidence
-        let shift = effective_mask & 1 != 0;
-        let altgr = effective_mask & 128 != 0;
-        let xkb_level = if altgr {
-            usize::from(shift) + 2
+        let xkb_state = crate::xkb::XkbState::from_modifier_mask(
+            effective_mask,
+            (!self.layout_uncertain).then_some(self.group),
+            self.locked_caps,
+            self.locked_num,
+            false,
+        );
+        let xkb_level = if base_key_name.starts_with("KP_") {
+            xkb_state.keypad_level().unwrap_or(0)
         } else {
-            usize::from(shift)
+            xkb_state.level().unwrap_or(0)
         };
         let shifted_keysym = if xkb_level > 0 {
             self.keymap
@@ -1622,6 +1627,53 @@ xkb_symbols "pc" {
                 .unwrap()
                 .contains("shifted keysym: exclam"),
             "alternate evidence must preserve shifted keysym"
+        );
+    }
+
+    #[test]
+    fn typed_xkb_state_selects_altgr_and_numlock_symbols() {
+        let keymap = r#"
+xkb_keymap {
+xkb_keycodes "evdev" {
+    <AE05> = 14;
+    <KP1> = 87;
+};
+xkb_symbols "pc" {
+    key <AE05> {
+        symbols[1] = [ 5, percent, EuroSign ]
+    };
+    key <KP1> {
+        symbols[1] = [ KP_End, KP_1 ]
+    };
+};
+};
+"#;
+        let altgr = HyprlandKeyEvent {
+            token: "tok".into(),
+            xkb_keycode: crate::xkb::XkbKeycode::from(14),
+            event_type: KeyEventType::Press,
+            modifier_mask: 1 | 128,
+        };
+        let observed = decode_test_event(&altgr, Some(keymap), 0, false, false);
+        assert!(
+            observed
+                .alternate_key
+                .as_deref()
+                .is_some_and(|value| value.contains("shifted keysym: EuroSign"))
+        );
+
+        let keypad = HyprlandKeyEvent {
+            token: "tok".into(),
+            xkb_keycode: crate::xkb::XkbKeycode::from(87),
+            event_type: KeyEventType::Press,
+            modifier_mask: 0,
+        };
+        let observed = decode_test_event(&keypad, Some(keymap), 0, false, true);
+        assert!(
+            observed
+                .alternate_key
+                .as_deref()
+                .is_some_and(|value| value.contains("shifted keysym: KP_1"))
         );
     }
 
