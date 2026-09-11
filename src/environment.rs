@@ -36,6 +36,10 @@ pub struct Environment {
     pub selected_compositor: Option<&'static str>,
     /// Every applicable compositor candidate, scored from the same snapshot.
     pub compositor_candidates: Vec<CompositorCandidate>,
+    /// Validated user-owned compositor extension manifests.
+    pub extension_adapters: Vec<crate::extension_adapters::ExtensionAdapter>,
+    /// Non-fatal manifest discovery warnings shared by report surfaces.
+    pub extension_warnings: Vec<crate::extension_adapters::ManifestWarning>,
     /// Per-desktop (applicable, ipc) flags in registry priority order.
     pub desktops: Vec<DesktopStatus>,
 }
@@ -102,6 +106,7 @@ impl Environment {
         let snapshot = crate::util::ProcessSnapshot::collect();
         let hyprland_probe = hyprland::collect_probe();
         let compositor_context = compositor::current_context();
+        let (extension_adapters, extension_warnings) = crate::extension_adapters::discover();
         let desktops = crate::registry::DESKTOPS
             .iter()
             .map(|descriptor| {
@@ -191,6 +196,8 @@ impl Environment {
             ime: ime::detect_with_snapshot(&snapshot),
             selected_compositor,
             compositor_candidates,
+            extension_adapters,
+            extension_warnings,
             desktops,
         }
     }
