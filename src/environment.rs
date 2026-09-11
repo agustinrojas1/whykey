@@ -3,7 +3,7 @@
 //! Adapters reuse this instead of rediscovering the desktop, terminal,
 //! shell, and processes independently.
 
-use crate::layers::{compositor, ghostty, terminal_app};
+use crate::layers::{compositor, ghostty, hyprland, terminal_app};
 use crate::{ime, remapper};
 
 /// Session identity and selected integration points, collected once.
@@ -30,6 +30,7 @@ pub struct Environment {
     /// Read-only pre-compositor and input-method observations captured once
     /// for the command or listener session.
     pub remappers: Vec<remapper::Detection>,
+    pub(crate) hyprland_probe: Option<hyprland::Probe>,
     pub ime: Vec<ime::Detection>,
     /// Selected compositor in inspect priority order, if any.
     pub selected_compositor: Option<&'static str>,
@@ -69,11 +70,22 @@ impl Environment {
     /// Collect every discovery probe once.
     pub fn collect() -> Self {
         let snapshot = crate::util::ProcessSnapshot::collect();
+        let hyprland_probe = hyprland::collect_probe();
         let compositor_context = compositor::current_context();
         let desktops = crate::registry::DESKTOPS
             .iter()
             .map(|descriptor| {
-                DesktopStatus::evaluate(descriptor.id, descriptor.applicable, descriptor.ipc)
+                if descriptor.id == "hyprland" {
+                    DesktopStatus {
+                        id: descriptor.id,
+                        applicable: hyprland_probe.is_some(),
+                        ipc: hyprland_probe
+                            .as_ref()
+                            .is_some_and(hyprland::Probe::ipc_available),
+                    }
+                } else {
+                    DesktopStatus::evaluate(descriptor.id, descriptor.applicable, descriptor.ipc)
+                }
             })
             .collect::<Vec<_>>();
         let selected_compositor = desktops
@@ -131,6 +143,7 @@ impl Environment {
             zellij_session: std::env::var("ZELLIJ_SESSION_NAME").ok(),
             compositor_context,
             remappers: remapper::detect_with_snapshot(&snapshot),
+            hyprland_probe,
             ime: ime::detect_with_snapshot(&snapshot),
             selected_compositor,
             desktops,
