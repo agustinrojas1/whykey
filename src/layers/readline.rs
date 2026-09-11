@@ -10,103 +10,87 @@ pub struct Readline;
 impl Readline {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         if !is_bash() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Unavailable,
-                summary: "current shell is not Bash".into(),
-                details: vec!["Readline mapping was not inspected".into()],
-            };
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Unavailable,
+                "current shell is not Bash",
+                vec!["Readline mapping was not inspected".into()],
+            );
         }
 
         let Some(bytes) = readline_key_bytes(key) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Pass,
-                summary: "no known Readline binding".into(),
-                details: vec![],
-            };
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Pass,
+                "no known Readline binding",
+                vec![],
+            );
         };
         let Some((sequence, default_binding)) = readline_binding(&bytes) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Pass,
-                summary: "no known Readline binding".into(),
-                details: vec![format!("sequence: {}", crate::layers::format_bytes(&bytes))],
-            };
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Pass,
+                "no known Readline binding",
+                vec![format!("sequence: {}", crate::layers::format_bytes(&bytes))],
+            );
         };
         let configured = inputrc_binding(sequence);
         let mut details = vec![format_sequence(sequence)];
         append_mode_detail(&mut details);
         if let Some(binding) = configured {
             details.push(format!("binding source: {}", binding_source(sequence)));
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Consumed,
-                summary: format!("bound to {binding}"),
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Consumed,
+                format!("bound to {binding}"),
                 details,
-            };
+            );
         }
         if readline_mode_is_emacs() {
             details.push("binding source: Readline default".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Consumed,
-                summary: format!("bound to {default_binding}"),
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Consumed,
+                format!("bound to {default_binding}"),
                 details,
-            };
+            );
         }
         details.push("Emacs defaults were not applied because the active keymap is vi".into());
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Bash / Readline",
-            id: LayerId::Shell,
-            outcome: Outcome::Pass,
-            summary: "no known binding in the active vi keymap".into(),
+        LayerResult::new(
+            "Bash / Readline",
+            LayerId::Shell,
+            Outcome::Pass,
+            "no known binding in the active vi keymap",
             details,
-        }
+        )
     }
 }
 
 impl Readline {
     pub fn inspect_input(&self, input: &TerminalInput) -> LayerResult {
         if !is_bash() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Unavailable,
-                summary: "current shell is not Bash".into(),
-                details: vec!["Readline mapping was not inspected".into()],
-            };
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Unavailable,
+                "current shell is not Bash",
+                vec!["Readline mapping was not inspected".into()],
+            );
         }
 
         let Some((sequence, default_binding)) = readline_binding(&input.bytes) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Pass,
-                summary: "no known Readline binding".into(),
-                details: vec![format_input(input)],
-            };
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Pass,
+                "no known Readline binding",
+                vec![format_input(input)],
+            );
         };
 
         let binding = inputrc_binding(sequence)
@@ -114,30 +98,26 @@ impl Readline {
         let Some(binding) = binding else {
             let mut details = vec![format_input(input)];
             append_mode_detail(&mut details);
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Pass,
-                summary: "no known Readline binding in the active keymap".into(),
+            return LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Pass,
+                "no known Readline binding in the active keymap",
                 details,
-            };
+            );
         };
         let mut details = vec![
             format_sequence(sequence),
             format!("binding source: {}", binding_source(sequence)),
         ];
         append_mode_detail(&mut details);
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Bash / Readline",
-            id: LayerId::Shell,
-            outcome: Outcome::Consumed,
-            summary: format!("bound to {binding}"),
+        LayerResult::new(
+            "Bash / Readline",
+            LayerId::Shell,
+            Outcome::Consumed,
+            format!("bound to {binding}"),
             details,
-        }
+        )
     }
 }
 

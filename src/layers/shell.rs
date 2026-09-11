@@ -40,29 +40,25 @@ pub fn inspect_input_for_pid(input: &TerminalInput, target_pid: u32) -> LayerRes
     }
 }
 pub fn inspect_unknown() -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Shell input",
-        id: LayerId::Shell,
-        outcome: Outcome::Unknown,
-        summary: "terminal byte encoding is unknown; shell line editing unevaluated".into(),
-        details: vec![
+    LayerResult::new(
+        "Shell input",
+        LayerId::Shell,
+        Outcome::Unknown,
+        "terminal byte encoding is unknown; shell line editing unevaluated",
+        vec![
             "shell line editors (Readline, ZLE, Fish) match against terminal byte sequences".into(),
         ],
-    }
+    )
 }
 
 fn unsupported(shell: &str) -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Shell input",
-        id: LayerId::Shell,
-        outcome: Outcome::Unavailable,
-        summary: format!("shell '{shell}' is not inspected"),
-        details: vec!["install shell integration or use a supported shell adapter".into()],
-    }
+    LayerResult::new(
+        "Shell input",
+        LayerId::Shell,
+        Outcome::Unavailable,
+        format!("shell '{shell}' is not inspected"),
+        vec!["install shell integration or use a supported shell adapter".into()],
+    )
 }
 
 fn shell_name() -> Option<String> {
@@ -152,22 +148,20 @@ fn inspect_configured_shell_binding(
     } else {
         "binding source: common shell default (inferred)"
     };
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
+    LayerResult::new(
         layer,
-        id: LayerId::Shell,
-        outcome: if configured {
+        LayerId::Shell,
+        if configured {
             Outcome::Consumed
         } else {
             Outcome::Unknown
         },
-        summary: if configured {
+        if configured {
             format!("bound to {binding}")
         } else {
             format!("common default likely binds to {binding}")
         },
-        details: {
+        {
             let mut details = vec![
                 format!(
                     "sequence: {}",
@@ -181,7 +175,7 @@ fn inspect_configured_shell_binding(
             }
             details
         },
-    }
+    )
 }
 
 fn runtime_shell_snapshot(layer: &str) -> bool {
@@ -222,27 +216,23 @@ fn inspect_dynamic_shell_binding(
     if layer == "Fish" {
         append_fish_mode_detail(&mut details);
     }
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
+    LayerResult::new(
         layer,
-        id: LayerId::Shell,
-        outcome: Outcome::Consumed,
-        summary: format!("bound to {binding}"),
+        LayerId::Shell,
+        Outcome::Consumed,
+        format!("bound to {binding}"),
         details,
-    }
+    )
 }
 
 fn no_shell_binding(layer: &'static str, input: &TerminalInput) -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
+    LayerResult::new(
         layer,
-        id: LayerId::Shell,
-        outcome: Outcome::Pass,
-        summary: "no known shell binding".into(),
-        details: vec![format!("input: {}", input.display_bytes())],
-    }
+        LayerId::Shell,
+        Outcome::Pass,
+        "no known shell binding",
+        vec![format!("input: {}", input.display_bytes())],
+    )
 }
 
 fn shell_sequence_literal(bytes: &[u8]) -> String {
@@ -261,45 +251,39 @@ fn shell_sequence_literal(bytes: &[u8]) -> String {
 
 fn inspect_zsh(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
     let Some((sequence, default_binding)) = zsh_known_key(key) else {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Zsh / ZLE",
-            id: LayerId::Shell,
-            outcome: Outcome::Pass,
-            summary: "no known Zsh binding".into(),
-            details: vec!["static ZLE defaults are only mapped for common control keys".into()],
-        };
+        return LayerResult::new(
+            "Zsh / ZLE",
+            LayerId::Shell,
+            Outcome::Pass,
+            "no known Zsh binding",
+            vec!["static ZLE defaults are only mapped for common control keys".into()],
+        );
     };
     if let Some(input) = input {
         inspect_configured_shell_binding("Zsh / ZLE", sequence, default_binding, input)
     } else {
         let binding = zsh_binding(sequence).unwrap_or_else(|| default_binding.into());
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Zsh / ZLE",
-            id: LayerId::Shell,
-            outcome: Outcome::Unknown,
-            summary: format!("common default likely binds to {binding}"),
-            details: vec![format!(
+        LayerResult::new(
+            "Zsh / ZLE",
+            LayerId::Shell,
+            Outcome::Unknown,
+            format!("common default likely binds to {binding}"),
+            vec![format!(
                 "sequence: {}",
                 crate::layers::format_bytes(sequence.as_bytes())
             )],
-        }
+        )
     }
 }
 
 fn inspect_fish(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
     let Some((sequence, default_binding)) = fish_known_key(key) else {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Fish",
-            id: LayerId::Shell,
-            outcome: Outcome::Pass,
-            summary: "no known Fish binding".into(),
-            details: {
+        return LayerResult::new(
+            "Fish",
+            LayerId::Shell,
+            Outcome::Pass,
+            "no known Fish binding",
+            {
                 let mut details = vec![
                     "Fish defaults and active mode are not available without runtime bind output"
                         .into(),
@@ -307,24 +291,22 @@ fn inspect_fish(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
                 append_fish_mode_detail(&mut details);
                 details
             },
-        };
+        );
     };
     if let Some(input) = input {
         inspect_configured_shell_binding("Fish", sequence, default_binding, input)
     } else {
         let binding = fish_binding(sequence).unwrap_or_else(|| default_binding.into());
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Fish",
-            id: LayerId::Shell,
-            outcome: Outcome::Unknown,
-            summary: format!("common default likely binds to {binding}"),
-            details: vec![format!(
+        LayerResult::new(
+            "Fish",
+            LayerId::Shell,
+            Outcome::Unknown,
+            format!("common default likely binds to {binding}"),
+            vec![format!(
                 "sequence: {}",
                 crate::layers::format_bytes(sequence.as_bytes())
             )],
-        }
+        )
     }
 }
 

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
@@ -34,7 +34,32 @@ impl Desktop {
     }
 }
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let desktop = detect().ok_or_else(|| {
+        "programmable X11 WM: no AwesomeWM, Qtile, or XMonad configuration was detected".to_owned()
+    })?;
+    let path = config_path(desktop).ok_or_else(|| {
+        format!(
+            "programmable X11 WM: {} configuration was not found; runtime bindings remain unknown",
+            desktop.name()
+        )
+    })?;
+    let content = read_config(&path).map_err(|error| format!("programmable X11 WM: {error}"))?;
+    let source: String =
+        detect().map_or_else(|| "Programmable X11 WM".into(), |wm| wm.name().into());
+    Ok(parse(desktop, &content)
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                source.clone(),
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; executable runtime and precedence conditional",
+            )
+            .with_context(binding.context)
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -61,63 +86,41 @@ pub fn detect() -> Option<Desktop> {
     })
 }
 
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let desktop = detect()
-        .ok_or_else(|| "no AwesomeWM, Qtile, or XMonad configuration was detected".to_owned())?;
-    let path = config_path(desktop).ok_or_else(|| {
-        format!(
-            "{} configuration was not found; runtime bindings remain unknown",
-            desktop.name()
-        )
-    })?;
-    let content = read_config(&path)?;
-    Ok(parse(desktop, &content)
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.context))
-        .collect())
-}
-
 pub struct Programmable;
 
 impl Programmable {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(desktop) = detect() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Programmable X11 WM",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "AwesomeWM, Qtile, and XMonad were not detected".into(),
-                details: vec!["set XDG_CURRENT_DESKTOP or an explicit config variable".into()],
-            };
+            return LayerResult::new(
+                "Programmable X11 WM",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "AwesomeWM, Qtile, and XMonad were not detected",
+                vec!["set XDG_CURRENT_DESKTOP or an explicit config variable".into()],
+            );
         };
         let Some(path) = config_path(desktop) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: desktop.name(),
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: format!("{} configuration is unavailable", desktop.name()),
-                details: vec![format!(
+            return LayerResult::new(
+                desktop.name(),
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                format!("{} configuration is unavailable", desktop.name()),
+                vec![format!(
                     "set {} or provide the standard config path",
                     desktop.env_names()[0]
                 )],
-            };
+            );
         };
         let content = match read_config(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: desktop.name(),
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: format!("could not read {} configuration", desktop.name()),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    desktop.name(),
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    format!("could not read {} configuration", desktop.name()),
+                    vec![error],
+                );
             }
         };
         let matches = parse(desktop, &content)
@@ -129,31 +132,27 @@ impl Programmable {
             details.push(
                 "no matching literal binding found; executable helpers, modes, and runtime reload state remain unknown".into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: desktop.name(),
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: format!("{} shortcut state is conditional", desktop.name()),
+            return LayerResult::new(
+                desktop.name(),
+                LayerId::Compositor,
+                Outcome::Unknown,
+                format!("{} shortcut state is conditional", desktop.name()),
                 details,
-            };
+            );
         }
         for binding in &matches {
             details.push(format!("{}: {}", binding.context, binding.action));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: desktop.name(),
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: format!(
+        LayerResult::new(
+            desktop.name(),
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            format!(
                 "matching {} binding configured; executable runtime and precedence are conditional",
                 desktop.name()
             ),
             details,
-        }
+        )
     }
 }
 

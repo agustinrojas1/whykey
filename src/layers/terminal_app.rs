@@ -24,15 +24,13 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         let (bindings, source) = match load_wezterm_bindings() {
             Ok(value) => value,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: kind.layer_name(),
-                    id: LayerId::Terminal,
-                    outcome: Outcome::Unknown,
-                    summary: "could not inspect WezTerm effective key assignments".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    kind.layer_name(),
+                    LayerId::Terminal,
+                    Outcome::Unknown,
+                    "could not inspect WezTerm effective key assignments",
+                    vec![error],
+                );
             }
         };
         return inspect_bindings(kind, key, &bindings, &source);
@@ -41,42 +39,36 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         let (bindings, source) = match load_konsole_bindings() {
             Ok(value) => value,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: kind.layer_name(),
-                    id: LayerId::Terminal,
-                    outcome: Outcome::Unknown,
-                    summary: "could not inspect Konsole keytab bindings".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    kind.layer_name(),
+                    LayerId::Terminal,
+                    Outcome::Unknown,
+                    "could not inspect Konsole keytab bindings",
+                    vec![error],
+                );
             }
         };
         return inspect_bindings(kind, key, &bindings, &source);
     }
     let Some(path) = config_path(kind) else {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: kind.layer_name(),
-            id: LayerId::Terminal,
-            outcome: Outcome::Unknown,
-            summary: format!("{kind} is active but no config file was found"),
-            details: vec!["set the terminal's config path or use its defaults".into()],
-        };
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::Unknown,
+            format!("{kind} is active but no config file was found"),
+            vec!["set the terminal's config path or use its defaults".into()],
+        );
     };
     let content = match fs::read_to_string(&path) {
         Ok(content) => content,
         Err(error) => {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: kind.layer_name(),
-                id: LayerId::Terminal,
-                outcome: Outcome::Unknown,
-                summary: format!("could not read {kind} configuration"),
-                details: vec![format!("config: {}: {error}", path.display())],
-            };
+            return LayerResult::new(
+                kind.layer_name(),
+                LayerId::Terminal,
+                Outcome::Unknown,
+                format!("could not read {kind} configuration"),
+                vec![format!("config: {}: {error}", path.display())],
+            );
         }
     };
     let bindings = parse_bindings(kind, &content);
@@ -94,15 +86,13 @@ fn inspect_bindings(
         .rev()
         .find(|binding| &binding.trigger == key)
     else {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: kind.layer_name(),
-            id: LayerId::Terminal,
-            outcome: Outcome::Pass,
-            summary: format!("no {kind} binding; forwarded to the terminal input"),
-            details: vec![source.into()],
-        };
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::Pass,
+            format!("no {kind} binding; forwarded to the terminal input"),
+            vec![source.into()],
+        );
     };
 
     let mut details = vec![source.into(), format!("binding: {}", binding.description)];
@@ -113,60 +103,50 @@ fn inspect_bindings(
         details.push(
             "this binding belongs to a non-default WezTerm key table; its active state is runtime-dependent".into(),
         );
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: kind.layer_name(),
-            id: LayerId::Terminal,
-            outcome: Outcome::Unknown,
-            summary: format!("{kind} binding found in a conditional key table"),
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::Unknown,
+            format!("{kind} binding found in a conditional key table"),
             details,
-        };
+        );
     }
     if let Some(output) = &binding.output {
         details.push(format!("sequence: {}", format_bytes(output)));
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: kind.layer_name(),
-            id: LayerId::Terminal,
-            outcome: Outcome::HandledAndPassed,
-            summary: format!("{kind} sends a sequence to the PTY"),
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::HandledAndPassed,
+            format!("{kind} sends a sequence to the PTY"),
             details,
-        };
+        );
     }
     if action_forwards(&binding.action) {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: kind.layer_name(),
-            id: LayerId::Terminal,
-            outcome: Outcome::HandledAndPassed,
-            summary: format!("{kind} forwards the key to the PTY"),
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::HandledAndPassed,
+            format!("{kind} forwards the key to the PTY"),
             details,
-        };
+        );
     }
     if action_is_consuming(&binding.action) {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: kind.layer_name(),
-            id: LayerId::Terminal,
-            outcome: Outcome::Consumed,
-            summary: format!("{kind} consumes the key"),
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::Consumed,
+            format!("{kind} consumes the key"),
             details,
-        };
+        );
     }
     details.push("action semantics are terminal-specific".into());
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: kind.layer_name(),
-        id: LayerId::Terminal,
-        outcome: Outcome::Unknown,
-        summary: format!("{kind} binding found; propagation is unknown"),
+    LayerResult::new(
+        kind.layer_name(),
+        LayerId::Terminal,
+        Outcome::Unknown,
+        format!("{kind} binding found; propagation is unknown"),
         details,
-    }
+    )
 }
 
 /// Analyze once: route finding plus normal input bytes from a single config
@@ -181,15 +161,13 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
             Ok(value) => value,
             Err(error) => {
                 return (
-                    LayerResult {
-                        verbose_details: Vec::new(),
-                        binding: None,
-                        layer: kind.layer_name(),
-                        id: LayerId::Terminal,
-                        outcome: Outcome::Unknown,
-                        summary: "could not inspect WezTerm effective key assignments".into(),
-                        details: vec![error],
-                    },
+                    LayerResult::new(
+                        kind.layer_name(),
+                        LayerId::Terminal,
+                        Outcome::Unknown,
+                        "could not inspect WezTerm effective key assignments",
+                        vec![error],
+                    ),
                     None,
                 );
             }
@@ -212,15 +190,13 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
             Ok(value) => value,
             Err(error) => {
                 return (
-                    LayerResult {
-                        verbose_details: Vec::new(),
-                        binding: None,
-                        layer: kind.layer_name(),
-                        id: LayerId::Terminal,
-                        outcome: Outcome::Unknown,
-                        summary: "could not inspect Konsole keytab bindings".into(),
-                        details: vec![error],
-                    },
+                    LayerResult::new(
+                        kind.layer_name(),
+                        LayerId::Terminal,
+                        Outcome::Unknown,
+                        "could not inspect Konsole keytab bindings",
+                        vec![error],
+                    ),
                     None,
                 );
             }
@@ -236,15 +212,13 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
     }
     let Some(path) = config_path(kind) else {
         return (
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: kind.layer_name(),
-                id: LayerId::Terminal,
-                outcome: Outcome::Unknown,
-                summary: format!("{kind} is active but no config file was found"),
-                details: vec!["set the terminal's config path or use its defaults".into()],
-            },
+            LayerResult::new(
+                kind.layer_name(),
+                LayerId::Terminal,
+                Outcome::Unknown,
+                format!("{kind} is active but no config file was found"),
+                vec!["set the terminal's config path or use its defaults".into()],
+            ),
             None,
         );
     };
@@ -252,15 +226,13 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
         Ok(content) => content,
         Err(error) => {
             return (
-                LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: kind.layer_name(),
-                    id: LayerId::Terminal,
-                    outcome: Outcome::Unknown,
-                    summary: format!("could not read {kind} configuration"),
-                    details: vec![format!("config: {}: {error}", path.display())],
-                },
+                LayerResult::new(
+                    kind.layer_name(),
+                    LayerId::Terminal,
+                    Outcome::Unknown,
+                    format!("could not read {kind} configuration"),
+                    vec![format!("config: {}: {error}", path.display())],
+                ),
                 None,
             );
         }
@@ -289,15 +261,13 @@ pub fn detected_name() -> Option<&'static str> {
 }
 
 fn not_applicable(message: &str) -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Terminal adapter",
-        id: LayerId::Terminal,
-        outcome: Outcome::Pass,
-        summary: message.into(),
-        details: vec![],
-    }
+    LayerResult::new(
+        "Terminal adapter",
+        LayerId::Terminal,
+        Outcome::Pass,
+        message,
+        vec![],
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

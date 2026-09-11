@@ -191,6 +191,21 @@ fn parse_inventory_filters(
     }
     Ok(filters)
 }
+/// Take `--option value`, preserving each caller's exact missing-value error.
+/// Downstream validation stays at the call site so messages never change.
+fn take_value(
+    arguments: &mut impl Iterator<Item = String>,
+    option: &str,
+    noun: &str,
+) -> Result<String, ExitCode> {
+    match arguments.next() {
+        Some(value) => Ok(value),
+        None => {
+            eprintln!("error: {option} requires {noun}");
+            Err(ExitCode::from(2))
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let raw_arguments: Vec<_> = env::args().skip(1).collect();
@@ -272,17 +287,17 @@ fn main() -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
                 "--device" => {
-                    let Some(path) = arguments.next() else {
-                        eprintln!("error: --device requires a path");
-                        return ExitCode::from(2);
+                    let path = match take_value(&mut arguments, "--device", "a path") {
+                        Ok(path) => path,
+                        Err(code) => return code,
                     };
                     device = Some(path.into());
                     evdev = true;
                 }
                 "--timeout" => {
-                    let Some(value) = arguments.next() else {
-                        eprintln!("error: --timeout requires seconds");
-                        return ExitCode::from(2);
+                    let value = match take_value(&mut arguments, "--timeout", "seconds") {
+                        Ok(value) => value,
+                        Err(code) => return code,
                     };
                     let seconds = match value.parse::<f64>() {
                         Ok(seconds) if seconds.is_finite() && seconds > 0.0 => seconds,
@@ -301,9 +316,9 @@ fn main() -> ExitCode {
                     timeout = Some(duration);
                 }
                 "--count" => {
-                    let Some(value) = arguments.next() else {
-                        eprintln!("error: --count requires a positive integer");
-                        return ExitCode::from(2);
+                    let value = match take_value(&mut arguments, "--count", "a positive integer") {
+                        Ok(value) => value,
+                        Err(code) => return code,
                     };
                     let parsed = match value.parse::<usize>() {
                         Ok(count) if count > 0 => count,
@@ -315,9 +330,9 @@ fn main() -> ExitCode {
                     count = Some(parsed);
                 }
                 "--events" => {
-                    let Some(value) = arguments.next() else {
-                        eprintln!("error: --events requires 'all'");
-                        return ExitCode::from(2);
+                    let value = match take_value(&mut arguments, "--events", "'all'") {
+                        Ok(value) => value,
+                        Err(code) => return code,
                     };
                     if value != "all" {
                         eprintln!("error: unsupported event mode '{value}', expected 'all'");
@@ -326,9 +341,9 @@ fn main() -> ExitCode {
                     events_all = true;
                 }
                 "--output" => {
-                    let Some(path) = arguments.next() else {
-                        eprintln!("error: --output requires a path");
-                        return ExitCode::from(2);
+                    let path = match take_value(&mut arguments, "--output", "a path") {
+                        Ok(path) => path,
+                        Err(code) => return code,
                     };
                     if path.is_empty() {
                         eprintln!("error: --output requires a non-empty path");
@@ -389,31 +404,25 @@ fn main() -> ExitCode {
         }
         return run_capabilities(json, all, schema_version);
     }
-    if argument == "bindings" {
-        let filters = match parse_inventory_filters(
-            arguments.collect(),
-            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
-        ) {
+    if argument == "bindings" || argument == "conflicts" {
+        let run: fn(bool, u8, InventoryFilters) -> ExitCode = if argument == "bindings" {
+            run_bindings
+        } else {
+            run_conflicts
+        };
+        let usage = if argument == "bindings" {
+            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]"
+        } else {
+            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]"
+        };
+        let filters = match parse_inventory_filters(arguments.collect(), usage) {
             Ok(filters) => filters,
             Err(error) => {
                 eprintln!("error: {error}");
                 return ExitCode::from(2);
             }
         };
-        return run_bindings(json, schema_version, filters);
-    }
-    if argument == "conflicts" {
-        let filters = match parse_inventory_filters(
-            arguments.collect(),
-            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
-        ) {
-            Ok(filters) => filters,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::from(2);
-            }
-        };
-        return run_conflicts(json, schema_version, filters);
+        return run(json, schema_version, filters);
     }
     if argument == "extension" {
         let Some(program) = arguments.next() else {
@@ -449,26 +458,19 @@ fn main() -> ExitCode {
         }
         return run_diff(paths, json, schema_version);
     }
-    if argument == "shell-init" {
+    if argument == "shell-init" || argument == "completions" {
+        let print: fn(&str) -> String = if argument == "shell-init" {
+            shell_init
+        } else {
+            completions
+        };
         match arguments.next().as_deref() {
             Some(shell @ ("bash" | "zsh" | "fish")) if arguments.next().is_none() => {
-                println!("{}", shell_init(shell));
+                println!("{}", print(shell));
                 return ExitCode::SUCCESS;
             }
             _ => {
-                eprintln!("error: usage is `whykey shell-init <bash|zsh|fish>`");
-                return ExitCode::from(2);
-            }
-        }
-    }
-    if argument == "completions" {
-        match arguments.next().as_deref() {
-            Some(shell @ ("bash" | "zsh" | "fish")) if arguments.next().is_none() => {
-                println!("{}", completions(shell));
-                return ExitCode::SUCCESS;
-            }
-            _ => {
-                eprintln!("error: usage is `whykey completions <bash|zsh|fish>`");
+                eprintln!("error: usage is `whykey {argument} <bash|zsh|fish>`");
                 return ExitCode::from(2);
             }
         }
@@ -690,9 +692,9 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--pid" => {
-                let Some(value) = arguments.next() else {
-                    eprintln!("error: --pid requires a positive process id");
-                    return ExitCode::from(2);
+                let value = match take_value(&mut arguments, "--pid", "a positive process id") {
+                    Ok(value) => value,
+                    Err(code) => return code,
                 };
                 let pid = match value.parse::<u32>() {
                     Ok(pid) if pid > 0 => pid,
@@ -705,9 +707,10 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
             }
             "--focused" => focused = true,
             "--instance" => {
-                let Some(value) = arguments.next() else {
-                    eprintln!("error: --instance requires a Hyprland instance id");
-                    return ExitCode::from(2);
+                let value = match take_value(&mut arguments, "--instance", "a Hyprland instance id")
+                {
+                    Ok(value) => value,
+                    Err(code) => return code,
                 };
                 if value.trim().is_empty() {
                     eprintln!("error: --instance requires a non-empty Hyprland instance id");

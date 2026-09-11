@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -11,7 +11,21 @@ const MAX_BINDINGS: usize = 4096;
 /// Read-only Niri `config.kdl` binding adapter.
 pub struct Niri;
 
-pub type BindingInventoryEntry = (KeyCombo, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let bindings = load_bindings().map_err(|error| format!("Niri: {error}"))?;
+    Ok(bindings
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                "Niri",
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; runtime activation conditional",
+            )
+            .with_context("config.kdl binds block")
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -36,27 +50,18 @@ pub fn ipc_available() -> bool {
     config_path().is_some_and(|path| path.is_file())
 }
 
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    Ok(load_bindings()?
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action))
-        .collect())
-}
-
 impl Niri {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Niri",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect Niri key bindings".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "Niri",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect Niri key bindings",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -64,15 +69,13 @@ impl Niri {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Niri",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no matching Niri binding found in config.kdl".into(),
-                details: vec![format!("source: {}", config_description())],
-            };
+            return LayerResult::new(
+                "Niri",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no matching Niri binding found in config.kdl",
+                vec![format!("source: {}", config_description())],
+            );
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -81,15 +84,13 @@ impl Niri {
         details.push(
             "Niri runtime reload state, inhibitor state, and active mode remain conditional".into(),
         );
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Niri",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "Niri config contains a matching binding".into(),
+        LayerResult::new(
+            "Niri",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "Niri config contains a matching binding",
             details,
-        }
+        )
     }
 }
 

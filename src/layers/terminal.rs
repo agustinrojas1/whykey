@@ -9,30 +9,26 @@ pub struct Terminal;
 impl Terminal {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(byte) = control_byte_for_key(key) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "no matching terminal special character".into(),
-                details: vec![],
-            };
+            return LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "no matching terminal special character",
+                vec![],
+            );
         };
 
         let input = TerminalInput::predicted(vec![byte], "legacy control byte");
         let state = match read_tty_state() {
             Ok(state) => state,
             Err(message) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "TTY driver",
-                    id: LayerId::Tty,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect terminal settings".into(),
-                    details: vec![message, format_input(&input)],
-                };
+                return LayerResult::new(
+                    "TTY driver",
+                    LayerId::Tty,
+                    Outcome::Unavailable,
+                    "could not inspect terminal settings",
+                    vec![message, format_input(&input)],
+                );
             }
         };
         self.inspect_byte(byte, &input, &state)
@@ -42,28 +38,24 @@ impl Terminal {
 impl Terminal {
     pub fn inspect_input(&self, input: &TerminalInput) -> LayerResult {
         let [byte] = input.bytes.as_slice() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "does not consume this byte sequence".into(),
-                details: vec![format_input(input)],
-            };
+            return LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "does not consume this byte sequence",
+                vec![format_input(input)],
+            );
         };
         let state = match read_tty_state() {
             Ok(state) => state,
             Err(message) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "TTY driver",
-                    id: LayerId::Tty,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect terminal settings".into(),
-                    details: vec![message, format_input(input)],
-                };
+                return LayerResult::new(
+                    "TTY driver",
+                    LayerId::Tty,
+                    Outcome::Unavailable,
+                    "could not inspect terminal settings",
+                    vec![message, format_input(input)],
+                );
             }
         };
         self.inspect_byte(*byte, input, &state)
@@ -81,46 +73,40 @@ impl Terminal {
         self.inspect_input_with_state(input, &state)
     }
     pub fn inspect_unknown(&self) -> LayerResult {
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "TTY driver",
-            id: LayerId::Tty,
-            outcome: Outcome::Unknown,
-            summary: "terminal byte encoding is unknown; TTY signal checks unevaluated".into(),
-            details: vec![
+        LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Unknown,
+            "terminal byte encoding is unknown; TTY signal checks unevaluated",
+            vec![
                 "termios special-character processing depends on bytes emitted by the terminal"
                     .into(),
             ],
-        }
+        )
     }
 
     fn inspect_input_with_state(&self, input: &TerminalInput, state: &TtyState) -> LayerResult {
         let [byte] = input.bytes.as_slice() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "does not consume this byte sequence".into(),
-                details: vec![format_input(input)],
-            };
+            return LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "does not consume this byte sequence",
+                vec![format_input(input)],
+            );
         };
         self.inspect_byte(*byte, input, state)
     }
 
     fn inspect_byte(&self, byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
         let Some(control) = control_character_byte(byte, state) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "does not consume this byte sequence".into(),
-                details: vec![format_input(input)],
-            };
+            return LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "does not consume this byte sequence",
+                vec![format_input(input)],
+            );
         };
 
         let configured = format_control_char(control.byte);
@@ -132,27 +118,23 @@ impl Terminal {
         };
 
         match control.kind {
-            ControlKind::Signal if !state.signal_processing => LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "signal processing is disabled; byte is forwarded".into(),
-                details: {
+            ControlKind::Signal if !state.signal_processing => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "signal processing is disabled; byte is forwarded",
+                {
                     let mut details = details();
                     details.push("ISIG is disabled".into());
                     details
                 },
-            },
-            ControlKind::Signal => LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Consumed,
-                summary: format!("interprets byte 0x{:02x} as {}", byte, control.name),
-                details: {
+            ),
+            ControlKind::Signal => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Consumed,
+                format!("interprets byte 0x{:02x} as {}", byte, control.name),
+                {
                     let mut details = details();
                     details.push(format!(
                         "kernel sends {} to the foreground process",
@@ -160,77 +142,67 @@ impl Terminal {
                     ));
                     details
                 },
-            },
-            ControlKind::Flow if !state.input_flow_control => LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "input flow control is disabled; byte is forwarded".into(),
-                details: {
+            ),
+            ControlKind::Flow if !state.input_flow_control => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "input flow control is disabled; byte is forwarded",
+                {
                     let mut details = details();
                     details.push("IXON is disabled".into());
                     details
                 },
-            },
-            ControlKind::Flow => LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Consumed,
-                summary: format!("interprets byte 0x{:02x} as {}", byte, control.name),
-                details: {
+            ),
+            ControlKind::Flow => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Consumed,
+                format!("interprets byte 0x{:02x} as {}", byte, control.name),
+                {
                     let mut details = details();
                     details.push("terminal flow control consumes this byte".into());
                     details
                 },
-            },
-            ControlKind::Line if !state.canonical => LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: "canonical line editing is disabled; byte is forwarded".into(),
-                details: {
+            ),
+            ControlKind::Line if !state.canonical => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "canonical line editing is disabled; byte is forwarded",
+                {
                     let mut details = details();
                     details.push("ICANON is disabled".into());
                     details
                 },
-            },
+            ),
             ControlKind::Line
                 if matches!(control.name, "VLNEXT" | "VDISCARD") && !state.extended_processing =>
             {
-                LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "TTY driver",
-                    id: LayerId::Tty,
-                    outcome: Outcome::Pass,
-                    summary: "extended terminal processing is disabled; byte is forwarded".into(),
-                    details: {
+                LayerResult::new(
+                    "TTY driver",
+                    LayerId::Tty,
+                    Outcome::Pass,
+                    "extended terminal processing is disabled; byte is forwarded",
+                    {
                         let mut details = details();
                         details.push("IEXTEN is disabled".into());
                         details
                     },
-                }
+                )
             }
-            ControlKind::Line => LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "TTY driver",
-                id: LayerId::Tty,
-                outcome: Outcome::Pass,
-                summary: format!("{} is configured for canonical line editing", control.name),
-                details: {
+            ControlKind::Line => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                format!("{} is configured for canonical line editing", control.name),
+                {
                     let mut details = details();
                     details
                         .push("Bash/Readline may handle this byte while editing a command".into());
                     details
                 },
-            },
+            ),
         }
     }
 }

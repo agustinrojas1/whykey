@@ -66,15 +66,13 @@ impl Ghostty {
             } else {
                 format!("TERM_PROGRAM={program}; Ghostty bindings were skipped")
             };
-            let layer = LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Ghostty",
-                id: LayerId::Terminal,
-                outcome: Outcome::Pass,
-                summary: "not applicable to the current terminal".into(),
-                details: vec![detail],
-            };
+            let layer = LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::Pass,
+                "not applicable to the current terminal",
+                vec![detail],
+            );
             let input = default_encoding_for_protocol(key, protocol_flags).map(|bytes| {
                 TerminalInput::predicted(
                     bytes,
@@ -91,15 +89,13 @@ impl Ghostty {
             Ok(config) => config,
             Err(message) => {
                 return (
-                    LayerResult {
-                        verbose_details: Vec::new(),
-                        binding: None,
-                        layer: "Ghostty",
-                        id: LayerId::Terminal,
-                        outcome: Outcome::Unavailable,
-                        summary: "could not inspect Ghostty configuration".into(),
-                        details: vec![message],
-                    },
+                    LayerResult::new(
+                        "Ghostty",
+                        LayerId::Terminal,
+                        Outcome::Unavailable,
+                        "could not inspect Ghostty configuration",
+                        vec![message],
+                    ),
                     None,
                 );
             }
@@ -240,39 +236,33 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
         }
         if let Some(trigger) = unresolved_single_key_trigger(config, key) {
             details.push(format!("possible physical binding: {trigger}"));
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Ghostty",
-                id: LayerId::Terminal,
-                outcome: Outcome::Unknown,
-                summary: "possible physical binding may capture the key".into(),
+            return LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::Unknown,
+                "possible physical binding may capture the key",
                 details,
-            };
+            );
         }
         if let Some(encoding) = default_encoding(key) {
             details.push(format_encoding_detail(&encoding));
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Ghostty",
-                id: LayerId::Terminal,
-                outcome: Outcome::Pass,
-                summary: "no Ghostty binding; forwarded to terminal".into(),
+            return LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::Pass,
+                "no Ghostty binding; forwarded to terminal",
                 details,
-            };
+            );
         }
 
         details.push("default key encoding is layout-dependent or unsupported".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Ghostty",
-            id: LayerId::Terminal,
-            outcome: Outcome::Pass,
-            summary: "no Ghostty binding; forwarded to terminal".into(),
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::Pass,
+            "no Ghostty binding; forwarded to terminal",
             details,
-        };
+        );
     };
 
     let mut details = vec![format!(
@@ -289,73 +279,61 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
     if let Some(encoding) = action_encoding(&binding.action) {
         details.push(format_encoding_detail(&encoding));
         if binding.unconsumed {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Ghostty",
-                id: LayerId::Terminal,
-                outcome: Outcome::HandledAndPassed,
-                summary: "binding sends a sequence and leaves it unconsumed".into(),
+            return LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::HandledAndPassed,
+                "binding sends a sequence and leaves it unconsumed",
                 details,
-            };
+            );
         }
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Ghostty",
-            id: LayerId::Terminal,
-            outcome: Outcome::HandledAndPassed,
-            summary: "binding sends a sequence to the terminal".into(),
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::HandledAndPassed,
+            "binding sends a sequence to the terminal",
             details,
-        };
+        );
     }
 
     if binding.action == "ignore" {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Ghostty",
-            id: LayerId::Terminal,
-            outcome: Outcome::Consumed,
-            summary: "binding ignores the key input".into(),
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::Consumed,
+            "binding ignores the key input",
             details,
-        };
+        );
     }
 
     if binding.performable {
         details.push("action may pass through when it is not performable".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Ghostty",
-            id: LayerId::Terminal,
-            outcome: Outcome::HandledUncertain,
-            summary: "binding may consume the key depending on terminal state".into(),
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::HandledUncertain,
+            "binding may consume the key depending on terminal state",
             details,
-        };
+        );
     }
 
     if binding.unconsumed {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Ghostty",
-            id: LayerId::Terminal,
-            outcome: Outcome::HandledAndPassed,
-            summary: "binding runs and leaves the key unconsumed".into(),
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::HandledAndPassed,
+            "binding runs and leaves the key unconsumed",
             details,
-        };
+        );
     }
 
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Ghostty",
-        id: LayerId::Terminal,
-        outcome: Outcome::Consumed,
-        summary: "binding consumes the key".into(),
+    LayerResult::new(
+        "Ghostty",
+        LayerId::Terminal,
+        Outcome::Consumed,
+        "binding consumes the key",
         details,
-    }
+    )
 }
 
 fn load_config_file(path: &Path) -> Result<ConfigState, String> {

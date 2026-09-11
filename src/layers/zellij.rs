@@ -45,24 +45,21 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     if let Some(binding) = find_binding(&content, key, &mode) {
         details.push(format!("binding: {}", binding));
         let continues = binding.starts_with("WriteChars") || binding.starts_with("Write ");
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Zellij",
-            id: LayerId::Multiplexer,
-            outcome: if continues {
+        return LayerResult::new(
+            "Zellij",
+            LayerId::Multiplexer,
+            if continues {
                 Outcome::HandledAndPassed
             } else {
                 Outcome::Consumed
             },
-            summary: if continues {
+            if continues {
                 "binding writes input to the pane"
             } else {
                 "binding consumes the key"
-            }
-            .into(),
+            },
             details,
-        };
+        );
     }
     details.push("no matching binding in the selected Zellij config/defaults".into());
     if !complete {
@@ -70,36 +67,31 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             "Zellij defaults or unsupported KDL bindings may still handle this key; forwarding is conditional".into(),
         );
     }
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Zellij",
-        id: LayerId::Multiplexer,
-        outcome: if complete {
+    LayerResult::new(
+        "Zellij",
+        LayerId::Multiplexer,
+        if complete {
             Outcome::Pass
         } else {
             Outcome::Unknown
         },
-        summary: if complete {
+        if complete {
             "no matching Zellij binding; forwarded to the pane"
         } else {
             "no parsed Zellij binding; forwarding cannot be proven"
-        }
-        .into(),
+        },
         details,
-    }
+    )
 }
 
 fn unavailable(message: String) -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Zellij",
-        id: LayerId::Multiplexer,
-        outcome: Outcome::Unavailable,
-        summary: "could not inspect Zellij key bindings".into(),
-        details: vec![message],
-    }
+    LayerResult::new(
+        "Zellij",
+        LayerId::Multiplexer,
+        Outcome::Unavailable,
+        "could not inspect Zellij key bindings",
+        vec![message],
+    )
 }
 
 fn config_path() -> Option<PathBuf> {

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -11,7 +11,26 @@ const MAX_BINDINGS: usize = 4096;
 /// Read-only Wayfire INI shortcut adapter.
 pub struct Wayfire;
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let bindings = load_bindings().map_err(|error| format!("Wayfire: {error}"))?;
+    Ok(bindings
+        .into_iter()
+        .map(|binding| {
+            let context: String = if binding.section.is_empty() {
+                "wayfire binding".into()
+            } else {
+                format!("Wayfire [{}]", binding.section)
+            };
+            BindingRecord::new(
+                "Wayfire",
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; runtime activation conditional",
+            )
+            .with_context(context)
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -33,27 +52,18 @@ pub fn ipc_available() -> bool {
     config_path().is_some_and(|path| path.is_file())
 }
 
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    Ok(load_bindings()?
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.section))
-        .collect())
-}
-
 impl Wayfire {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Wayfire",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect Wayfire shortcuts".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "Wayfire",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect Wayfire shortcuts",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -61,15 +71,13 @@ impl Wayfire {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Wayfire",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no matching Wayfire binding found".into(),
-                details: vec![format!("source: {}", config_description())],
-            };
+            return LayerResult::new(
+                "Wayfire",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no matching Wayfire binding found",
+                vec![format!("source: {}", config_description())],
+            );
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -79,15 +87,13 @@ impl Wayfire {
             "Wayfire plugin activation, reload state, and runtime precedence remain conditional"
                 .into(),
         );
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Wayfire",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "Wayfire config contains a matching binding".into(),
+        LayerResult::new(
+            "Wayfire",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "Wayfire config contains a matching binding",
             details,
-        }
+        )
     }
 }
 

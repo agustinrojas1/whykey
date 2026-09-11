@@ -5,11 +5,10 @@
 //! registry instead of scattered adapter lists. Adding a desktop adapter
 //! requires its module and one entry in [`DESKTOPS`].
 
-use crate::bindings::BindingSink;
 use crate::key::KeyCombo;
 use crate::layers::{
-    LayerResult, PhysicalInput, cinnamon, compositor, gnome, hyprland, i3, kde, labwc, mate, niri,
-    openbox, programmable, river, sway, sxhkd, wayfire, x11, xfce,
+    BindingRecord, LayerResult, PhysicalInput, cinnamon, compositor, gnome, hyprland, i3, kde,
+    labwc, mate, niri, openbox, programmable, river, sway, sxhkd, wayfire, x11, xfce,
 };
 
 /// Read-only focused-window PID lookup with its evidence label.
@@ -36,6 +35,10 @@ pub struct DoctorMeta {
     pub json_key: &'static str,
 }
 
+/// Adapter binding inventory function: enumerate records directly, or return
+/// an unavailable reason already prefixed with the adapter's source label.
+pub type BindingInventory = fn() -> Result<Vec<BindingRecord>, String>;
+
 /// Static adapter descriptor: one registry entry plus its adapter module.
 pub struct AdapterDescriptor {
     /// Stable ID used by selection and tests.
@@ -47,7 +50,7 @@ pub struct AdapterDescriptor {
     /// Inspect one key combination through this adapter.
     pub inspect: fn(&KeyCombo, Option<&PhysicalInput>) -> LayerResult,
     /// Enumerate configured bindings into the inventory, when supported.
-    pub bindings: Option<fn(&mut BindingSink<'_>)>,
+    pub bindings: Option<BindingInventory>,
     /// Read-only focused-window PID lookup, when supported.
     pub focus: Option<FocusLookup>,
     /// Capability entry metadata, when the adapter has its own entry.
@@ -153,7 +156,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: hyprland::applicable,
         ipc: Some(hyprland::ipc_available),
         inspect: inspect_hyprland,
-        bindings: Some(crate::bindings::hyprland_entries),
+        bindings: Some(hyprland::binding_inventory),
         focus: Some(("Hyprland activewindow", hyprland::focused_pid)),
         capability: Some(CapabilityMeta {
             id: "compositor.hyprland",
@@ -172,7 +175,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: sway::applicable,
         ipc: Some(sway::ipc_available),
         inspect: inspect_sway,
-        bindings: Some(crate::bindings::sway_entries),
+        bindings: Some(sway::binding_inventory),
         focus: Some(("Sway get_tree", sway::focused_pid)),
         capability: Some(CapabilityMeta {
             id: "compositor.sway",
@@ -191,7 +194,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: i3::applicable,
         ipc: Some(i3::ipc_available),
         inspect: inspect_i3,
-        bindings: Some(crate::bindings::i3_entries),
+        bindings: Some(i3::binding_inventory),
         focus: Some(("i3 get_tree", i3::focused_pid)),
         capability: Some(CapabilityMeta {
             id: "compositor.i3",
@@ -210,7 +213,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: kde::applicable,
         ipc: Some(kde::ipc_available),
         inspect: inspect_kde,
-        bindings: Some(crate::bindings::kde_entries),
+        bindings: Some(kde::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.kde",
@@ -229,7 +232,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: xfce::applicable,
         ipc: Some(xfce::ipc_available),
         inspect: inspect_xfce,
-        bindings: Some(crate::bindings::xfce_entries),
+        bindings: Some(xfce::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.xfce",
@@ -248,7 +251,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: cinnamon::applicable,
         ipc: Some(cinnamon::ipc_available),
         inspect: inspect_cinnamon,
-        bindings: Some(crate::bindings::cinnamon_entries),
+        bindings: Some(cinnamon::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.cinnamon",
@@ -267,7 +270,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: mate::applicable,
         ipc: Some(mate::ipc_available),
         inspect: inspect_mate,
-        bindings: Some(crate::bindings::mate_entries),
+        bindings: Some(mate::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.mate",
@@ -286,7 +289,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: niri::applicable,
         ipc: Some(niri::ipc_available),
         inspect: inspect_niri,
-        bindings: Some(crate::bindings::niri_entries),
+        bindings: Some(niri::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.niri",
@@ -305,7 +308,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: river::applicable,
         ipc: Some(river::ipc_available),
         inspect: inspect_river,
-        bindings: Some(crate::bindings::river_entries),
+        bindings: Some(river::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.river",
@@ -324,7 +327,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: wayfire::applicable,
         ipc: Some(wayfire::ipc_available),
         inspect: inspect_wayfire,
-        bindings: Some(crate::bindings::wayfire_entries),
+        bindings: Some(wayfire::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.wayfire",
@@ -343,7 +346,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: labwc::applicable,
         ipc: Some(labwc::ipc_available),
         inspect: inspect_labwc,
-        bindings: Some(crate::bindings::labwc_entries),
+        bindings: Some(labwc::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.labwc",
@@ -362,7 +365,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: sxhkd::applicable,
         ipc: Some(sxhkd::ipc_available),
         inspect: inspect_sxhkd,
-        bindings: Some(crate::bindings::sxhkd_entries),
+        bindings: Some(sxhkd::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.bspwm-sxhkd",
@@ -381,7 +384,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: openbox::applicable,
         ipc: Some(openbox::ipc_available),
         inspect: inspect_openbox,
-        bindings: Some(crate::bindings::openbox_entries),
+        bindings: Some(openbox::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.openbox",
@@ -400,7 +403,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: gnome::applicable,
         ipc: Some(gnome::ipc_available),
         inspect: inspect_gnome,
-        bindings: Some(crate::bindings::gnome_entries),
+        bindings: Some(gnome::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.gnome",
@@ -419,7 +422,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: programmable::applicable,
         ipc: Some(programmable::ipc_available),
         inspect: inspect_programmable,
-        bindings: Some(crate::bindings::programmable_entries),
+        bindings: Some(programmable::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.programmable-x11",
@@ -438,7 +441,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         applicable: x11::applicable,
         ipc: Some(x11::ipc_available),
         inspect: inspect_x11,
-        bindings: Some(crate::bindings::x11_entries),
+        bindings: Some(x11::binding_inventory),
         focus: None,
         capability: Some(CapabilityMeta {
             id: "compositor.x11.xbindkeys",

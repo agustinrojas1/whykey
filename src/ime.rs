@@ -93,15 +93,13 @@ pub fn inspect() -> LayerResult {
 /// process scans or runtime queries.
 pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     if detections.is_empty() {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Input method",
-            id: LayerId::Ime,
-            outcome: Outcome::Pass,
-            summary: "no supported input method was detected".into(),
-            details: Vec::new(),
-        };
+        return LayerResult::new(
+            "Input method",
+            LayerId::Ime,
+            Outcome::Pass,
+            "no supported input method was detected",
+            Vec::new(),
+        );
     }
 
     let mut details = Vec::new();
@@ -136,21 +134,19 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     details.push(
         "committed text may differ from the physical key; Compose/dead-key history and application-side preedit state remain unobserved".into(),
     );
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Input method",
-        id: LayerId::Ime,
-        outcome: Outcome::UncertainContinues,
-        summary: if runtime_active {
-            "an active input method may transform this input before text is committed".into()
+    LayerResult::new(
+        "Input method",
+        LayerId::Ime,
+        Outcome::UncertainContinues,
+        if runtime_active {
+            "an active input method may transform this input before text is committed".to_owned()
         } else if runtime_inactive {
-            "input method was detected but inactive or closed; application-side text transformation remains unobserved".into()
+            "input method was detected but inactive or closed; application-side text transformation remains unobserved".to_owned()
         } else {
-            "an input-method context may transform this input before text is committed".into()
+            "an input-method context may transform this input before text is committed".to_owned()
         },
         details,
-    }
+    )
 }
 
 #[derive(Default)]

@@ -38,29 +38,25 @@ fn inspect_for_pid_with_source_inner(
             details.push(format!("target selection source: {source}"));
         }
         details.push("selected target is a shell".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Interactive application",
-            id: LayerId::Application,
-            outcome: Outcome::Pass,
-            summary: "selected process is a shell".into(),
+        return LayerResult::new(
+            "Interactive application",
+            LayerId::Application,
+            Outcome::Pass,
+            "selected process is a shell",
             details,
-        };
+        );
     }
 
     let Some((name, command, application_pid)) = interactive_ancestor_from(target_pid) else {
         if !is_explicit_target {
             let details = vec![format!("target pid: {target_pid}")];
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Interactive application",
-                id: LayerId::Application,
-                outcome: Outcome::Pass,
-                summary: "no known interactive editor ancestor detected for target process".into(),
+            return LayerResult::new(
+                "Interactive application",
+                LayerId::Application,
+                Outcome::Pass,
+                "no known interactive editor ancestor detected for target process",
                 details,
-            };
+            );
         }
         let Some((_parent, command)) = process_info(target_pid) else {
             let mut details = vec![
@@ -70,24 +66,23 @@ fn inspect_for_pid_with_source_inner(
             if let Some(source) = source {
                 details.push(format!("target selection source: {source}"));
             }
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: Some(BindingEvidence {
-                    dispatcher: None,
-                    action: None,
-                    description: None,
-                    submap: None,
-                    scope: BindingScope::Unknown,
-                    source: None,
-                    has_universal_match: false,
-                    uncertainty: Some(UncertaintyReason::EndpointUnavailable),
-                }),
-                layer: "Interactive application",
-                id: LayerId::Application,
-                outcome: Outcome::Unavailable,
-                summary: format!("target process {target_pid} is unavailable"),
+            return LayerResult::new(
+                "Interactive application",
+                LayerId::Application,
+                Outcome::Unavailable,
+                format!("target process {target_pid} is unavailable"),
                 details,
-            };
+            )
+            .with_binding(BindingEvidence {
+                dispatcher: None,
+                action: None,
+                description: None,
+                submap: None,
+                scope: BindingScope::Unknown,
+                source: None,
+                has_universal_match: false,
+                uncertainty: Some(UncertaintyReason::EndpointUnavailable),
+            });
         };
         let mut details = vec![
             format!("target pid: {target_pid}"),
@@ -102,17 +97,15 @@ fn inspect_for_pid_with_source_inner(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("process");
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Interactive application",
-            id: LayerId::Application,
-            outcome: Outcome::UnadaptedTarget,
-            summary: format!(
+        return LayerResult::new(
+            "Interactive application",
+            LayerId::Application,
+            Outcome::UnadaptedTarget,
+            format!(
                 "selected process '{bin_name}' ({target_pid}) has no dedicated shortcut adapter; handling is unverified"
             ),
             details,
-        };
+        );
     };
 
     let mut details = vec![
@@ -138,197 +131,168 @@ fn inspect_for_pid_with_source_inner(
                 has_universal_match: false,
                 uncertainty: Some(UncertaintyReason::UnresolvedMode),
             };
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: Some(binding),
-                layer: "Neovim",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "runtime mapping found; Neovim may consume the key".into(),
+            return LayerResult::new(
+                "Neovim",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "runtime mapping found; Neovim may consume the key",
                 details,
-            };
+            )
+            .with_binding(binding);
         }
         if let Some(mapping) = nvim_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
             details.push("Neovim mode and plugin precedence are runtime-dependent".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Neovim",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; Neovim may consume the key".into(),
+            return LayerResult::new(
+                "Neovim",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; Neovim may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching mapping found in Neovim RPC or init.lua/init.vim".into());
         details.push("plugins and runtime mappings were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Neovim",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "Neovim is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "Neovim",
+            LayerId::Application,
+            Outcome::Unknown,
+            "Neovim is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if matches!(name.as_str(), "vim" | "vimx" | "vi" | "gvim") {
         if let Some(mapping) = vim_runtime_mapping(key, &command) {
             details.push(format!("runtime mapping: {mapping}"));
             details.push("mapping queried through Vim remote expression".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Vim",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "runtime mapping found; Vim may consume the key".into(),
+            return LayerResult::new(
+                "Vim",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "runtime mapping found; Vim may consume the key",
                 details,
-            };
+            );
         }
         if let Some(mapping) = vim_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
             details.push("Vim mode and plugin precedence are runtime-dependent".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Vim",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; Vim may consume the key".into(),
+            return LayerResult::new(
+                "Vim",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; Vim may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching mapping found in Vim RPC or vimrc".into());
         details.push("plugins and runtime mappings were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Vim",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "Vim is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "Vim",
+            LayerId::Application,
+            Outcome::Unknown,
+            "Vim is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if matches!(name.as_str(), "emacs" | "emacsclient") {
         if let Some(mapping) = emacs_runtime_mapping(key) {
             details.push(format!("runtime mapping: {mapping}"));
             details.push("mapping queried through emacsclient key-binding".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Emacs",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "runtime mapping found; Emacs may consume the key".into(),
+            return LayerResult::new(
+                "Emacs",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "runtime mapping found; Emacs may consume the key",
                 details,
-            };
+            );
         }
         if let Some(mapping) = emacs_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
             details
                 .push("Emacs major/minor mode and keymap precedence are runtime-dependent".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Emacs",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; Emacs may consume the key".into(),
+            return LayerResult::new(
+                "Emacs",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; Emacs may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching mapping found in Emacs init files".into());
         details.push("major/minor mode and package mappings were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Emacs",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "Emacs is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "Emacs",
+            LayerId::Application,
+            Outcome::Unknown,
+            "Emacs is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if matches!(name.as_str(), "helix" | "hx") {
         if let Some(mapping) = helix_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
             details.push("Helix mode and runtime/plugin precedence are conditional".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Helix",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; Helix may consume the key".into(),
+            return LayerResult::new(
+                "Helix",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; Helix may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching mapping found in Helix config.toml".into());
         details.push("mode and runtime/plugin mappings were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Helix",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "Helix is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "Helix",
+            LayerId::Application,
+            Outcome::Unknown,
+            "Helix is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if name == "micro" {
         if let Some(mapping) = micro_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
             details.push("Micro mode and plugin precedence are conditional".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Micro",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; Micro may consume the key".into(),
+            return LayerResult::new(
+                "Micro",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; Micro may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching mapping found in Micro bindings.json".into());
         details.push("plugin and mode mappings were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Micro",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "Micro is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "Micro",
+            LayerId::Application,
+            Outcome::Unknown,
+            "Micro is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if matches!(name.as_str(), "kak" | "kakoune") {
         if let Some(mapping) = kakoune_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
             details.push("Kakoune context and runtime/plugin precedence are conditional".into());
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Kakoune",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; Kakoune may consume the key".into(),
+            return LayerResult::new(
+                "Kakoune",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; Kakoune may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching mapping found in kakrc".into());
         details.push("runtime and plugin mappings were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Kakoune",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "Kakoune is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "Kakoune",
+            LayerId::Application,
+            Outcome::Unknown,
+            "Kakoune is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if matches!(name.as_str(), "code" | "code-oss" | "codium" | "vscodium") {
         if let Some(mapping) = vscode_static_mapping(key) {
@@ -337,29 +301,25 @@ fn inspect_for_pid_with_source_inner(
                 "VS Code keybinding context, chords, and extension precedence are conditional"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "VS Code",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; VS Code may consume the key".into(),
+            return LayerResult::new(
+                "VS Code",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; VS Code may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching single-key mapping found in VS Code keybindings.json".into());
         details.push(
             "chords, `when` clauses, extensions, and runtime context were not inspected".into(),
         );
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "VS Code",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "VS Code is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "VS Code",
+            LayerId::Application,
+            Outcome::Unknown,
+            "VS Code is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     if is_jetbrains_name(&name) {
         if let Some(mapping) = jetbrains_static_mapping(key) {
@@ -368,40 +328,34 @@ fn inspect_for_pid_with_source_inner(
                 "JetBrains keymap context, plugins, and IDE action precedence are conditional"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "JetBrains IDE",
-                id: LayerId::Application,
-                outcome: Outcome::HandledUncertain,
-                summary: "mapping found; JetBrains may consume the key".into(),
+            return LayerResult::new(
+                "JetBrains IDE",
+                LayerId::Application,
+                Outcome::HandledUncertain,
+                "mapping found; JetBrains may consume the key",
                 details,
-            };
+            );
         }
         details.push("no matching shortcut found in the selected JetBrains keymap".into());
         details
             .push("IDE context, plugins, and runtime keymap overrides were not inspected".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "JetBrains IDE",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "JetBrains IDE is active; application handling cannot be proven".into(),
+        return LayerResult::new(
+            "JetBrains IDE",
+            LayerId::Application,
+            Outcome::Unknown,
+            "JetBrains IDE is active; application handling cannot be proven",
             details,
-        };
+        );
     }
     details.push("application shortcut mappings are not inspected".into());
     details.push("foreground terminal ownership is unverified".into());
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Selected application",
-        id: LayerId::Application,
-        outcome: Outcome::Unknown,
-        summary: format!("selected application '{name}' may consume the key before the shell"),
+    LayerResult::new(
+        "Selected application",
+        LayerId::Application,
+        Outcome::Unknown,
+        format!("selected application '{name}' may consume the key before the shell"),
         details,
-    }
+    )
 }
 
 fn interactive_ancestor_from(start_pid: u32) -> Option<(String, String, u32)> {

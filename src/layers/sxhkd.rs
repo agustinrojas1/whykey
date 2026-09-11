@@ -3,12 +3,30 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only sxhkd binding adapter for bspwm-style sessions.
 pub struct Sxhkd;
 
-pub type BindingInventoryEntry = (KeyCombo, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let path = config_path().ok_or_else(|| {
+        "sxhkd: sxhkdrc was not found; runtime sxhkd state remains unknown".to_owned()
+    })?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("sxhkd: config: {}: {error}", path.display()))?;
+    Ok(parse_bindings(&content)
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                "sxhkd",
+                binding.combo.compact_display(),
+                binding.command,
+                "configured; runtime activation conditional",
+            )
+            .with_context("sxhkdrc static binding")
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -30,42 +48,27 @@ pub fn ipc_available() -> bool {
     config_path().is_some()
 }
 
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let path = config_path()
-        .ok_or_else(|| "sxhkdrc was not found; runtime sxhkd state remains unknown".to_owned())?;
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("config: {}: {error}", path.display()))?;
-    Ok(parse_bindings(&content)
-        .into_iter()
-        .map(|binding| (binding.combo, binding.command))
-        .collect())
-}
-
 impl Sxhkd {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "sxhkd",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "sxhkd configuration is unavailable".into(),
-                details: vec!["set SXHKD_CONFIG or provide ~/.config/sxhkd/sxhkdrc".into()],
-            };
+            return LayerResult::new(
+                "sxhkd",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "sxhkd configuration is unavailable",
+                vec!["set SXHKD_CONFIG or provide ~/.config/sxhkd/sxhkdrc".into()],
+            );
         };
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "sxhkd",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not read sxhkd configuration".into(),
-                    details: vec![format!("config: {}: {error}", path.display())],
-                };
+                return LayerResult::new(
+                    "sxhkd",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not read sxhkd configuration",
+                    vec![format!("config: {}: {error}", path.display())],
+                );
             }
         };
         let matches = parse_bindings(&content)
@@ -78,28 +81,24 @@ impl Sxhkd {
                 "no matching static sxhkd binding found; runtime reload state remains unknown"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "sxhkd",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "sxhkd shortcut state is conditional".into(),
+            return LayerResult::new(
+                "sxhkd",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "sxhkd shortcut state is conditional",
                 details,
-            };
+            );
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.command));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "sxhkd",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching sxhkd shortcut configured; runtime activation is conditional".into(),
+        LayerResult::new(
+            "sxhkd",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching sxhkd shortcut configured; runtime activation is conditional",
             details,
-        }
+        )
     }
 }
 

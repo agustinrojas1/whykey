@@ -57,8 +57,8 @@ pub fn current() -> Report {
     }
 }
 
-fn build_conflicts(entries: &[bindings::BindingEntry]) -> (Vec<Conflict>, usize) {
-    let mut groups: BTreeMap<ConflictGroupKey, Vec<&bindings::BindingEntry>> = BTreeMap::new();
+fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize) {
+    let mut groups: BTreeMap<ConflictGroupKey, Vec<&bindings::BindingRecord>> = BTreeMap::new();
     for entry in entries {
         groups
             .entry((
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn only_different_actions_in_the_same_context_are_conflicts() {
         let entries = vec![
-            bindings::BindingEntry {
+            bindings::BindingRecord {
                 device: None,
                 submap: None,
                 source: "test".into(),
@@ -224,7 +224,7 @@ mod tests {
                 context: Some("default".into()),
                 certainty: "runtime effective binding".into(),
             },
-            bindings::BindingEntry {
+            bindings::BindingRecord {
                 device: None,
                 submap: None,
                 source: "test".into(),
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn different_devices_are_not_grouped_as_conflicts() {
         let entries = vec![
-            bindings::BindingEntry {
+            bindings::BindingRecord {
                 device: Some("kbd-a".into()),
                 submap: Some("default".into()),
                 source: "test".into(),
@@ -252,7 +252,7 @@ mod tests {
                 context: Some("default".into()),
                 certainty: "runtime effective binding".into(),
             },
-            bindings::BindingEntry {
+            bindings::BindingRecord {
                 device: Some("kbd-b".into()),
                 submap: Some("default".into()),
                 source: "test".into(),
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn different_submaps_are_not_grouped_as_conflicts() {
         let entries = vec![
-            bindings::BindingEntry {
+            bindings::BindingRecord {
                 device: Some("kbd".into()),
                 submap: Some("default".into()),
                 source: "test".into(),
@@ -278,7 +278,7 @@ mod tests {
                 context: Some("default".into()),
                 certainty: "runtime effective binding".into(),
             },
-            bindings::BindingEntry {
+            bindings::BindingRecord {
                 device: Some("kbd".into()),
                 submap: Some("resize".into()),
                 source: "test".into(),

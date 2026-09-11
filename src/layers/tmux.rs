@@ -48,27 +48,23 @@ pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerRe
                 }
                 Err(message) => {
                     details.push(format!("could not read active table {table}: {message}"));
-                    return LayerResult {
-                        verbose_details: Vec::new(),
-                        binding: None,
-                        layer: "tmux",
-                        id: LayerId::Multiplexer,
-                        outcome: Outcome::Unknown,
-                        summary: "active tmux table could not be inspected".into(),
+                    return LayerResult::new(
+                        "tmux",
+                        LayerId::Multiplexer,
+                        Outcome::Unknown,
+                        "active tmux table could not be inspected",
                         details,
-                    };
+                    );
                 }
             }
             details.push(format!("active table {table} has no binding for this key"));
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "tmux",
-                id: LayerId::Multiplexer,
-                outcome: Outcome::Pass,
-                summary: "no binding in the active tmux table; forwarded to the pane".into(),
+            return LayerResult::new(
+                "tmux",
+                LayerId::Multiplexer,
+                Outcome::Pass,
+                "no binding in the active tmux table; forwarded to the pane",
                 details,
-            };
+            );
         }
     }
 
@@ -105,34 +101,24 @@ pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerRe
             Outcome::HandledUncertain
         };
         let summary = if bytes_verified {
-            "prefix key is consumed by tmux".into()
+            "prefix key is consumed by tmux".to_owned()
         } else {
-            "configured prefix matches, but terminal byte delivery is unverified".into()
+            "configured prefix matches, but terminal byte delivery is unverified".to_owned()
         };
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "tmux",
-            id: LayerId::Multiplexer,
-            outcome,
-            summary,
-            details,
-        };
+        return LayerResult::new("tmux", LayerId::Multiplexer, outcome, summary, details);
     }
 
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "tmux",
-        id: LayerId::Multiplexer,
-        outcome: Outcome::Pass,
-        summary: if bytes_verified {
-            "no direct tmux binding; forwarded to the shell".into()
+    LayerResult::new(
+        "tmux",
+        LayerId::Multiplexer,
+        Outcome::Pass,
+        if bytes_verified {
+            "no direct tmux binding; forwarded to the shell".to_owned()
         } else {
-            "no direct tmux binding; terminal byte delivery remains unverified".into()
+            "no direct tmux binding; terminal byte delivery remains unverified".to_owned()
         },
         details,
-    }
+    )
 }
 
 fn list_keys(table: &str) -> Result<Vec<u8>, String> {
@@ -180,53 +166,48 @@ fn result_for_binding(action: &str, mut details: Vec<String>, bytes_verified: bo
         details.push(
             "candidate binding matches in tmux, but terminal byte delivery is unverified".into(),
         );
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(binding),
-            layer: "tmux",
-            id: LayerId::Multiplexer,
-            outcome: Outcome::HandledUncertain,
-            summary: "candidate binding matches in tmux root table; delivery is unverified".into(),
+        return LayerResult::new(
+            "tmux",
+            LayerId::Multiplexer,
+            Outcome::HandledUncertain,
+            "candidate binding matches in tmux root table; delivery is unverified",
             details,
-        };
+        )
+        .with_binding(binding);
     }
     if action == "send-keys" || action.starts_with("send-keys ") {
         details.push("tmux emits another key sequence downstream".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(binding),
-            layer: "tmux",
-            id: LayerId::Multiplexer,
-            outcome: Outcome::HandledAndPassed,
-            summary: "binding remaps the key and forwards generated input".into(),
+        return LayerResult::new(
+            "tmux",
+            LayerId::Multiplexer,
+            Outcome::HandledAndPassed,
+            "binding remaps the key and forwards generated input",
             details,
-        };
+        )
+        .with_binding(binding);
     }
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: Some(binding),
-        layer: "tmux",
-        id: LayerId::Multiplexer,
-        outcome: Outcome::Consumed,
-        summary: "binding consumes the key".into(),
+    LayerResult::new(
+        "tmux",
+        LayerId::Multiplexer,
+        Outcome::Consumed,
+        "binding consumes the key",
         details,
-    }
+    )
+    .with_binding(binding)
 }
 
 fn unavailable(message: String) -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "tmux",
-        id: LayerId::Multiplexer,
-        outcome: Outcome::Unavailable,
-        summary: "could not inspect tmux key bindings".into(),
-        details: vec![if message.is_empty() {
+    LayerResult::new(
+        "tmux",
+        LayerId::Multiplexer,
+        Outcome::Unavailable,
+        "could not inspect tmux key bindings",
+        vec![if message.is_empty() {
             "tmux did not return an error message".into()
         } else {
             format!("tmux: {message}")
         }],
-    }
+    )
 }
 
 struct Binding {

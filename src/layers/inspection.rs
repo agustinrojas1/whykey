@@ -21,14 +21,18 @@ pub fn terminal_identity() -> Option<&'static str> {
 /// A terminal adapter is the point where a logical key becomes terminal
 /// bytes. Keeping that conversion here prevents the listener's Kitty probe
 /// sequence from being mistaken for the input Bash would normally receive.
+/// Inspect one key combination through the default chain.
 pub fn inspect_default_chain(key: &KeyCombo) -> Vec<LayerResult> {
-    inspect_default_chain_inner(key, false, None, None, None, None, None)
+    inspect(&InspectRequest::new(key))
 }
 
 /// Inspect the chain while resolving the interactive application from a
 /// caller-selected process rather than whykey's own ancestry.
 pub fn inspect_default_chain_for_pid(key: &KeyCombo, target_pid: u32) -> Vec<LayerResult> {
-    inspect_default_chain_for_pid_with_source(key, target_pid, None)
+    let mut request = InspectRequest::new(key);
+    request.force_continue = true;
+    request.application_pid = Some(target_pid);
+    inspect(&request)
 }
 
 pub fn inspect_default_chain_for_pid_with_source(
@@ -40,18 +44,11 @@ pub fn inspect_default_chain_for_pid_with_source(
     // (for example, a missing controlling TTY in a CI process) is unavailable.
     // The report retains that uncertainty instead of hiding the selected
     // application's ancestry.
-    inspect_default_chain_inner(
-        key,
-        true,
-        None,
-        None,
-        None,
-        None,
-        Some(ApplicationTarget {
-            pid: target_pid,
-            source,
-        }),
-    )
+    let mut request = InspectRequest::new(key);
+    request.force_continue = true;
+    request.application_pid = Some(target_pid);
+    request.application_source = source;
+    inspect(&request)
 }
 
 /// Inspect one static chain with a shared wall-clock budget.
@@ -80,15 +77,12 @@ pub fn inspect_default_chain_observed_with_termios(
     protocol_flags: Option<u32>,
     termios: Option<&libc::termios>,
 ) -> Vec<LayerResult> {
-    inspect_default_chain_inner(
-        key,
-        true,
-        protocol_flags,
-        Some(observed_bytes),
-        None,
-        termios,
-        None,
-    )
+    let mut request = InspectRequest::new(key);
+    request.force_continue = true;
+    request.protocol_flags = protocol_flags;
+    request.observed_bytes = Some(observed_bytes);
+    request.termios = termios;
+    inspect(&request)
 }
 
 pub fn inspect_default_chain_evdev(
@@ -113,7 +107,7 @@ pub fn inspect_default_chain_evdev_with_session(
         device: Some(device.into()),
         keycode,
     });
-    inspect_with_request_and_session(&request, session)
+    inspect_with_environment(&request, session)
 }
 
 pub fn inspect_default_chain_hyprland_with_session(
@@ -126,7 +120,7 @@ pub fn inspect_default_chain_hyprland_with_session(
         device: None,
         keycode,
     });
-    inspect_with_request_and_session(&request, session)
+    inspect_with_environment(&request, session)
 }
 
 /// Captured-terminal inspection reusing one listener-session snapshot. The
@@ -144,34 +138,19 @@ pub fn inspect_default_chain_observed_with_session(
     request.protocol_flags = protocol_flags;
     request.observed_bytes = Some(observed_bytes);
     request.termios = termios;
-    inspect_with_request_and_session(&request, session)
+    inspect_with_environment(&request, session)
 }
 
-fn inspect_default_chain_inner(
-    key: &KeyCombo,
-    force_continue: bool,
-    protocol_flags: Option<u32>,
-    observed_bytes: Option<&[u8]>,
-    physical_input: Option<PhysicalInput>,
-    termios: Option<&libc::termios>,
-    application_target: Option<ApplicationTarget<'_>>,
-) -> Vec<LayerResult> {
-    let mut request = InspectRequest::new(key);
-    request.force_continue = force_continue;
-    request.protocol_flags = protocol_flags;
-    request.observed_bytes = observed_bytes;
-    request.physical_input = physical_input;
-    request.termios = termios;
-    request.application_pid = application_target.map(|target| target.pid);
-    request.application_source = application_target.and_then(|target| target.source);
-
+/// One production inspection path: a typed request plus a fresh environment
+/// snapshot. All public entry points above build a request and land here.
+pub fn inspect(request: &InspectRequest<'_>) -> Vec<LayerResult> {
     // Single discovery pass per inspection: the environment snapshot runs
     // each adapter probe once and owns the selected compositor.
     let session = crate::environment::Environment::collect();
-    inspect_with_request_and_session(&request, &session)
+    inspect_with_environment(request, &session)
 }
 
-pub(crate) fn inspect_with_request_and_session(
+pub(crate) fn inspect_with_environment(
     request: &InspectRequest<'_>,
     session: &crate::environment::Environment,
 ) -> Vec<LayerResult> {
@@ -440,15 +419,7 @@ mod tests {
     use super::*;
 
     fn dummy_result(outcome: Outcome) -> LayerResult {
-        LayerResult {
-            layer: "Test",
-            id: LayerId::Unknown,
-            outcome,
-            summary: "test".into(),
-            details: Vec::new(),
-            verbose_details: Vec::new(),
-            binding: None,
-        }
+        LayerResult::new("Test", LayerId::Unknown, outcome, "test", Vec::new())
     }
 
     #[test]
@@ -510,15 +481,13 @@ mod tests {
 
     #[test]
     fn target_endpoint_selection() {
-        let app_handled = LayerResult {
-            layer: "Neovim",
-            id: LayerId::Application,
-            outcome: Outcome::HandledUncertain,
-            summary: "mode-dependent".into(),
-            details: Vec::new(),
-            verbose_details: Vec::new(),
-            binding: None,
-        };
+        let app_handled = LayerResult::new(
+            "Neovim",
+            LayerId::Application,
+            Outcome::HandledUncertain,
+            "mode-dependent",
+            Vec::new(),
+        );
         let app_pass = dummy_result(Outcome::Pass);
 
         // Without explicit target, app match selects InteractiveApplication

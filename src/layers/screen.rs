@@ -21,15 +21,13 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
 
     if screen_key_bytes(key).is_some_and(|bytes| bytes == prefix) {
         details.push("this is Screen's command prefix; the next key is read by Screen".into());
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "GNU Screen",
-            id: LayerId::Multiplexer,
-            outcome: Outcome::Consumed,
-            summary: "command prefix is consumed by Screen".into(),
+        return LayerResult::new(
+            "GNU Screen",
+            LayerId::Multiplexer,
+            Outcome::Consumed,
+            "command prefix is consumed by Screen",
             details,
-        };
+        );
     }
 
     let candidates = screen_input_candidates(key);
@@ -48,23 +46,21 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         let forwards = binding.action.starts_with("stuff")
             || binding.action.starts_with("process")
             || binding.action.starts_with("writebuf");
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "GNU Screen",
-            id: LayerId::Multiplexer,
-            outcome: if forwards {
+        return LayerResult::new(
+            "GNU Screen",
+            LayerId::Multiplexer,
+            if forwards {
                 Outcome::HandledAndPassed
             } else {
                 Outcome::Consumed
             },
-            summary: if forwards {
-                "bindkey remaps the sequence and forwards generated input".into()
+            if forwards {
+                "bindkey remaps the sequence and forwards generated input".to_owned()
             } else {
-                "bindkey consumes the sequence".into()
+                "bindkey consumes the sequence".to_owned()
             },
             details,
-        };
+        );
     }
 
     let command_bindings = parse_bindings(&config_lines);
@@ -78,26 +74,22 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             binding.action
         ));
         details.push(format!("binding source: {}", binding.source));
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "GNU Screen",
-            id: LayerId::Multiplexer,
-            outcome: Outcome::UncertainContinues,
-            summary: "binding exists after Screen's prefix; this key alone is forwarded".into(),
+        return LayerResult::new(
+            "GNU Screen",
+            LayerId::Multiplexer,
+            Outcome::UncertainContinues,
+            "binding exists after Screen's prefix; this key alone is forwarded",
             details,
-        };
+        );
     }
 
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "GNU Screen",
-        id: LayerId::Multiplexer,
-        outcome: Outcome::Pass,
-        summary: "no Screen binding; forwarded to the window's PTY".into(),
+    LayerResult::new(
+        "GNU Screen",
+        LayerId::Multiplexer,
+        Outcome::Pass,
+        "no Screen binding; forwarded to the window's PTY",
         details,
-    }
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

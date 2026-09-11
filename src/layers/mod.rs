@@ -3,6 +3,7 @@ pub mod cinnamon;
 pub mod compositor;
 pub mod ghostty;
 pub mod gnome;
+pub mod gsettings;
 pub mod hyprland;
 pub mod i3;
 pub mod inspection;
@@ -23,6 +24,7 @@ pub mod sxhkd;
 pub mod terminal;
 pub mod terminal_app;
 pub mod terminal_dispatch;
+pub mod tiling;
 pub mod tmux;
 pub mod wayfire;
 pub mod x11;
@@ -31,6 +33,107 @@ pub mod zellij;
 
 pub use inspection::*;
 pub use model::*;
+
+/// Shared Sway/i3 IPC binding conversion: both compositors expose the same
+/// event-mask/key JSON shape, so both inventory functions build records here
+/// instead of duplicating the walk.
+pub(crate) fn collect_ipc_json_bindings(
+    value: &serde_json::Value,
+    source: &str,
+) -> Vec<BindingRecord> {
+    let mut records = Vec::new();
+    let Some(bindings) = value.as_array() else {
+        return records;
+    };
+    for binding in bindings {
+        let mask = binding.get("event_state_mask").and_then(json_u32);
+        let action = binding
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown command")
+            .to_owned();
+        let mut keys = Vec::new();
+        for field in ["keysym", "symbols", "symbol"] {
+            if let Some(value) = binding.get(field) {
+                match value {
+                    serde_json::Value::String(value) => keys.push(value.clone()),
+                    serde_json::Value::Array(values) => keys.extend(
+                        values
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned),
+                    ),
+                    _ => {}
+                }
+            }
+        }
+        if let Some(code) = binding.get("input_code").and_then(json_u32) {
+            keys.push(format!("code:{code}"));
+        }
+        if let Some(values) = binding
+            .get("keycodes")
+            .and_then(serde_json::Value::as_array)
+        {
+            keys.extend(
+                values
+                    .iter()
+                    .filter_map(json_u32)
+                    .map(|code| format!("code:{code}")),
+            );
+        }
+        if keys.is_empty() {
+            continue;
+        }
+        let certainty = if mask.is_some() {
+            "runtime effective binding"
+        } else {
+            "runtime binding; modifier mask unknown"
+        };
+        for key in keys {
+            records.push(BindingRecord {
+                device: None,
+                submap: None,
+                source: source.into(),
+                key: mask.map_or_else(
+                    || key.to_ascii_uppercase(),
+                    |mask| combo_display(mask, &key),
+                ),
+                action: action.clone(),
+                context: None,
+                certainty: certainty.into(),
+            });
+        }
+    }
+    records
+}
+
+pub(crate) fn json_u32(value: &serde_json::Value) -> Option<u32> {
+    value
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .or_else(|| value.as_str()?.parse().ok())
+}
+
+pub(crate) fn combo_display(mask: u32, key: &str) -> String {
+    let mut prefix = String::new();
+    for (bit, name) in [
+        (1, "SHIFT"),
+        (2, "CAPS"),
+        (4, "CTRL"),
+        (8, "ALT"),
+        (16, "MOD2"),
+        (32, "MOD3"),
+        (64, "SUPER"),
+        (128, "MOD5"),
+    ] {
+        if mask & bit != 0 {
+            prefix.push_str(name);
+            prefix.push('+');
+        }
+    }
+    prefix.push_str(&key.to_ascii_uppercase());
+    prefix
+}
 
 #[cfg(test)]
 mod tests {
@@ -129,24 +232,14 @@ mod tests {
 
     #[test]
     fn ime_result_is_placed_before_the_tty_stage() {
-        let tty = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "TTY driver",
-            id: LayerId::Tty,
-            outcome: Outcome::Pass,
-            summary: "tty".into(),
-            details: Vec::new(),
-        };
-        let ime = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "IME",
-            id: LayerId::Ime,
-            outcome: Outcome::HandledAndPassed,
-            summary: "ime".into(),
-            details: Vec::new(),
-        };
+        let tty = LayerResult::new("TTY driver", LayerId::Tty, Outcome::Pass, "tty", Vec::new());
+        let ime = LayerResult::new(
+            "IME",
+            LayerId::Ime,
+            Outcome::HandledAndPassed,
+            "ime",
+            Vec::new(),
+        );
         let mut results = vec![tty];
         let insert_at = results
             .iter()
@@ -195,7 +288,7 @@ mod tests {
         request.application_pid = Some(1);
         request.application_source = Some("test");
         let session = crate::environment::Environment::collect();
-        let results = inspect_with_request_and_session(&request, &session);
+        let results = inspect_with_environment(&request, &session);
         let app_result = results.iter().find(|l| l.id == LayerId::Application);
         assert!(app_result.is_some());
         let app = app_result.unwrap();

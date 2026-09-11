@@ -1,9 +1,8 @@
 use std::env;
-use std::process::Command;
 
-use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::gsettings::{self, GsettingsBinding, GsettingsMeta};
+use crate::layers::{BindingRecord, LayerResult};
 
 /// Read-only MATE global keyboard-shortcut adapter.
 pub struct Mate;
@@ -12,6 +11,21 @@ const SCHEMAS: &[&str] = &[
     "org.mate.Marco.global-keybindings",
     "org.mate.SettingsDaemon.plugins.media-keys",
 ];
+
+static META: GsettingsMeta = GsettingsMeta {
+    layer: "MATE",
+    error_prefix: "MATE: ",
+    unavailable_summary: "could not inspect MATE global shortcuts",
+    no_match_summary: "no active MATE global shortcut found",
+    match_summary: "MATE global shortcut consumes the key",
+    source_details: &[
+        "source: gsettings list-recursively org.mate.Marco.global-keybindings",
+        "source: gsettings list-recursively org.mate.SettingsDaemon.plugins.media-keys",
+    ],
+    inventory_source: "MATE",
+    inventory_certainty: "runtime GSettings value",
+    inventory_context: "global GSettings shortcut",
+};
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -32,120 +46,51 @@ pub fn applicable() -> bool {
 pub fn ipc_available() -> bool {
     SCHEMAS
         .iter()
-        .any(|schema| run_gsettings_list(schema).is_ok())
+        .any(|&schema| gsettings::run_list(&["list-recursively", schema]).is_ok())
 }
 
 /// Return MATE's live GSettings shortcut values as normalized entries.
-pub fn binding_inventory() -> Result<Vec<(KeyCombo, String, Option<String>)>, String> {
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
     let (bindings, errors) = load_bindings();
     if bindings.is_empty() && !errors.is_empty() {
-        return Err(errors.join("; "));
+        return gsettings::inventory(&META, Err(errors.join("; ")));
     }
-    Ok(bindings
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.command))
-        .collect())
+    gsettings::inventory(&META, Ok(bindings))
 }
 
 impl Mate {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let (bindings, errors) = load_bindings();
         if bindings.is_empty() && !errors.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "MATE",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "could not inspect MATE global shortcuts".into(),
-                details: errors,
-            };
+            return gsettings::inspect(&META, Err(errors.join("; ")), key);
         }
-        let matches = bindings
-            .iter()
-            .filter(|binding| binding.combo == *key)
-            .collect::<Vec<_>>();
-        if matches.is_empty() {
-            let mut details = SCHEMAS
-                .iter()
-                .map(|schema| format!("source: gsettings list-recursively {schema}"))
-                .collect::<Vec<_>>();
-            details.extend(errors);
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "MATE",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active MATE global shortcut found".into(),
-                details,
-            };
-        }
-
-        let mut details = SCHEMAS
-            .iter()
-            .map(|schema| format!("source: gsettings list-recursively {schema}"))
-            .collect::<Vec<_>>();
-        for binding in matches {
-            details.push(format!(
-                "binding: {}{}",
-                binding.action,
-                binding
-                    .command
-                    .as_deref()
-                    .map(|command| format!(" — command: {command}"))
-                    .unwrap_or_default()
-            ));
-        }
-        details.extend(errors);
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "MATE",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "MATE global shortcut consumes the key".into(),
-            details,
-        }
+        // Partial per-schema failures stay visible after the match details,
+        // exactly as the pre-consolidation adapter reported them.
+        let mut result = gsettings::inspect(&META, Ok(bindings), key);
+        result.details.extend(errors);
+        result
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Binding {
-    combo: KeyCombo,
-    action: String,
-    command: Option<String>,
-}
-
-fn load_bindings() -> (Vec<Binding>, Vec<String>) {
+fn load_bindings() -> (Vec<GsettingsBinding>, Vec<String>) {
     let mut bindings = Vec::new();
     let mut errors = Vec::new();
-    for schema in SCHEMAS {
-        match run_gsettings_list(schema) {
+    for &schema in SCHEMAS {
+        match gsettings::run_list(&["list-recursively", schema]) {
             Ok(output) => bindings.extend(parse_bindings(schema, &output)),
-            Err(error) => errors.push(error),
+            Err(error) => errors.push(mate_error(schema, error)),
         }
     }
     (bindings, errors)
 }
 
-fn run_gsettings_list(schema: &str) -> Result<String, String> {
-    let mut gsettings = Command::new("gsettings");
-    gsettings.args(["list-recursively", schema]);
-    let output = command::output(&mut gsettings).map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if message.is_empty() {
-            format!("gsettings {schema} exited with {}", output.status)
-        } else {
-            format!("gsettings {schema}: {message}")
-        });
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|error| format!("gsettings {schema} returned invalid UTF-8: {error}"))
+/// Restore the per-schema `gsettings {schema} ...` error shape this adapter
+/// historically reported now that the process runner is shared.
+fn mate_error(schema: &str, error: String) -> String {
+    error.replacen("gsettings", &format!("gsettings {schema}"), 1)
 }
 
-fn parse_bindings(schema: &str, content: &str) -> Vec<Binding> {
+fn parse_bindings(schema: &str, content: &str) -> Vec<GsettingsBinding> {
     let mut bindings = Vec::new();
     for line in content
         .lines()
@@ -161,81 +106,26 @@ fn parse_bindings(schema: &str, content: &str) -> Vec<Binding> {
         if row_schema != schema {
             continue;
         }
-        for raw_binding in quoted_values(value) {
-            let Some(combo) = parse_accelerator(&raw_binding) else {
+        for raw_binding in gsettings::quoted_values(value) {
+            let Some(combo) = gsettings::parse_accelerator(&raw_binding) else {
                 continue;
             };
-            bindings.push(Binding {
+            let action = format!("{schema} {name}");
+            bindings.push(GsettingsBinding {
                 combo,
-                action: format!("{schema} {name}"),
+                action: action.clone(),
                 command: None,
+                detail: format!("binding: {action}"),
             });
         }
     }
     bindings
 }
 
-fn quoted_values(value: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for character in value.trim().chars() {
-        if let Some(active_quote) = quote {
-            if escaped {
-                current.push(character);
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == active_quote {
-                values.push(std::mem::take(&mut current));
-                quote = None;
-            } else {
-                current.push(character);
-            }
-        } else if character == '\'' || character == '"' {
-            quote = Some(character);
-        }
-    }
-    if values.is_empty() {
-        let value = value.trim();
-        if !value.is_empty() && !value.starts_with('@') && value != "[]" {
-            values.push(value.trim_matches(['[', ']', ' ', '\n']).to_owned());
-        }
-    }
-    values
-}
-
-fn parse_accelerator(value: &str) -> Option<KeyCombo> {
-    let mut remainder = value.trim();
-    let mut modifiers = Vec::new();
-    while remainder.starts_with('<') {
-        let end = remainder.find('>')?;
-        let modifier = &remainder[1..end];
-        modifiers.push(match modifier.to_ascii_lowercase().as_str() {
-            "control" | "ctrl" | "primary" | "ctl" => "ctrl",
-            "alt" | "mod1" => "alt",
-            "shift" => "shift",
-            "super" | "meta" | "win" | "mod4" => "super",
-            "hyper" | "mod3" => "mod3",
-            "mod2" | "num" | "numlock" => "mod2",
-            "mod5" => "mod5",
-            _ => return None,
-        });
-        remainder = remainder[end + 1..].trim();
-    }
-    if !modifiers.is_empty() {
-        if remainder.is_empty() {
-            return None;
-        }
-        return format!("{}+{remainder}", modifiers.join("+")).parse().ok();
-    }
-    remainder.parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layers::gsettings::{parse_accelerator, quoted_values};
 
     #[test]
     fn parses_marco_and_media_key_rows() {

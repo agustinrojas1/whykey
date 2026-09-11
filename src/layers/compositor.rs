@@ -59,30 +59,26 @@ pub fn inspect() -> LayerResult {
     if let Some(display_server) = context.display_server.as_deref() {
         details.push(format!("display server: {display_server}"));
     }
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Desktop compositor",
-        id: LayerId::Compositor,
-        outcome: Outcome::UncertainContinues,
-        summary: format!("{desktop} ({session}) detected; no compositor adapter is available"),
+    LayerResult::new(
+        "Desktop compositor",
+        LayerId::Compositor,
+        Outcome::UncertainContinues,
+        format!("{desktop} ({session}) detected; no compositor adapter is available"),
         details,
-    }
+    )
 }
 
 /// Result for a console or otherwise display-less session. Keeping this
 /// separate from `inspect` avoids manufacturing a Hyprland IPC failure when
 /// there is no desktop compositor to query.
 pub fn not_detected() -> LayerResult {
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Desktop compositor",
-        id: LayerId::Compositor,
-        outcome: Outcome::Pass,
-        summary: "no desktop compositor session detected".into(),
-        details: vec!["the diagnostic starts at the terminal/TTY path for this session".into()],
-    }
+    LayerResult::new(
+        "Desktop compositor",
+        LayerId::Compositor,
+        Outcome::Pass,
+        "no desktop compositor session detected",
+        vec!["the diagnostic starts at the terminal/TTY path for this session".into()],
+    )
 }
 
 fn context_from(

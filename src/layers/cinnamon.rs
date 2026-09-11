@@ -1,14 +1,25 @@
 use std::env;
-use std::process::Command;
 
-use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::gsettings::{self, GsettingsBinding, GsettingsMeta};
+use crate::layers::{BindingRecord, LayerResult};
 
 /// Read-only Cinnamon global keyboard-shortcut adapter.
 pub struct Cinnamon;
 
 const SCHEMA_PREFIX: &str = "org.cinnamon.desktop.keybindings";
+
+static META: GsettingsMeta = GsettingsMeta {
+    layer: "Cinnamon",
+    error_prefix: "Cinnamon: ",
+    unavailable_summary: "could not inspect Cinnamon global shortcuts",
+    no_match_summary: "no active Cinnamon global shortcut found",
+    match_summary: "Cinnamon global shortcut consumes the key",
+    source_details: &["source: gsettings list-recursively org.cinnamon.desktop.keybindings"],
+    inventory_source: "Cinnamon",
+    inventory_certainty: "runtime GSettings value",
+    inventory_context: "global GSettings shortcut",
+};
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -30,100 +41,26 @@ pub fn applicable() -> bool {
 }
 
 pub fn ipc_available() -> bool {
-    run_gsettings_list().is_ok()
+    gsettings::run_list(&["list-recursively", SCHEMA_PREFIX]).is_ok()
 }
 
 /// Return Cinnamon's live GSettings shortcut values as normalized entries.
-pub fn binding_inventory() -> Result<Vec<(KeyCombo, String, Option<String>)>, String> {
-    Ok(load_bindings()?
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.command))
-        .collect())
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    gsettings::inventory(&META, load_bindings())
 }
 
 impl Cinnamon {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        let bindings = match load_bindings() {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                return LayerResult::unavailable(
-                    "Cinnamon",
-                    LayerId::Compositor,
-                    "could not inspect Cinnamon global shortcuts",
-                    vec![error],
-                );
-            }
-        };
-        let matches = bindings
-            .iter()
-            .filter(|binding| binding.combo == *key)
-            .collect::<Vec<_>>();
-        if matches.is_empty() {
-            return LayerResult::pass(
-                "Cinnamon",
-                LayerId::Compositor,
-                "no active Cinnamon global shortcut found",
-                vec![format!(
-                    "source: gsettings list-recursively {SCHEMA_PREFIX}"
-                )],
-            );
-        }
-
-        let mut details = vec![format!(
-            "source: gsettings list-recursively {SCHEMA_PREFIX}"
-        )];
-        for binding in matches {
-            details.push(format!(
-                "binding: {}{}",
-                binding.action,
-                binding
-                    .command
-                    .as_deref()
-                    .map(|command| format!(" — command: {command}"))
-                    .unwrap_or_default()
-            ));
-        }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Cinnamon",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "Cinnamon global shortcut consumes the key".into(),
-            details,
-        }
+        gsettings::inspect(&META, load_bindings(), key)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Binding {
-    combo: KeyCombo,
-    action: String,
-    command: Option<String>,
-}
-
-fn load_bindings() -> Result<Vec<Binding>, String> {
-    let output = run_gsettings_list()?;
+fn load_bindings() -> Result<Vec<GsettingsBinding>, String> {
+    let output = gsettings::run_list(&["list-recursively", SCHEMA_PREFIX])?;
     Ok(parse_bindings(&output))
 }
 
-fn run_gsettings_list() -> Result<String, String> {
-    let mut gsettings = Command::new("gsettings");
-    gsettings.args(["list-recursively", SCHEMA_PREFIX]);
-    let output = command::output(&mut gsettings).map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if message.is_empty() {
-            format!("gsettings exited with {}", output.status)
-        } else {
-            format!("gsettings: {message}")
-        });
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|error| format!("gsettings returned invalid UTF-8: {error}"))
-}
-
-fn parse_bindings(content: &str) -> Vec<Binding> {
+fn parse_bindings(content: &str) -> Vec<GsettingsBinding> {
     let mut bindings = Vec::new();
     for line in content
         .lines()
@@ -139,82 +76,27 @@ fn parse_bindings(content: &str) -> Vec<Binding> {
         if !schema.starts_with(SCHEMA_PREFIX) {
             continue;
         }
-        let values = quoted_values(value);
+        let values = gsettings::quoted_values(value);
         for raw_binding in values {
-            let Some(combo) = parse_accelerator(&raw_binding) else {
+            let Some(combo) = gsettings::parse_accelerator(&raw_binding) else {
                 continue;
             };
-            bindings.push(Binding {
+            let action = format!("{schema} {name}");
+            bindings.push(GsettingsBinding {
                 combo,
-                action: format!("{schema} {name}"),
+                action: action.clone(),
                 command: None,
+                detail: format!("binding: {action}"),
             });
         }
     }
     bindings
 }
 
-fn quoted_values(value: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for character in value.trim().chars() {
-        if let Some(active_quote) = quote {
-            if escaped {
-                current.push(character);
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == active_quote {
-                values.push(std::mem::take(&mut current));
-                quote = None;
-            } else {
-                current.push(character);
-            }
-        } else if character == '\'' || character == '"' {
-            quote = Some(character);
-        }
-    }
-    if values.is_empty() {
-        let value = value.trim();
-        if !value.is_empty() && !value.starts_with('@') && value != "[]" {
-            values.push(value.trim_matches(['[', ']', ' ', '\n']).to_owned());
-        }
-    }
-    values
-}
-
-fn parse_accelerator(value: &str) -> Option<KeyCombo> {
-    let mut remainder = value.trim();
-    let mut modifiers = Vec::new();
-    while remainder.starts_with('<') {
-        let end = remainder.find('>')?;
-        let modifier = &remainder[1..end];
-        modifiers.push(match modifier.to_ascii_lowercase().as_str() {
-            "control" | "ctrl" | "primary" | "ctl" => "ctrl",
-            "alt" | "mod1" => "alt",
-            "shift" => "shift",
-            "super" | "meta" | "win" | "mod4" => "super",
-            "hyper" | "mod3" => "mod3",
-            "mod2" | "num" | "numlock" => "mod2",
-            "mod5" => "mod5",
-            _ => return None,
-        });
-        remainder = remainder[end + 1..].trim();
-    }
-    if !modifiers.is_empty() {
-        if remainder.is_empty() {
-            return None;
-        }
-        return format!("{}+{remainder}", modifiers.join("+")).parse().ok();
-    }
-    remainder.parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layers::gsettings::{parse_accelerator, quoted_values};
 
     #[test]
     fn parses_cinnamon_gsettings_rows() {
@@ -232,5 +114,17 @@ mod tests {
         assert!(parse_accelerator("<Super>").is_none());
         assert!(parse_accelerator("<Unknown>r").is_none());
         assert!(quoted_values("[]").is_empty());
+    }
+    #[test]
+    fn keeps_shared_modifier_superset() {
+        // Unlike GNOME, the shared table accepts these historical aliases.
+        assert_eq!(
+            parse_accelerator("<Meta>x").unwrap(),
+            "super+x".parse().unwrap()
+        );
+        assert_eq!(
+            parse_accelerator("<mod3>x").unwrap(),
+            "mod3+x".parse().unwrap()
+        );
     }
 }
