@@ -13,6 +13,7 @@ pub mod capture;
 pub mod command;
 pub mod conflicts;
 pub mod diff;
+pub mod doctor;
 pub mod environment;
 pub mod extension_adapters;
 pub mod extensions;
