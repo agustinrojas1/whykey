@@ -1,0 +1,5 @@
+node /org/gnome/Shell {
+  interface org.gnome.Shell {
+    method Eval(in  s script);
+  };
+};

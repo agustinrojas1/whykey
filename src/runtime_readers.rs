@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn parses_live_kglobalaccel_fixture() {
         let (availability, evidence) = parse_introspection(
-            "node /org/kde/KGlobalAccel {\n  interface org.kde.KGlobalAccel {\n    method allComponents();\n  };\n};",
+            include_str!("../tests/fixtures/runtime_readers/kglobalaccel-runtime.txt"),
             "org.kde.KGlobalAccel",
             true,
         );
@@ -191,7 +191,11 @@ mod tests {
 
     #[test]
     fn distinguishes_absent_and_malformed_runtime_responses() {
-        let (availability, _) = parse_introspection("node {}", "org.gnome.Shell", false);
+        let (availability, _) = parse_introspection(
+            include_str!("../tests/fixtures/runtime_readers/malformed.txt"),
+            "org.gnome.Shell",
+            false,
+        );
         assert_eq!(availability, Availability::MalformedResponse);
         let status = ReaderStatus {
             id: "fixture",
@@ -205,13 +209,39 @@ mod tests {
 
     #[test]
     fn portal_and_shell_are_explicitly_not_inventory_apis() {
-        for interface in ["org.freedesktop.portal.GlobalShortcuts", "org.gnome.Shell"] {
-            let (availability, _) = parse_introspection(
-                &format!("interface {interface} {{ method Register(); }}"),
-                interface,
-                false,
-            );
-            assert_eq!(availability, Availability::ApiDoesNotExpose);
+        let portal = parse_introspection(
+            include_str!("../tests/fixtures/runtime_readers/portal-globalshortcuts.txt"),
+            "org.freedesktop.portal.GlobalShortcuts",
+            false,
+        );
+        assert_eq!(portal.0, Availability::ApiDoesNotExpose);
+        let shell = parse_introspection(
+            include_str!("../tests/fixtures/runtime_readers/gnome-shell-runtime.txt"),
+            "org.gnome.Shell",
+            false,
+        );
+        assert_eq!(shell.0, Availability::ApiDoesNotExpose);
+    }
+
+    #[test]
+    fn each_registered_reader_has_a_hermetic_fixture() {
+        for spec in SPECS {
+            let fixture = match spec.id {
+                "portal-globalshortcuts" => {
+                    include_str!("../tests/fixtures/runtime_readers/portal-globalshortcuts.txt")
+                }
+                "kglobalaccel-runtime" => {
+                    include_str!("../tests/fixtures/runtime_readers/kglobalaccel-runtime.txt")
+                }
+                "gnome-shell-runtime" => {
+                    include_str!("../tests/fixtures/runtime_readers/gnome-shell-runtime.txt")
+                }
+                _ => unreachable!("unfixtureed reader {}", spec.id),
+            };
+            let (availability, evidence) =
+                parse_introspection(fixture, spec.interface, spec.api_is_inventory);
+            assert_ne!(availability, Availability::MalformedResponse, "{}", spec.id);
+            assert!(evidence.contains(spec.interface), "{}", spec.id);
         }
     }
 }

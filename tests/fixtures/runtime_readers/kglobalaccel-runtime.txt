@@ -1,0 +1,6 @@
+node /kglobalaccel {
+  interface org.kde.KGlobalAccel {
+    method allComponents();
+    method getGlobalShortcuts();
+  };
+};
