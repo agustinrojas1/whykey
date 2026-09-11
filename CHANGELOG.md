@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.0] - 2026-09-11
+
+### Added
+
+- Ship `extensions/whykey-nvim`, a stdlib-only first-party extension answering `whykey extension` from live Neovim runtime state (`mode()` + `maparg()`) over extension protocol v1. Reports `unavailable` without a `--listen` server and is never auto-invoked.
+- Add a read-only `doctor` check reporting `whykey-nvim` availability and Neovim server reachability without executing anything.
+- Document the first-party extension contract (install, one-command usage, limits) in README, SPEC, and the man page.
+- Record simplification epic closure at ~21k SLOC (L-010): residual gap accepted; capture lifecycle, platform stubs, and strict typing deliberately retained.
+
 ## [1.0.2] - 2026-09-11
 
 ### Changed
