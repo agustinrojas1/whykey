@@ -489,6 +489,9 @@ fn render_inner(
 }
 
 fn compositor_candidates_note() -> Option<String> {
+    if !candidate_detection_possible() {
+        return None;
+    }
     let environment = crate::environment::Environment::collect();
     let mut candidates = environment
         .compositor_candidates
@@ -514,6 +517,18 @@ fn compositor_candidates_note() -> Option<String> {
         candidates.len(),
         candidates.join(", ")
     ))
+}
+
+fn candidate_detection_possible() -> bool {
+    [
+        "HYPRLAND_INSTANCE_SIGNATURE",
+        "SWAYSOCK",
+        "I3SOCK",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+    ]
+    .into_iter()
+    .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
