@@ -78,7 +78,7 @@ not add a capture backend.
 | xremap | process/config detection | bounded YAML `remap` entries | process/config evidence only | literal remaps | device matching, layers, and generated config |
 | Fcitx5 | session variables/process and D-Bus preflight | bounded read-only `org.fcitx.Fcitx.Controller1` calls | service presence only | active engine/context when query succeeds | committed text, application preedit, and unavailable D-Bus |
 | IBus | session variables/process and safe API availability | read-only IBus context where available | service presence only | detected IME context and limited engine state | committed text, dead-key/Compose history, and app preedit |
-| XKB/layout | device keymap fields and optional `xkbcli` | RMLVO/keymap data, compiled `symbols[N]` groups, `NoSymbol` level positions, and optional `WHYKEY_XKB_GROUP` | compiler availability only | symbolic/code candidates and active group evidence | compositor-independent lock/AltGr/Compose and latched state |
+| XKB/layout | device keymap fields and optional `xkbcli` | RMLVO/keymap data, compiled `symbols[N]` groups, `NoSymbol` level positions, and optional `WHYKEY_XKB_GROUP` | compiler availability only | symbolic/code candidates plus typed Shift/AltGr/Caps/NumLock/latched level state when supplied | compositor-independent Compose history and missing group/RMLVO state remain conditional |
 
 ## Interactive application adapters
 

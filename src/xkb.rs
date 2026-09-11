@@ -78,6 +78,41 @@ pub struct EvdevKeycode(u16);
 #[serde(transparent)]
 pub struct XkbKeycode(u32);
 
+/// Modifier state needed to choose an XKB symbol level without guessing a
+/// layout. The compositor/evdev integration fills this from observed state;
+/// absent fields remain unknown rather than silently selecting a US default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct XkbState {
+    pub group: Option<usize>,
+    pub shift: bool,
+    pub altgr: bool,
+    pub caps_lock: bool,
+    pub num_lock: bool,
+    pub latched_shift: bool,
+}
+
+impl XkbState {
+    /// Return the conservative level for the common two/three-level XKB
+    /// layouts covered by the parser. Unknown group state is represented by
+    /// `None`, so callers can retain conditional evidence.
+    pub fn level(&self) -> Option<usize> {
+        self.group?;
+        let level = if self.altgr {
+            2
+        } else if self.shift ^ self.caps_lock ^ self.latched_shift {
+            1
+        } else {
+            0
+        };
+        Some(level)
+    }
+
+    /// Keypad keys commonly use level 1 for their NumLock symbol.
+    pub fn keypad_level(&self) -> Option<usize> {
+        self.group.map(|_| usize::from(self.num_lock))
+    }
+}
+
 impl EvdevKeycode {
     pub fn new(code: u16) -> Self {
         Self(code)
@@ -549,6 +584,41 @@ xkb_symbols "pc" {
         assert_eq!(
             preferred_symbol_for_evdev_keycode(keymap, keypad, 0, 1),
             Some("KP_1".into())
+        );
+    }
+
+    #[test]
+    fn typed_state_keeps_missing_group_conditional_and_selects_latched_levels() {
+        assert_eq!(XkbState::default().level(), None);
+        assert_eq!(
+            XkbState {
+                group: Some(0),
+                shift: false,
+                altgr: false,
+                caps_lock: false,
+                num_lock: false,
+                latched_shift: true,
+            }
+            .level(),
+            Some(1)
+        );
+        assert_eq!(
+            XkbState {
+                group: Some(0),
+                altgr: true,
+                ..XkbState::default()
+            }
+            .level(),
+            Some(2)
+        );
+        assert_eq!(
+            XkbState {
+                group: Some(0),
+                num_lock: true,
+                ..XkbState::default()
+            }
+            .keypad_level(),
+            Some(1)
         );
     }
 
