@@ -2,7 +2,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "whykey";
-  version = "1.2.0";
+  version = "1.2.1";
 
   src = lib.cleanSource ../.;
   cargoLock.lockFile = ../Cargo.lock;

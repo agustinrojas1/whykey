@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1] - 2026-09-11
+
+### Packaging and testing
+
+- Install first-party extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) across Arch PKGBUILD, RPM spec, Debian rules, and Nix recipes, verified by version scripts and package smoke gates.
+- Add hermetic extension test fixtures and wire `extensions/tests/run_all.py` into CI.
+- Compact CLI test boilerplate and table-drive extension scenarios with explicit assertion labels.
+
 ## [1.2.0] - 2026-09-11
 
 ### Added
