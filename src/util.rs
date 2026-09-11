@@ -57,24 +57,103 @@ pub fn unquote(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+const MAX_PROCESS_ENTRIES: usize = 4096;
+
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub comm: String,
+    pub cmdline_name: String,
+}
+
+pub struct ProcessSnapshot {
+    entries: Vec<ProcessEntry>,
+}
+
+impl ProcessSnapshot {
+    /// One `/proc` walk. Reads comm + cmdline for each PID.
+    pub fn collect() -> Self {
+        let mut entries = Vec::new();
+        let Ok(dir_entries) = fs::read_dir("/proc") else {
+            return Self { entries };
+        };
+        for entry in dir_entries.flatten() {
+            if entries.len() >= MAX_PROCESS_ENTRIES {
+                break;
+            }
+            let file_name = entry.file_name();
+            let Some(pid) = file_name
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let comm = fs::read_to_string(entry.path().join("comm"))
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .unwrap_or_default();
+            let cmdline_name = fs::read(entry.path().join("cmdline"))
+                .ok()
+                .and_then(|value| {
+                    value
+                        .split(|byte| *byte == 0)
+                        .next()
+                        .map(|part| part.to_vec())
+                })
+                .and_then(|value| String::from_utf8(value).ok())
+                .and_then(|value| {
+                    std::path::Path::new(&value)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_default();
+
+            entries.push(ProcessEntry {
+                pid,
+                comm,
+                cmdline_name,
+            });
+        }
+        Self { entries }
+    }
+
+    /// Filter entries matching any of the given names (case-insensitive
+    /// against comm OR cmdline_name). Returns "pid N: name" strings
+    /// matching the existing collect_processes output format.
+    pub fn find_processes(&self, names: &[&str]) -> Vec<String> {
+        let mut result = Vec::new();
+        for entry in &self.entries {
+            if names.iter().any(|name| {
+                entry.comm.eq_ignore_ascii_case(name)
+                    || entry.cmdline_name.eq_ignore_ascii_case(name)
+            }) {
+                let name = if entry.comm.is_empty() {
+                    &entry.cmdline_name
+                } else {
+                    &entry.comm
+                };
+                result.push(format!("pid {}: {}", entry.pid, name));
+            }
+        }
+        result
+    }
+
+    /// Deduplicated sorted comm names. Replaces `util::process_names()`.
+    pub fn comm_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for entry in &self.entries {
+            if !entry.comm.is_empty() {
+                names.push(entry.comm.clone());
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+}
+
 /// Names of currently running processes, read-only from `/proc`.
 pub fn process_names() -> Vec<String> {
-    let mut names = Vec::new();
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return names;
-    };
-    for entry in entries.flatten().take(512) {
-        let Ok(process) = fs::read_to_string(entry.path().join("comm")) else {
-            continue;
-        };
-        let process = process.trim();
-        if !process.is_empty() {
-            names.push(process.to_owned());
-        }
-    }
-    names.sort();
-    names.dedup();
-    names
+    ProcessSnapshot::collect().comm_names()
 }
 
 /// Ancestor process IDs starting at `start`, bounded to 16 generations.
@@ -126,6 +205,14 @@ mod tests {
         assert!(read_bounded(&path, 64).is_none());
         assert!(read_bounded(&path, 128).is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn process_snapshot_collects_and_filters() {
+        let snapshot = ProcessSnapshot::collect();
+        assert!(!snapshot.entries.is_empty());
+        let names = snapshot.comm_names();
+        assert!(!names.is_empty());
     }
 
     #[test]

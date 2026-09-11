@@ -68,6 +68,7 @@ impl DesktopStatus {
 impl Environment {
     /// Collect every discovery probe once.
     pub fn collect() -> Self {
+        let snapshot = crate::util::ProcessSnapshot::collect();
         let compositor_context = compositor::current_context();
         let desktops = crate::registry::DESKTOPS
             .iter()
@@ -129,8 +130,8 @@ impl Environment {
             zellij_pane: std::env::var("ZELLIJ_PANE_ID").ok(),
             zellij_session: std::env::var("ZELLIJ_SESSION_NAME").ok(),
             compositor_context,
-            remappers: remapper::detect(),
-            ime: ime::detect(),
+            remappers: remapper::detect_with_snapshot(&snapshot),
+            ime: ime::detect_with_snapshot(&snapshot),
             selected_compositor,
             desktops,
         }

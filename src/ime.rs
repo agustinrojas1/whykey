@@ -29,6 +29,11 @@ pub struct Detection {
 
 /// Detect IBus/Fcitx5 without opening or changing an input-method connection.
 pub fn detect() -> Vec<Detection> {
+    let snapshot = crate::util::ProcessSnapshot::collect();
+    detect_with_snapshot(&snapshot)
+}
+
+pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Detection> {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
         return Vec::new();
     }
@@ -55,7 +60,7 @@ pub fn detect() -> Vec<Detection> {
             .0
             .push(format!("{variable}={value}"));
     }
-    for process in process_names() {
+    for process in snapshot.comm_names() {
         let engine = process_engine(&process);
         if let Some(engine) = engine {
             found.entry(engine.into()).or_default().1.push(process);
@@ -385,10 +390,6 @@ fn fcitx5_state(code: Option<i32>) -> Option<String> {
         Some(2) => Some("active".into()),
         _ => None,
     }
-}
-
-fn process_names() -> Vec<String> {
-    crate::util::process_names()
 }
 
 fn process_engine(process: &str) -> Option<&'static str> {
