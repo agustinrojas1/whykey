@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome, Propagation};
+use crate::layers::LayerResult;
 
 /// Read-only Sway compositor adapter.
 pub struct Sway;
@@ -52,7 +52,8 @@ pub fn ipc_available() -> bool {
 
 /// Return Sway bindings as inventory records for the global listing.
 pub fn binding_inventory() -> Result<Vec<super::BindingRecord>, String> {
-    let value = binding_inventory_json().map_err(|error| format!("Sway: {error}"))?;
+    let value =
+        binding_inventory_json().map_err(|error| format!("{}{}", META.error_prefix, error))?;
     Ok(super::collect_ipc_json_bindings(&value, "Sway"))
 }
 
@@ -76,128 +77,25 @@ pub fn focused_pid() -> Result<u32, String> {
     }
     let tree: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("swaymsg returned invalid tree data: {error}"))?;
-    focused_pid_in_tree(&tree)
+    super::tiling::focused_pid_in_tree(&tree)
         .ok_or_else(|| "Sway focused tree node does not expose a valid PID".into())
 }
 
-fn focused_pid_in_tree(value: &serde_json::Value) -> Option<u32> {
-    if value.get("focused").and_then(serde_json::Value::as_bool) == Some(true) {
-        if let Some(pid) = value
-            .get("pid")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|pid| u32::try_from(pid).ok())
-            .filter(|pid| *pid > 0)
-        {
-            return Some(pid);
-        }
-    }
-    value
-        .get("nodes")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .find_map(focused_pid_in_tree)
-        .or_else(|| {
-            value
-                .get("floating_nodes")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .find_map(focused_pid_in_tree)
-        })
-}
+const META: super::tiling::TilingMeta = super::tiling::TilingMeta {
+    layer: "Sway",
+    error_prefix: "Sway: ",
+    unavailable_summary: "could not inspect effective Sway bindings",
+    no_match_source: "swaymsg -t get_bindings -r",
+    match_source: "source: swaymsg -t get_bindings -r",
+    possible_note: "Sway binding may accept additional modifiers because exact matching is not enabled",
+    show_release: true,
+};
 
 impl Sway {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        let bindings = match run_swaymsg() {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                return LayerResult::new(
-                    "Sway",
-                    LayerId::Compositor,
-                    Outcome::Unavailable,
-                    "could not inspect effective Sway bindings",
-                    vec![error],
-                );
-            }
-        };
-
-        let mut exact_matches = Vec::new();
-        let mut possible_matches = Vec::new();
-        for binding in &bindings {
-            if binding.release {
-                continue;
-            }
-            let key_matches = binding_matches_key(binding, key);
-            if !key_matches {
-                continue;
-            }
-            match binding_modifier_mask(binding) {
-                Some(mask) if mask == key.modmask() => {
-                    exact_matches.push(binding);
-                }
-                Some(_) if !binding.exact => {
-                    possible_matches.push(binding);
-                }
-                None => {
-                    possible_matches.push(binding);
-                }
-                Some(_) => {}
-            }
-        }
-
-        if exact_matches.is_empty() && possible_matches.is_empty() {
-            return LayerResult::new(
-                "Sway",
-                LayerId::Compositor,
-                Outcome::Pass,
-                "no active binding found",
-                vec!["swaymsg -t get_bindings -r".into()],
-            );
-        }
-
-        let mut details = vec!["source: swaymsg -t get_bindings -r".into()];
-        for binding in exact_matches.iter().chain(possible_matches.iter()) {
-            details.push(format!(
-                "binding: {}{}",
-                binding.command,
-                if binding.release { " (release)" } else { "" }
-            ));
-        }
-        if !possible_matches.is_empty() {
-            details.push("Sway binding may accept additional modifiers because exact matching is not enabled".into());
-        }
-
-        let outcome = if exact_matches.is_empty() {
-            if possible_matches.iter().all(|binding| {
-                command_propagation(&binding.command) == Some(Propagation::Continues)
-            }) {
-                Outcome::UncertainContinues
-            } else {
-                Outcome::Unknown
-            }
-        } else {
-            match exact_matches
-                .iter()
-                .find_map(|binding| command_propagation(&binding.command))
-            {
-                Some(Propagation::Continues) => Outcome::HandledAndPassed,
-                Some(Propagation::Stops) => Outcome::Consumed,
-                Some(Propagation::Redirected) => Outcome::Redirected,
-                Some(Propagation::Indeterminate) | None => Outcome::HandledUncertain,
-            }
-        };
-        LayerResult::new(
-            "Sway",
-            LayerId::Compositor,
-            outcome,
-            if exact_matches.is_empty() {
-                "possible binding found; modifier matching is conditional".to_owned()
-            } else {
-                "active binding found".to_owned()
-            },
-            details,
-        )
+        let loaded =
+            run_swaymsg().map(|bindings| bindings.iter().map(to_ipc_binding).collect::<Vec<_>>());
+        super::tiling::inspect(&META, loaded, key)
     }
 }
 
@@ -233,57 +131,18 @@ fn run_sway_version() -> Result<(), String> {
     }
 }
 
-fn binding_keys(binding: &SwayBinding) -> Vec<String> {
-    let mut keys = string_values(&binding.keysym);
-    keys.extend(string_values(&binding.symbols));
-    keys
-}
-
-fn string_values(value: &serde_json::Value) -> Vec<String> {
-    match value {
-        serde_json::Value::String(value) => vec![value.clone()],
-        serde_json::Value::Array(values) => values
-            .iter()
-            .filter_map(|value| value.as_str().map(str::to_owned))
-            .collect(),
-        _ => Vec::new(),
+fn to_ipc_binding(binding: &SwayBinding) -> super::tiling::IpcBinding {
+    let mut keys = super::tiling::string_values(&binding.keysym);
+    keys.extend(super::tiling::string_values(&binding.symbols));
+    super::tiling::IpcBinding {
+        command: binding.command.clone(),
+        keys,
+        input_code: binding.input_code,
+        keycodes: binding.keycodes.clone(),
+        mask: super::json_u32(&binding.event_state_mask),
+        release: binding.release,
+        exact: binding.exact,
     }
-}
-
-fn binding_modifier_mask(binding: &SwayBinding) -> Option<u32> {
-    json_u32(&binding.event_state_mask)
-}
-
-fn binding_matches_key(binding: &SwayBinding, key: &KeyCombo) -> bool {
-    if let Some(query_code) = key
-        .key()
-        .strip_prefix("CODE:")
-        .and_then(|value| value.parse::<u32>().ok())
-    {
-        return binding.input_code == Some(query_code) || binding.keycodes.contains(&query_code);
-    }
-    binding_keys(binding).iter().any(|candidate| {
-        candidate
-            .parse::<KeyCombo>()
-            .map(|combo| combo.key().eq_ignore_ascii_case(key.key()))
-            .unwrap_or_else(|_| candidate.eq_ignore_ascii_case(key.key()))
-    })
-}
-
-fn json_u32(value: &serde_json::Value) -> Option<u32> {
-    value
-        .as_u64()
-        .and_then(|number| u32::try_from(number).ok())
-        .or_else(|| value.as_str()?.parse().ok())
-}
-
-fn command_propagation(command: &str) -> Option<Propagation> {
-    let dispatcher = command.split_whitespace().next()?.to_ascii_lowercase();
-    Some(match dispatcher.as_str() {
-        "nop" => Propagation::Continues,
-        "pass" => Propagation::Redirected,
-        _ => Propagation::Stops,
-    })
 }
 
 #[cfg(test)]
@@ -291,7 +150,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_sway_keys_from_string_and_array_fields() {
+    fn converts_sway_keysym_and_symbol_fields() {
         let binding: SwayBinding = serde_json::from_str(
             r#"{
                 "command": "exec test",
@@ -303,32 +162,10 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(binding_keys(&binding), vec!["Return", "KP_Enter"]);
-        assert_eq!(binding_modifier_mask(&binding), Some(64));
-        let code: KeyCombo = "code:36".parse().unwrap();
-        assert!(binding_matches_key(&binding, &code));
-    }
-
-    #[test]
-    fn classifies_sway_dispatchers() {
-        assert_eq!(command_propagation("nop"), Some(Propagation::Continues));
-        assert_eq!(command_propagation("pass"), Some(Propagation::Redirected));
-        assert_eq!(command_propagation("exec foo"), Some(Propagation::Stops));
-        assert_eq!(
-            command_propagation(""),
-            None,
-            "an empty dispatcher leaves propagation conditional instead of guessing"
-        );
-    }
-
-    #[test]
-    fn finds_a_focused_pid_in_nested_sway_nodes() {
-        let tree = serde_json::json!({
-            "nodes": [{
-                "focused": false,
-                "nodes": [{"focused": true, "pid": 4242}]
-            }]
-        });
-        assert_eq!(focused_pid_in_tree(&tree), Some(4242));
+        let ipc = to_ipc_binding(&binding);
+        assert_eq!(ipc.keys, vec!["Return", "KP_Enter"]);
+        assert_eq!(ipc.mask, Some(64));
+        assert_eq!(ipc.input_code, Some(36));
+        assert_eq!(ipc.keycodes, vec![36]);
     }
 }
