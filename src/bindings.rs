@@ -48,6 +48,33 @@ pub fn current() -> Inventory {
         }
     }
 
+    for adapter in &environment.extension_adapters {
+        if !crate::extension_adapters::applicable_with_context(
+            adapter,
+            &environment.compositor_context,
+        ) {
+            continue;
+        }
+        let report = environment.extension_inventory(adapter);
+        if let Some(error) = report.error {
+            inventory.unavailable.push(error);
+            continue;
+        }
+        inventory.bindings.extend(report.records);
+        if report.malformed_entries > 0 {
+            inventory.unavailable.push(format!(
+                "{}: {} malformed binding entr{} skipped",
+                adapter.display,
+                report.malformed_entries,
+                if report.malformed_entries == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            ));
+        }
+    }
+
     if environment.desktop("compositor").applicable
         && !crate::registry::DESKTOPS.iter().any(|entry| {
             entry.inventory.or(entry.bindings).is_some()

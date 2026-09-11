@@ -7,8 +7,13 @@
 use std::collections::HashSet;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use serde::Deserialize;
+
+use crate::command;
 use crate::layers::compositor;
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 use crate::util;
 
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
@@ -31,6 +36,23 @@ pub struct ExtensionAdapter {
 pub struct ManifestWarning {
     pub path: PathBuf,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryResult {
+    pub records: Vec<BindingRecord>,
+    pub malformed_entries: usize,
+    pub error: Option<String>,
+}
+
+impl InventoryResult {
+    fn unavailable(error: String) -> Self {
+        Self {
+            records: Vec::new(),
+            malformed_entries: 0,
+            error: Some(error),
+        }
+    }
 }
 
 /// Find and validate all user-owned compositor manifests.
@@ -131,6 +153,244 @@ pub fn applicable_with_context(adapter: &ExtensionAdapter, context: &compositor:
         })
     });
     env_match || desktop_match
+}
+
+/// Execute a manifest's bounded inventory command and parse its output.
+pub fn inventory_report(adapter: &ExtensionAdapter) -> InventoryResult {
+    let Some(program) = adapter.bindings_cmd.first() else {
+        return InventoryResult::unavailable("bindings_cmd is empty".into());
+    };
+    let mut command = Command::new(program);
+    command.args(&adapter.bindings_cmd[1..]);
+    let output = match command::output(&mut command) {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            return InventoryResult::unavailable(format_command_failure(
+                adapter,
+                output.status.to_string(),
+                &output.stderr,
+            ));
+        }
+        Err(error) => {
+            return InventoryResult::unavailable(format!(
+                "{} bindings command unavailable: {error}",
+                adapter.display
+            ));
+        }
+    };
+
+    if let Ok(entries) = serde_json::from_slice::<Vec<JsonBinding>>(&output.stdout) {
+        return parse_json_entries(adapter, entries);
+    }
+    parse_literal_entries(adapter, &String::from_utf8_lossy(&output.stdout))
+}
+
+/// Compatibility helper for callers that only need records.
+pub fn binding_inventory(adapter: &ExtensionAdapter) -> Result<Vec<BindingRecord>, String> {
+    let report = inventory_report(adapter);
+    report.error.map_or_else(|| Ok(report.records), Err)
+}
+
+pub fn inspect(adapter: &ExtensionAdapter, key: &crate::key::KeyCombo) -> LayerResult {
+    inspect_with_report(adapter, key, inventory_report(adapter))
+}
+
+pub fn inspect_with_report(
+    adapter: &ExtensionAdapter,
+    key: &crate::key::KeyCombo,
+    report: InventoryResult,
+) -> LayerResult {
+    if let Some(error) = report.error {
+        return LayerResult::unavailable(
+            "Compositor extension",
+            LayerId::Compositor,
+            format!("{} inventory unavailable", adapter.display),
+            vec![error],
+        );
+    }
+    let key = key.compact_display();
+    if let Some(binding) = report
+        .records
+        .iter()
+        .find(|binding| binding.key.eq_ignore_ascii_case(&key))
+    {
+        let mut details = vec![
+            format!("manifest: {}", adapter.manifest_path.display()),
+            "runtime activation remains conditional; the manifest reports static configuration"
+                .into(),
+        ];
+        if report.malformed_entries > 0 {
+            details.push(format!(
+                "{} malformed binding entr{} skipped",
+                report.malformed_entries,
+                if report.malformed_entries == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            ));
+        }
+        return LayerResult::new(
+            "Compositor extension",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            format!("{} reports {} for {}", adapter.display, binding.action, key),
+            details,
+        )
+        .with_binding(crate::layers::BindingEvidence {
+            dispatcher: None,
+            action: Some(binding.action.clone()),
+            description: binding.context.clone(),
+            submap: binding.submap.clone(),
+            scope: crate::layers::BindingScope::Unknown,
+            source: Some(crate::layers::SourceLocation {
+                file: adapter.manifest_path.display().to_string(),
+                line: None,
+            }),
+            has_universal_match: false,
+            uncertainty: Some(crate::layers::UncertaintyReason::EndpointUnavailable),
+        });
+    }
+    LayerResult::pass(
+        "Compositor extension",
+        LayerId::Compositor,
+        format!("{} has no binding for {key}", adapter.display),
+        vec![format!("manifest: {}", adapter.manifest_path.display())],
+    )
+}
+
+pub fn focused_pid(adapter: &ExtensionAdapter) -> Result<u32, String> {
+    let Some(argv) = adapter.focused_cmd.as_ref() else {
+        return Err(format!("{} has no focused_cmd", adapter.display));
+    };
+    let Some(program) = argv.first() else {
+        return Err(format!("{} focused_cmd is empty", adapter.display));
+    };
+    let mut command = Command::new(program);
+    command.args(&argv[1..]);
+    let output = command::output(&mut command)
+        .map_err(|error| format!("{} focused command unavailable: {error}", adapter.display))?;
+    if !output.status.success() {
+        return Err(format_command_failure(
+            adapter,
+            output.status.to_string(),
+            &output.stderr,
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    if let Ok(pid) = text.trim().parse::<u32>() {
+        return Ok(pid);
+    }
+    let value: serde_json::Value = serde_json::from_str(text.trim()).map_err(|error| {
+        format!(
+            "{} focused command returned invalid PID: {error}",
+            adapter.display
+        )
+    })?;
+    value
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| {
+            format!(
+                "{} focused command did not return a valid PID",
+                adapter.display
+            )
+        })
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonBinding {
+    key: Option<String>,
+    action: Option<String>,
+    context: Option<String>,
+    device: Option<String>,
+    submap: Option<String>,
+}
+
+fn parse_json_entries(adapter: &ExtensionAdapter, entries: Vec<JsonBinding>) -> InventoryResult {
+    let mut records = Vec::new();
+    let mut malformed_entries = 0;
+    for entry in entries {
+        let Some(raw_key) = entry.key else {
+            malformed_entries += 1;
+            continue;
+        };
+        let Some(action) = entry.action.filter(|value| !value.trim().is_empty()) else {
+            malformed_entries += 1;
+            continue;
+        };
+        let Ok(key) = raw_key.parse::<crate::key::KeyCombo>() else {
+            malformed_entries += 1;
+            continue;
+        };
+        records.push(BindingRecord {
+            source: adapter.display.clone(),
+            key: key.compact_display(),
+            action,
+            context: entry.context,
+            device: entry.device,
+            submap: entry.submap,
+            certainty: "script-reported; runtime activation conditional".into(),
+        });
+    }
+    InventoryResult {
+        records,
+        malformed_entries,
+        error: None,
+    }
+}
+
+fn parse_literal_entries(adapter: &ExtensionAdapter, output: &str) -> InventoryResult {
+    let mut records = Vec::new();
+    let mut malformed_entries = 0;
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        let Some((raw_key, action)) = line.split_once(char::is_whitespace) else {
+            malformed_entries += 1;
+            continue;
+        };
+        let action = action.trim();
+        let Ok(key) = raw_key.parse::<crate::key::KeyCombo>() else {
+            malformed_entries += 1;
+            continue;
+        };
+        if action.is_empty() {
+            malformed_entries += 1;
+            continue;
+        }
+        records.push(BindingRecord::new(
+            adapter.display.clone(),
+            key.compact_display(),
+            action.to_owned(),
+            "script-reported; runtime activation conditional",
+        ));
+    }
+    InventoryResult {
+        records,
+        malformed_entries,
+        error: None,
+    }
+}
+
+fn format_command_failure(adapter: &ExtensionAdapter, status: String, stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_owned();
+    let tail = if stderr.chars().count() > 500 {
+        stderr.chars().rev().take(500).collect::<String>().chars().rev().collect()
+    } else {
+        stderr
+    };
+    if tail.is_empty() {
+        format!("{} bindings command exited with {status}", adapter.display)
+    } else {
+        format!(
+            "{} bindings command exited with {status}: {tail}",
+            adapter.display
+        )
+    }
 }
 
 fn parse_manifest(
@@ -262,6 +522,23 @@ fn validate_argv(argv: &[String]) -> Option<String> {
     if argv.iter().any(|arg| arg.is_empty()) {
         return Some("command arguments must not be empty".into());
     }
+    let explicit_shell = argv.first().is_some_and(|program| {
+        matches!(
+            Path::new(program)
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("sh" | "bash" | "dash" | "zsh" | "fish")
+        )
+    });
+    if !explicit_shell
+        && argv.iter().any(|arg| {
+            arg.chars().any(|character| {
+                matches!(character, ';' | '|' | '&' | '$' | '>' | '<' | '`' | '\n')
+            })
+        })
+    {
+        return Some("command arguments contain shell metacharacters; use an explicit shell argv when needed".into());
+    }
     None
 }
 
@@ -375,5 +652,50 @@ focused_cmd = ["herbstclient", "attr", "clients.focus.winid"]
             display_server: Some("Wayland".into()),
         };
         assert!(applicable_with_context(&adapter, &context));
+    }
+
+    #[test]
+    fn json_inventory_skips_malformed_entries_without_losing_valid_records() {
+        let (adapter, _) = parse_manifest(Path::new("fixture.toml"), manifest()).unwrap();
+        let report = parse_json_entries(
+            &adapter,
+            vec![
+                JsonBinding {
+                    key: Some("super+return".into()),
+                    action: Some("spawn foot".into()),
+                    context: Some("default".into()),
+                    device: None,
+                    submap: None,
+                },
+                JsonBinding {
+                    key: Some("super+ctrl".into()),
+                    action: Some("ignored".into()),
+                    context: None,
+                    device: None,
+                    submap: None,
+                },
+            ],
+        );
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.malformed_entries, 1);
+        assert_eq!(report.records[0].key, "SUPER+RETURN");
+    }
+
+    #[test]
+    fn literal_inventory_splits_key_and_action() {
+        let (adapter, _) = parse_manifest(Path::new("fixture.toml"), manifest()).unwrap();
+        let report = parse_literal_entries(
+            &adapter,
+            "super+return spawn foot\nsuper+ctrl ignored\nctrl+x echo hi\n",
+        );
+        assert_eq!(report.records.len(), 2);
+        assert_eq!(report.records[1].action, "echo hi");
+        assert_eq!(report.malformed_entries, 1);
+    }
+
+    #[test]
+    fn explicit_shell_argv_is_allowed_but_shell_metacharacters_are_not() {
+        assert!(validate_argv(&["sh".into(), "-c".into(), "echo hi".into()]).is_none());
+        assert!(validate_argv(&["herbstclient".into(), "list;rm".into()]).is_some());
     }
 }
