@@ -215,6 +215,46 @@ pub struct BindingEvidence {
 }
 
 impl BindingEvidence {
+    /// Construct evidence for a named action with the common optional fields
+    /// unset. Adapters can add description, submap, device, and uncertainty
+    /// explicitly instead of assembling a partially meaningful struct.
+    pub fn action(
+        action: impl Into<String>,
+        scope: BindingScope,
+        source: Option<SourceLocation>,
+    ) -> Self {
+        Self {
+            dispatcher: None,
+            action: Some(action.into()),
+            description: None,
+            submap: None,
+            scope,
+            source,
+            has_universal_match: false,
+            uncertainty: None,
+        }
+    }
+
+    pub fn with_dispatcher(mut self, dispatcher: impl Into<String>) -> Self {
+        self.dispatcher = Some(dispatcher.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_submap(mut self, submap: impl Into<String>) -> Self {
+        self.submap = Some(submap.into());
+        self
+    }
+
+    pub fn with_uncertainty(mut self, reason: UncertaintyReason) -> Self {
+        self.uncertainty = Some(reason);
+        self
+    }
+
     /// Dispatchers whose runtime effect Whykey cannot observe or execute:
     /// Lua/plugin hooks and colon-namespaced plugin calls.
     pub fn dispatcher_is_opaque(dispatcher: &str) -> bool {
@@ -249,6 +289,15 @@ pub enum BindingScope {
 pub struct SourceLocation {
     pub file: String,
     pub line: Option<u32>,
+}
+
+impl SourceLocation {
+    pub fn new(file: impl Into<String>, line: Option<u32>) -> Self {
+        Self {
+            file: file.into(),
+            line,
+        }
+    }
 }
 
 /// One binding returned by a supported desktop source: the single inventory
@@ -380,6 +429,33 @@ impl LayerResult {
         }
     }
 
+    pub fn handled_and_passed(
+        layer: &'static str,
+        id: LayerId,
+        summary: impl Into<String>,
+        details: Vec<String>,
+    ) -> Self {
+        Self::new(layer, id, Outcome::HandledAndPassed, summary, details)
+    }
+
+    pub fn consumed(
+        layer: &'static str,
+        id: LayerId,
+        summary: impl Into<String>,
+        details: Vec<String>,
+    ) -> Self {
+        Self::new(layer, id, Outcome::Consumed, summary, details)
+    }
+
+    pub fn uncertain_continues(
+        layer: &'static str,
+        id: LayerId,
+        summary: impl Into<String>,
+        details: Vec<String>,
+    ) -> Self {
+        Self::new(layer, id, Outcome::UncertainContinues, summary, details)
+    }
+
     /// Constructs an Unavailable result (layer could not be inspected).
     pub fn unavailable(
         layer: &'static str,
@@ -436,4 +512,45 @@ pub fn format_bytes(bytes: &[u8]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_outcome_constructors_keep_legacy_parts_compatible() {
+        let passed = LayerResult::handled_and_passed(
+            "fixture",
+            LayerId::Compositor,
+            "handled but forwarded",
+            vec![],
+        );
+        assert_eq!(passed.outcome, Outcome::HandledAndPassed);
+        assert_eq!(passed.status(), LayerStatus::Handled);
+        assert_eq!(passed.propagation(), Propagation::Continues);
+
+        let consumed = LayerResult::consumed("fixture", LayerId::Compositor, "consumed", vec![]);
+        assert_eq!(consumed.outcome, Outcome::Consumed);
+        assert!(consumed.blocks_chain());
+    }
+
+    #[test]
+    fn binding_evidence_builder_is_explicit_about_optional_claims() {
+        let evidence = BindingEvidence::action(
+            "exec foot",
+            BindingScope::Submap("default".into()),
+            Some(SourceLocation::new("fixture", Some(7))),
+        )
+        .with_dispatcher("exec")
+        .with_description("launch terminal")
+        .with_uncertainty(UncertaintyReason::EndpointUnavailable);
+        assert_eq!(evidence.action.as_deref(), Some("exec foot"));
+        assert_eq!(evidence.dispatcher.as_deref(), Some("exec"));
+        assert_eq!(evidence.source.as_ref().unwrap().line, Some(7));
+        assert_eq!(
+            evidence.uncertainty,
+            Some(UncertaintyReason::EndpointUnavailable)
+        );
+    }
 }
