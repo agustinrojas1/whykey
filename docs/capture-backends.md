@@ -37,7 +37,7 @@ Source wire shapes have one canonical mapping:
 | --- | --- |
 | In memory | `CompositorNative { backend }` |
 | Schema v2 | `{"kind":"compositor-native","backend":"..."}` plus `source_label` |
-| Schema v1 | `"Hyprland"` for the current backend, read and normalized as native |
+| Schema v1 | `"Hyprland"` for the current backend, read and normalized as native; future backends use the canonical object until a compatibility form is defined |
 
 The old externally tagged `{"CompositorNative":{"backend":"..."}}` object
 is accepted as a reader-only compatibility form. New writers do not emit it.

@@ -354,23 +354,29 @@ fn render_inner(
             crate::listen::CaptureDisposition::Suppressed => {}
             crate::listen::CaptureDisposition::PassedThrough
             | crate::listen::CaptureDisposition::ObservedOnly => {
-                let note = match &observation.source {
-                    crate::listen::CaptureSource::Terminal => {
-                        match crate::layers::terminal_identity() {
-                            Some(name) => {
-                                format!("  downstream analysis uses {name}'s normal encoding when available")
-                            }
-                            None => "  downstream analysis uses the terminal's normal encoding when available"
-                                .to_owned(),
-                        }
-                    }
-                    crate::listen::CaptureSource::Hyprland
-                    | crate::listen::CaptureSource::CompositorNative { .. } => format!(
+                let note = if observation.source.proves_compositor_receipt() {
+                    format!(
                         "  compositor capture proves the key reached {}, but does not prove forwarding",
-                        observation.source.backend_name().unwrap_or("the compositor")
-                    ),
-                    crate::listen::CaptureSource::Evdev { .. } => {
-                        "  physical capture does not prove compositor or terminal forwarding".to_owned()
+                        observation
+                            .source
+                            .backend_name()
+                            .unwrap_or("the compositor")
+                    )
+                } else {
+                    match &observation.source {
+                        crate::listen::CaptureSource::Terminal => {
+                            match crate::layers::terminal_identity() {
+                                Some(name) => {
+                                    format!("  downstream analysis uses {name}'s normal encoding when available")
+                                }
+                                None => "  downstream analysis uses the terminal's normal encoding when available"
+                                    .to_owned(),
+                            }
+                        }
+                        crate::listen::CaptureSource::Evdev { .. } => {
+                            "  physical capture does not prove compositor or terminal forwarding".to_owned()
+                        }
+                        _ => unreachable!("capture source semantics are inconsistent"),
                     }
                 };
                 output.push_str(&note);
@@ -409,11 +415,14 @@ fn render_inner(
                     "  modifiers pressed: {pressed}\n  modifiers locked: {locked}\n"
                 ));
                 if state.latched.is_none() {
-                    let from = match &observation.source {
-                        crate::listen::CaptureSource::Terminal => "terminal",
-                        crate::listen::CaptureSource::Hyprland
-                        | crate::listen::CaptureSource::CompositorNative { .. } => "compositor",
-                        crate::listen::CaptureSource::Evdev { .. } => "evdev",
+                    let from = if observation.source.proves_compositor_receipt() {
+                        "compositor"
+                    } else {
+                        match &observation.source {
+                            crate::listen::CaptureSource::Terminal => "terminal",
+                            crate::listen::CaptureSource::Evdev { .. } => "evdev",
+                            _ => unreachable!("capture source semantics are inconsistent"),
+                        }
                     };
                     output.push_str(&format!("  modifiers latched: unavailable from {from}\n"));
                 }
@@ -1308,7 +1317,9 @@ mod tests {
             event_type: crate::listen::KeyEventType::Press,
             alternate_keys: None,
             alternate_key: Some("physical keycode 28 (RETURN)".into()),
-            source: crate::listen::CaptureSource::Hyprland,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition: crate::listen::CaptureDisposition::PassedThrough,
         };
         let layers = [LayerResult::new(
@@ -1369,7 +1380,9 @@ mod tests {
             event_type: crate::listen::KeyEventType::Press,
             alternate_keys: None,
             alternate_key: Some("physical keycode 28 (RETURN)".into()),
-            source: crate::listen::CaptureSource::Hyprland,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult::new(
@@ -1412,7 +1425,9 @@ mod tests {
             event_type: crate::listen::KeyEventType::Press,
             alternate_keys: None,
             alternate_key: None,
-            source: crate::listen::CaptureSource::Hyprland,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult::new(
@@ -1452,7 +1467,9 @@ mod tests {
             event_type: crate::listen::KeyEventType::Press,
             alternate_keys: None,
             alternate_key: Some("physical keycode 28 (RETURN)".into()),
-            source: crate::listen::CaptureSource::Hyprland,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let universal = BindingEvidence {
@@ -1662,7 +1679,9 @@ mod tests {
             event_type: crate::listen::KeyEventType::Press,
             alternate_keys: None,
             alternate_key: None,
-            source: crate::listen::CaptureSource::Hyprland,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         }
     }
@@ -1750,7 +1769,9 @@ mod tests {
             event_type: crate::listen::KeyEventType::Press,
             alternate_keys: None,
             alternate_key: None,
-            source: crate::listen::CaptureSource::Hyprland,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
         let layers = [LayerResult::new(

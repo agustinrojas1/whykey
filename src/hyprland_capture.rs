@@ -701,8 +701,10 @@ pub struct HyprlandCaptureSession {
 }
 
 impl HyprlandCaptureSession {
-    /// Check whether a Hyprland capture socket is advertised without opening
-    /// it or querying compositor state.
+    /// Check whether the Hyprland capture socket is reachable without
+    /// installing hooks or querying compositor state. The local socket
+    /// connect is intentionally blocking; a hung compositor may therefore
+    /// briefly delay capabilities or doctor.
     pub fn probe_available() -> bool {
         let Some(signature) = hyprland_instance_signature() else {
             return false;

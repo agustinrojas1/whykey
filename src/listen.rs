@@ -264,11 +264,18 @@ pub struct DeviceModifierState {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CaptureSource {
     Terminal,
+    #[deprecated(note = "use CompositorNative { backend } instead")]
     Hyprland,
-    CompositorNative { backend: String },
-    Evdev { device: String, path: String },
+    CompositorNative {
+        backend: String,
+    },
+    Evdev {
+        device: String,
+        path: String,
+    },
 }
 
+#[allow(deprecated)]
 impl Serialize for CaptureSource {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -357,6 +364,7 @@ struct EvdevSource {
     path: String,
 }
 
+#[allow(deprecated)]
 impl CaptureSource {
     pub fn label(&self) -> String {
         match self {
@@ -843,7 +851,7 @@ fn inspect_with_session(
                 &session.environment,
             )
         }
-        (CaptureSource::Hyprland | CaptureSource::CompositorNative { .. }, Some(keycode)) => {
+        (source, Some(keycode)) if source.proves_compositor_receipt() => {
             crate::layers::inspect_default_chain_hyprland_with_session(
                 &observed.combo,
                 keycode,
@@ -3285,8 +3293,6 @@ xkb_symbols "pc" {
             }
             .confirms_terminal()
         );
-        assert!(!CaptureSource::Hyprland.confirms_terminal());
-        assert_eq!(CaptureSource::Hyprland.label(), "Hyprland");
         let native = CaptureSource::CompositorNative {
             backend: "Hyprland".into(),
         };
@@ -3339,17 +3345,28 @@ xkb_symbols "pc" {
 
     #[test]
     fn capture_fixtures_use_accepted_source_shapes() {
-        for fixture in [
-            include_str!("../tests/fixtures/differential/capture-terminal-stub.json"),
-            include_str!("../tests/fixtures/differential/capture-hyprland-stub.json"),
-        ] {
+        let fixtures = [
+            (
+                include_str!("../tests/fixtures/differential/capture-terminal-stub.json"),
+                CaptureSource::Terminal,
+            ),
+            (
+                include_str!("../tests/fixtures/differential/capture-hyprland-stub.json"),
+                CaptureSource::CompositorNative {
+                    backend: "Hyprland".into(),
+                },
+            ),
+        ];
+        for (fixture, expected_source) in fixtures {
             let document: serde_json::Value = serde_json::from_str(fixture).unwrap();
             let source: CaptureSource =
                 serde_json::from_value(document["observation"]["source"].clone()).unwrap();
-            assert!(matches!(
-                source,
-                CaptureSource::Terminal | CaptureSource::CompositorNative { .. }
-            ));
+            assert_eq!(source, expected_source);
+            assert!(
+                crate::replay::render_text(std::slice::from_ref(&document))
+                    .contains("whykey replay")
+            );
+            assert!(crate::diff::compare(&document, &document).is_empty());
         }
     }
 
