@@ -1819,6 +1819,7 @@ impl CaptureBackend for TerminalBackend {
 /// Read-only Linux input transport adapter.
 pub struct EvdevBackend {
     session: Option<EvdevSession>,
+    requested: Option<PathBuf>,
 }
 
 #[cfg(target_os = "linux")]
@@ -1826,6 +1827,7 @@ impl EvdevBackend {
     pub fn open(device: Option<&Path>) -> Result<Self, ListenError> {
         Ok(Self {
             session: Some(EvdevSession::open(device)?),
+            requested: device.map(Path::to_owned),
         })
     }
 
@@ -1847,6 +1849,11 @@ impl CaptureBackend for EvdevBackend {
     }
 
     fn arm(&mut self, _policy: CapturePolicy) -> Result<(), String> {
+        if self.session.is_none() {
+            self.session = Some(
+                EvdevSession::open(self.requested.as_deref()).map_err(|error| error.to_string())?,
+            );
+        }
         Ok(())
     }
 
@@ -3446,7 +3453,10 @@ xkb_symbols "pc" {
     #[cfg(target_os = "linux")]
     #[test]
     fn evdev_backend_reports_physical_backend_identity() {
-        let backend = EvdevBackend { session: None };
+        let backend = EvdevBackend {
+            session: None,
+            requested: None,
+        };
         assert_eq!(backend.id(), CaptureBackendId::Evdev);
         assert!(!backend.is_suppressing());
     }
