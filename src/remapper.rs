@@ -7,7 +7,6 @@ use serde::Serialize;
 
 use crate::layers::{LayerId, LayerResult, Outcome, PhysicalInput};
 
-const MAX_PROCESS_ENTRIES: usize = 4096;
 const MAX_CONFIG_FILES: usize = 64;
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
@@ -23,6 +22,11 @@ pub struct Detection {
 /// A process/configuration hit is evidence that a transformation may happen
 /// before the compositor; it is not proof of the active runtime graph.
 pub fn detect() -> Vec<Detection> {
+    let snapshot = crate::util::ProcessSnapshot::collect();
+    detect_with_snapshot(&snapshot)
+}
+
+pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Detection> {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
         return Vec::new();
     }
@@ -30,11 +34,10 @@ pub fn detect() -> Vec<Detection> {
     for (name, process_names, config_env, defaults) in known_remappers() {
         let mut detection = Detection {
             name: name.to_owned(),
-            processes: Vec::new(),
+            processes: snapshot.find_processes(process_names),
             configurations: Vec::new(),
             transformations: Vec::new(),
         };
-        collect_processes(process_names, &mut detection.processes);
         let config_paths = config_candidates(config_env, defaults);
         for path in config_paths {
             if !path.is_file() {
@@ -160,49 +163,6 @@ fn known_remappers() -> [(
             &["~/.config/xremap"],
         ),
     ]
-}
-
-fn collect_processes(names: &[&str], processes: &mut Vec<String>) {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return;
-    };
-    for entry in entries.flatten().take(MAX_PROCESS_ENTRIES) {
-        let file_name = entry.file_name();
-        let Some(pid) = file_name
-            .to_str()
-            .filter(|value| value.parse::<u32>().is_ok())
-        else {
-            continue;
-        };
-        let comm = fs::read_to_string(entry.path().join("comm"))
-            .ok()
-            .map(|value| value.trim().to_owned())
-            .unwrap_or_default();
-        let cmdline_name = fs::read(entry.path().join("cmdline"))
-            .ok()
-            .and_then(|value| {
-                value
-                    .split(|byte| *byte == 0)
-                    .next()
-                    .map(|part| part.to_vec())
-            })
-            .and_then(|value| String::from_utf8(value).ok())
-            .and_then(|value| {
-                Path::new(&value)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .unwrap_or_default();
-        if names
-            .iter()
-            .any(|name| comm.eq_ignore_ascii_case(name) || cmdline_name.eq_ignore_ascii_case(name))
-        {
-            processes.push(format!(
-                "pid {pid}: {}",
-                if comm.is_empty() { cmdline_name } else { comm }
-            ));
-        }
-    }
 }
 
 fn config_candidates(env_name: &str, defaults: &[&str]) -> Vec<PathBuf> {
