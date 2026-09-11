@@ -349,7 +349,7 @@ fn render_inner(
             let raw_display = observation
                 .raw_display
                 .clone()
-                .unwrap_or_else(|| format_raw_bytes(&observation.raw));
+                .unwrap_or_else(|| format_bytes(&observation.raw));
             let raw_label = if observation.source.confirms_terminal() {
                 "probe bytes"
             } else {
@@ -444,7 +444,6 @@ fn render_inner(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conclusion {
     SuppressedHandled {
-        universal_match: bool,
         handled: SuppressedHandledOutcome,
     },
     ConfiguredConsumer {
@@ -569,10 +568,7 @@ pub fn evaluate_conclusion(
                     };
                     return EvaluatedConclusion {
                         preamble: Some(CapturePreamble::Suppressed { universal_match }),
-                        conclusion: Conclusion::SuppressedHandled {
-                            universal_match,
-                            handled,
-                        },
+                        conclusion: Conclusion::SuppressedHandled { handled },
                     };
                 } else {
                     preamble = Some(CapturePreamble::Suppressed { universal_match });
@@ -756,7 +752,7 @@ fn render_conclusion(
     }
 
     match &evaluated.conclusion {
-        Conclusion::SuppressedHandled { handled, .. } => match handled {
+        Conclusion::SuppressedHandled { handled } => match handled {
             SuppressedHandledOutcome::IndeterminatePropagation { action } => {
                 output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
                 if let Some(action) = action {
@@ -918,10 +914,6 @@ fn render_conclusion(
         }
     }
     output
-}
-
-fn format_raw_bytes(bytes: &[u8]) -> String {
-    format_bytes(bytes)
 }
 
 fn prior_uncertainty(layers: &[LayerResult]) -> bool {
