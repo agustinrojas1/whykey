@@ -46,15 +46,12 @@ impl Cinnamon {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Cinnamon",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect Cinnamon global shortcuts".into(),
-                    details: vec![error],
-                };
+                return LayerResult::unavailable(
+                    "Cinnamon",
+                    LayerId::Compositor,
+                    "could not inspect Cinnamon global shortcuts",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -62,17 +59,14 @@ impl Cinnamon {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Cinnamon",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active Cinnamon global shortcut found".into(),
-                details: vec![format!(
+            return LayerResult::pass(
+                "Cinnamon",
+                LayerId::Compositor,
+                "no active Cinnamon global shortcut found",
+                vec![format!(
                     "source: gsettings list-recursively {SCHEMA_PREFIX}"
                 )],
-            };
+            );
         }
 
         let mut details = vec![format!(

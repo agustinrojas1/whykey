@@ -1,0 +1,37 @@
+{
+  "key": {
+    "key": "A",
+    "modifiers": 0
+  },
+  "key_display": "A",
+  "layers": [
+    {
+      "details": [
+        "no desktop compositor"
+      ],
+      "layer": "Compositor",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no desktop compositor detected; event forwarded to terminal"
+    },
+    {
+      "details": [
+        "byte: 0x61"
+      ],
+      "layer": "Ghostty",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no Ghostty binding; forwarded to terminal"
+    },
+    {
+      "details": [
+        "byte 0x61 is passed through without special driver handling"
+      ],
+      "layer": "TTY driver",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "does not consume this byte sequence"
+    }
+  ],
+  "schema_version": 1
+}

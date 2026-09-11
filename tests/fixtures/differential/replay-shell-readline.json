@@ -1,0 +1,92 @@
+{
+  "assessment": {
+    "confidence": "high",
+    "terminal_reached": true
+  },
+  "context": {
+    "desktop": "generic",
+    "display_server": "Wayland",
+    "session_desktop": "generic",
+    "session_type": "wayland",
+    "shell": "Bash",
+    "ssh": false,
+    "terminal": "Ghostty"
+  },
+  "input": {
+    "key": {
+      "key": "R",
+      "modifiers": 4
+    },
+    "key_display": "CTRL + R",
+    "kind": "key"
+  },
+  "observation": null,
+  "operation": "inspect",
+  "path": [
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "no desktop compositor"
+        }
+      ],
+      "layer": "Compositor",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no desktop compositor detected; event forwarded to terminal"
+    },
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "byte: 0x12"
+        }
+      ],
+      "layer": "Ghostty",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no Ghostty binding; forwarded to terminal"
+    },
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "byte 0x12 is passed through without special driver handling"
+        }
+      ],
+      "layer": "TTY driver",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "does not consume this byte sequence"
+    },
+    {
+      "binding": {
+        "action": "reverse-search-history",
+        "description": "Incremental search backward through readline history",
+        "dispatcher": "readline",
+        "has_universal_match": false,
+        "scope": "Global",
+        "source": {
+          "file": "/etc/inputrc",
+          "line": 15
+        },
+        "submap": null
+      },
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "active keymap: emacs"
+        },
+        {
+          "kind": "detail",
+          "text": "binding: reverse-search-history"
+        }
+      ],
+      "layer": "Bash / Readline",
+      "propagation": "Stops",
+      "status": "Handled",
+      "summary": "bound to reverse-search-history in Bash readline"
+    }
+  ],
+  "schema_version": 2
+}

@@ -11,7 +11,7 @@ homepage = "https://github.com/agustinrojas1/whykey"
 documentation = "https://github.com/agustinrojas1/whykey#readme"
 keywords = ["keyboard", "terminal", "hyprland", "readline", "diagnostics"]
 categories = ["command-line-utilities", "os::linux-apis"]
-exclude = ["nvim.log", "eval", "eval/**"]
+exclude = ["nvim.log", "eval", "eval/**", "REFACTORING_PLAN.md"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

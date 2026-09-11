@@ -22,6 +22,11 @@ pub struct Environment {
     pub tmux: bool,
     pub screen: bool,
     pub zellij: bool,
+    pub term_program: Option<String>,
+    pub tmux_pane: Option<String>,
+    pub screen_session: Option<String>,
+    pub zellij_pane: Option<String>,
+    pub zellij_session: Option<String>,
     /// Generic desktop/session context captured with the rest of the
     /// environment. Keeping this here prevents schema and doctor output from
     /// re-reading the session variables after discovery.
@@ -132,6 +137,11 @@ impl Environment {
             tmux,
             screen,
             zellij,
+            term_program: std::env::var("TERM_PROGRAM").ok(),
+            tmux_pane: std::env::var("TMUX_PANE").ok(),
+            screen_session: std::env::var("STY").ok(),
+            zellij_pane: std::env::var("ZELLIJ_PANE_ID").ok(),
+            zellij_session: std::env::var("ZELLIJ_SESSION_NAME").ok(),
             compositor_context,
             remappers: remapper::detect(),
             ime: ime::detect(),

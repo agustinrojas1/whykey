@@ -1,5 +1,3 @@
-use std::env;
-
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, LayerStatus, Outcome, Propagation};
 
@@ -9,44 +7,51 @@ use crate::layers::{LayerId, LayerResult, LayerStatus, Outcome, Propagation};
 /// Their results are kept separate from the compositor and terminal layers so
 /// a report can show where a key was consumed before reaching Readline.
 pub fn inspect(key: &KeyCombo) -> LayerResult {
-    inspect_with_byte_status(key, true)
+    let env = crate::environment::Environment::collect();
+    inspect_with_env(key, true, &env)
 }
 
 pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerResult {
+    let env = crate::environment::Environment::collect();
+    inspect_with_env(key, bytes_verified, &env)
+}
+
+pub fn inspect_with_env(
+    key: &KeyCombo,
+    bytes_verified: bool,
+    env: &crate::environment::Environment,
+) -> LayerResult {
     let mut multiplexers = Vec::new();
-    if env::var_os("TMUX").is_some() {
+    if env.tmux {
         multiplexers.push("tmux");
     }
-    if env::var_os("STY").is_some() {
+    if env.screen {
         multiplexers.push("screen");
     }
-    if env::var_os("ZELLIJ").is_some() || env::var_os("ZELLIJ_SESSION_NAME").is_some() {
+    if env.zellij {
         multiplexers.push("Zellij");
     }
 
     let mut details = Vec::new();
-    if let Some(term_program) = env::var_os("TERM_PROGRAM") {
-        details.push(format!(
-            "terminal program: {}",
-            term_program.to_string_lossy()
-        ));
+    if let Some(term_program) = &env.term_program {
+        details.push(format!("terminal program: {term_program}"));
     }
-    if let Some(shell) = env::var_os("SHELL") {
-        details.push(format!("shell: {}", shell.to_string_lossy()));
+    if !env.shell.is_empty() {
+        details.push(format!("shell: {}", env.shell));
     }
-    if let Some(pane) = env::var_os("TMUX_PANE") {
-        details.push(format!("tmux pane: {}", pane.to_string_lossy()));
+    if let Some(pane) = &env.tmux_pane {
+        details.push(format!("tmux pane: {pane}"));
     }
-    if let Some(session) = env::var_os("STY") {
-        details.push(format!("screen session: {}", session.to_string_lossy()));
+    if let Some(session) = &env.screen_session {
+        details.push(format!("screen session: {session}"));
     }
-    if let Some(pane) = env::var_os("ZELLIJ_PANE_ID") {
-        details.push(format!("Zellij pane: {}", pane.to_string_lossy()));
+    if let Some(pane) = &env.zellij_pane {
+        details.push(format!("Zellij pane: {pane}"));
     }
-    if let Some(session) = env::var_os("ZELLIJ_SESSION_NAME") {
-        details.push(format!("Zellij session: {}", session.to_string_lossy()));
+    if let Some(session) = &env.zellij_session {
+        details.push(format!("Zellij session: {session}"));
     }
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if env.ssh {
         details.push("SSH session detected".into());
     }
 
