@@ -29,6 +29,10 @@ Capture mode is available with `whykey listen [--repeat] [--timeout SECONDS] [--
 
 When more than one compositor adapter is applicable, candidates are scored from the one environment snapshot: reachable read-only IPC contributes 3 points, an explicit compositor environment signature contributes 2, and a matching desktop/session hint contributes 1. Configuration-only evidence contributes 0. Candidates are sorted by descending score with registry order breaking ties; the selected compositor remains the first candidate for compatibility.
 
+Capture is observe-only by default. `--suppress` opts into temporary native
+compositor suppression where supported; `--dry-run` selects without arming and
+`--explain-capture` prints the detection evidence. Sway IPC is pass-through-only.
+
 ### Compositor extension manifests
 
 Users can add a Tier 4 adapter by placing a validated manifest in

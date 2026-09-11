@@ -141,6 +141,8 @@ const LISTEN_COMPLETION_OPTIONS: &[&str] = &[
     "--events",
     "--suppress",
     "--no-suppress",
+    "--dry-run",
+    "--explain-capture",
     "--terminal",
     "--evdev",
     "--device",
@@ -255,8 +257,11 @@ fn main() -> ExitCode {
         let mut count = None;
         let mut events_all = false;
         let mut output = None;
-        let mut capture_policy = listen::CapturePolicy::Suppress;
+        let mut capture_policy = listen::CapturePolicy::default();
         let mut explicit_policy = None;
+        let mut explicit_suppress = false;
+        let mut dry_run = false;
+        let mut explain_capture = false;
         while let Some(option) = arguments.next() {
             match option.as_str() {
                 "--repeat" | "-r" => repeat = true,
@@ -267,6 +272,7 @@ fn main() -> ExitCode {
                     }
                     capture_policy = listen::CapturePolicy::Suppress;
                     explicit_policy = Some("suppress");
+                    explicit_suppress = true;
                 }
                 "--no-suppress" | "--pass-through" => {
                     if explicit_policy == Some("suppress") {
@@ -278,9 +284,11 @@ fn main() -> ExitCode {
                 }
                 "--terminal" | "-t" => terminal = true,
                 "--evdev" | "-e" => evdev = true,
+                "--dry-run" => dry_run = true,
+                "--explain-capture" => explain_capture = true,
                 "-h" | "--help" => {
                     println!(
-                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, uses native compositor capture (today: Hyprland) when available, temporarily suppressing shortcuts and falling back to the terminal otherwise. --suppress is the explicit default; --no-suppress captures without suppression and --pass-through is its compatibility alias. --terminal forces terminal capture; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
+                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--dry-run] [--explain-capture] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, native capture observes without suppression; use --suppress for an explicit temporary compositor-state change. It falls back to terminal capture when native capture is unavailable. --no-suppress captures without suppression and --pass-through is its compatibility alias. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -381,6 +389,9 @@ fn main() -> ExitCode {
             verbose,
             schema_version,
             capture_policy,
+            explicit_suppress,
+            dry_run,
+            explain_capture,
         });
     }
     if argument == "doctor" {
@@ -582,6 +593,8 @@ _whykey() {
     '--events[include modifier and release events]:mode:(all)' \
     '--suppress[temporarily suppress compositor shortcuts during capture]' \
     '--no-suppress[capture without suppressing compositor shortcuts]' \
+    '--dry-run[select capture backend without arming it]' \
+    '--explain-capture[show capture detection evidence]' \
     '--terminal[force terminal capture]' \
     '--evdev[capture Linux input events before the compositor]' \
     '--device[read one /dev/input/event device]:path:' \
@@ -611,6 +624,8 @@ complete -c whykey -l count -r -d 'stop after this many reports'
 complete -c whykey -l events -r -a 'all' -d 'include modifier and release events'
 complete -c whykey -l suppress -d 'temporarily suppress compositor shortcuts during capture'
 complete -c whykey -l no-suppress -d 'capture without suppressing compositor shortcuts'
+complete -c whykey -l dry-run -d 'select capture backend without arming it'
+complete -c whykey -l explain-capture -d 'show capture detection evidence'
 complete -c whykey -s t -l terminal -d 'force terminal capture'
 complete -c whykey -s e -l evdev -d 'capture Linux input events before the compositor'
 complete -c whykey -l device -r -d 'read one /dev/input/event device'
