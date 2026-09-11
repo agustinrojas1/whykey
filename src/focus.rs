@@ -12,31 +12,33 @@ pub fn resolve() -> Result<FocusedTarget, String> {
 }
 
 pub fn resolve_with_environment(environment: &Environment) -> Result<FocusedTarget, String> {
-    let Some(id) = environment.selected_compositor else {
-        return Err(
-            "no supported compositor session was detected for focused-window discovery".into(),
-        );
-    };
-    let Some(entry) = crate::registry::DESKTOPS
-        .iter()
-        .find(|entry| entry.id == id)
-    else {
-        return Err(
-            "no supported compositor session was detected for focused-window discovery".into(),
-        );
-    };
-    if let Some((source, focused_pid)) = entry.focused_pid.or(entry.focus) {
-        focused_pid()
-            .map(|pid| FocusedTarget { pid, source })
-            .map_err(|error| {
-                format!(
-                    "focused-window discovery through {} failed: {error}",
-                    entry.display
-                )
-            })
-    } else {
-        Err("the detected desktop does not expose a read-only focused-window PID API".into())
+    if let Some(id) = environment.selected_compositor {
+        if let Some(entry) = crate::registry::DESKTOPS
+            .iter()
+            .find(|entry| entry.id == id)
+        {
+            if let Some((source, focused_pid)) = entry.focused_pid.or(entry.focus) {
+                if let Ok(pid) = focused_pid() {
+                    return Ok(FocusedTarget { pid, source });
+                }
+            }
+        }
     }
+    if let Some(adapter) = environment.extension_adapters.iter().find(|adapter| {
+        crate::extension_adapters::applicable_with_context(adapter, &environment.compositor_context)
+            && adapter.focused_cmd.is_some()
+    }) {
+        return crate::extension_adapters::focused_pid(adapter).map(|pid| FocusedTarget {
+            pid,
+            source: "compositor extension",
+        });
+    }
+    if environment.selected_compositor.is_none() {
+        return Err(
+            "no supported compositor session was detected for focused-window discovery".into(),
+        );
+    }
+    Err("the detected desktop does not expose a read-only focused-window PID API".into())
 }
 
 #[cfg(test)]

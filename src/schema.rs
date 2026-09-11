@@ -40,6 +40,20 @@ pub fn context_for_environment(environment: &crate::environment::Environment) ->
             "score": candidate.score,
             "selected": environment.selected_compositor == Some(candidate.id),
         })).collect::<Vec<_>>(),
+        "extension_adapters": environment.extension_adapters.iter().map(|adapter| {
+            let applicable = crate::extension_adapters::applicable_with_context(
+                adapter,
+                &environment.compositor_context,
+            );
+            json!({
+                "id": adapter.id,
+                "display": adapter.display,
+                "manifest": adapter.manifest_path,
+                "tier": adapter.tier,
+                "applicable": applicable,
+                "selected": environment.selected_extension.as_deref() == Some(adapter.id.as_str()),
+            })
+        }).collect::<Vec<_>>(),
     })
 }
 
