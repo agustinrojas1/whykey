@@ -114,3 +114,27 @@ config files, or mutates compositor state.
 The deterministic desktop-session fixtures and their CLI-test mapping are in
 [`tests/fixtures/sessions/matrix.json`](tests/fixtures/sessions/matrix.json).
 They cover the adapter shapes without claiming live runtime or version state.
+
+## C2 adapter-dedup inventory (issue #72)
+
+The post-guard inventory below records the remaining repeated shapes and the
+semantic reason each is intentionally local. A helper is safe only when its
+success values, failure values, and evidence ordering are identical; a shorter
+implementation is not sufficient evidence for a shared contract.
+
+| Shape | Consumers | Finding | Decision |
+| --- | --- | --- | --- |
+| Remote-session guard | Desktop adapters | `compositor::remote_session()` is the one shared guard; it preserves the SSH boundary before any adapter-specific probe. | Already centralized; no second helper. |
+| GSettings accelerator decoding | Cinnamon, GNOME, MATE, XFCE | The common GSettings forms use `gsettings::parse_accelerator` (GNOME uses its explicit historical variant); malformed and modifier-only values have shared tests. | Already shared in `gsettings.rs`; no duplicate extraction. |
+| Openbox XML keybind parsing | Openbox, labwc | labwc deliberately reuses `openbox::parse_bindings`, including action ordering and malformed-node filtering. | Already shared; no duplicate extraction. |
+| Layer-result construction | Cinnamon, KDE, i3, Sway, tiling, X11, programmable, and others | Labels, `LayerId`, propagation, evidence detail, and unavailable wording differ by adapter. Collapsing constructors would either add match-adapter switches or reorder evidence. | Keep local; semantics are not identical. |
+| Key/value splitters | X11, sxhkd, River, Niri, Wayfire, Xfce, KDE | Split rules intentionally differ: X11 brace/release rejection, sxhkd whitespace and include chains, River literal command tokens, Niri KDL comments, Wayfire INI comments, and KDE comma fields. | Do not unify; contracts and edge cases differ. |
+| Config normalization | Programmable X11, Hyprland Lua, terminal adapters | Lua literal scanning, Python/HS declaration scanning, shell-safe command parsing, and terminal protocol decoding each reject different dynamic forms. | Keep bounded normalizers local; no identical failure contract. |
+| Binding collection order | All adapters | Some sources use last-wins maps, others preserve wire/file order or emit possible matches beside exact matches. | Keep collection logic local to preserve evidence-array order. |
+
+Conclusion: after the shared remote-session guard and the existing parser
+reuse above, no remaining candidate has identical semantics and identical
+failure strings. Issue #72 is therefore closed as an inventory-backed wontfix;
+the contract-differing splitters are explicitly excluded from future generic
+helpers. The standard fixture gate remains the regression check for this
+boundary.
