@@ -1,3 +1,12 @@
+#![cfg_attr(
+    not(target_os = "linux"),
+    doc = "This crate is supported on Linux only; see the build error below."
+)]
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "whykey currently supports Linux only; install a Linux build or use the Linux package"
+);
+
 pub mod bindings;
 pub mod capabilities;
 pub mod capture;
