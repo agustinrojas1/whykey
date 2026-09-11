@@ -27,6 +27,9 @@ check() {
 package() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   install -Dm755 target/release/whykey "${pkgdir}/usr/bin/whykey"
+  install -Dm755 extensions/whykey-nvim "${pkgdir}/usr/bin/whykey-nvim"
+  install -Dm755 extensions/whykey-vscode "${pkgdir}/usr/bin/whykey-vscode"
+  install -Dm755 extensions/whykey-emacs "${pkgdir}/usr/bin/whykey-emacs"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 whykey.1 "${pkgdir}/usr/share/man/man1/whykey.1"
   install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
