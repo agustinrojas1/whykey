@@ -37,6 +37,7 @@ behavior, and none should block a release on its own.
 | L-007 | Configuration | Generated files, conditional includes, and all syntax/version variants are not uniformly resolved across adapters. | Adapter unit tests cover common TOML, YAML, JSON, XML, and KDL forms. |
 | L-008 | Distribution | Clean-environment installation is verified for the locked source path and the Arch recipe only. | `DEPENDENCY_PROVENANCE.md`, the Cargo clean-install smoke gate, and `tools/arch_package_smoke.sh`; Debian/RPM/Nix builders are unavailable. |
 | L-009 | Offline snapshots | Snapshots preserve a redacted diagnostic conclusion for replay and comparison, not the raw IPC/configuration inputs required to re-run every adapter offline. | `snapshot::create` redacts shell identity, private paths, and secret-bearing assignments; README documents the boundary. |
+| L-010 | Architecture | Core production code sits at ~21k SLOC. The residual gap from speculative line targets is accepted: remaining lines protect capture lifecycle, platform configuration stubs, and strict diagnostic typing; further compaction without proven duplication carries disproportionate regression risk. | Simplification phases 0–7 (PR #2) unified results, adapters, environment, and CLI without regressing behavior. |
 
 ## Closed items
 
