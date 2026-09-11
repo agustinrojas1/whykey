@@ -7,6 +7,12 @@ not observable. Adapter applicability never means that every binding is known.
 
 ## Desktop and compositor adapters
 
+Native capture backends are separate from static desktop adapters. The current
+backend is Hyprland: it uses socket2 IPC and a temporary Lua hook, restores the
+recorded submap before reporting, and exposes `capture.native-compositor` in
+capabilities and doctor. Other desktops keep their static inspection adapters;
+they fall back to terminal or evdev capture until a native backend is added.
+
 | Adapter | Detection | Source/API | Version evidence | Parsed or reported | Explicit unknown boundary |
 | --- | --- | --- | --- | --- | --- |
 | Hyprland | `HYPRLAND_INSTANCE_SIGNATURE`, instance discovery, or Hyprland IPC; skipped for remote SSH | `hyprctl binds/submap/devices/activewindow`, literal config and Lua files | IPC availability; version is not persisted | bindings, submaps, device scopes, keymaps, focused PID, Lua/config hints | dynamic Lua, inhibitors, generated config, and runtime-vs-disk divergence |

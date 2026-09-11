@@ -1759,6 +1759,20 @@ mod tests {
     }
 
     #[test]
+    fn schema_v2_names_native_backend_and_keeps_source_label() {
+        let key: KeyCombo = "ctrl+super+return".parse().unwrap();
+        let mut observed = suppressed_observed();
+        observed.source = crate::listen::CaptureSource::CompositorNative {
+            backend: "Hyprland".into(),
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&render_listen_json(&key, &[], Some(&observed), 2)).unwrap();
+        assert_eq!(value["observation"]["source"]["kind"], "compositor-native");
+        assert_eq!(value["observation"]["source"]["backend"], "Hyprland");
+        assert_eq!(value["observation"]["source_label"], "Hyprland");
+    }
+
+    #[test]
     fn renders_each_sequence_step_in_text() {
         let sequence: KeySequence = "ctrl+x ctrl+s".parse().unwrap();
         let reports = vec![

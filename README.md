@@ -49,7 +49,7 @@ publication follows the first release; see [`packaging/README.md`](packaging/REA
 whykey ctrl+left                    # inspect one combination
 whykey inspect ctrl+x ctrl+s        # inspect a sequence
 whykey inspect --focused ctrl+z     # inspect the focused application
-whykey listen                       # explain the next shortcut (suppresses Hyprland bindings)
+whykey listen                       # explain the next shortcut (uses native capture when available)
 whykey listen --pass-through        # explain the shortcut without suppressing its action
 whykey listen --repeat              # inspect one deliberate shortcut at a time
 whykey listen --terminal            # force terminal-only capture

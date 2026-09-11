@@ -641,6 +641,8 @@ fn doctor_returns_structured_json() {
     assert!(value["ghostty"]["effective_keybinds"].is_boolean());
     assert!(value["evdev"]["available"].is_boolean());
     assert!(value["evdev"]["devices"].is_array());
+    assert!(value["native-compositor"]["available"].is_boolean());
+    assert_eq!(value["native-compositor"]["backend"], "Hyprland");
     assert!(value["remappers"].is_array());
     assert!(value["ime"].is_array());
     assert!(value["shell_snapshot"].is_boolean());
