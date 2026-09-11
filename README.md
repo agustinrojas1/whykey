@@ -50,7 +50,7 @@ whykey ctrl+left                    # inspect one combination
 whykey inspect ctrl+x ctrl+s        # inspect a sequence
 whykey inspect --focused ctrl+z     # inspect the focused application
 whykey listen                       # explain the next shortcut (uses native capture when available)
-whykey listen --pass-through        # explain the shortcut without suppressing its action
+whykey listen --no-suppress         # explain the shortcut without suppressing its action
 whykey listen --repeat              # inspect one deliberate shortcut at a time
 whykey listen --terminal            # force terminal-only capture
 whykey listen --evdev               # observe a physical Linux input device
@@ -96,8 +96,9 @@ uncertain evidence instead of guessed answers.
 `whykey listen` captures the next deliberate shortcut to explain its path.
 When native compositor capture is available (today: Hyprland), it defaults to
 capturing and temporarily suppressing ordinary compositor bindings via a
-private submap and runtime event hook. Pass `--pass-through` to observe
-shortcuts while allowing their normal actions to run. Because Hyprland's key event does not
+private submap and runtime event hook. Pass `--no-suppress` to observe
+shortcuts while allowing their normal actions to run; `--pass-through` remains
+its compatibility alias. Because Hyprland's key event does not
 identify the originating keyboard, device identity is reported as unavailable.
 
 If native compositor capture is unavailable, Whykey falls back to terminal capture,

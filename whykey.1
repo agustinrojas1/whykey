@@ -11,7 +11,8 @@ whykey \- explain which layer handles a keyboard shortcut
 .br
 .B whykey listen
 .RB [ --json ] [ --ndjson ] [ --repeat ] [ --timeout seconds ] [ --count n ]
-.RB [ --events all ] [ --evdev ] [ --device path ] [ --verbose ]
+.RB [ --events all ] [ --suppress | --no-suppress | --pass-through ]
+.RB [ --evdev ] [ --device path ] [ --verbose ]
 .br
 .B whykey doctor
 .RB [ --json ] [ --schema-version\ 2 ]
@@ -127,6 +128,15 @@ sets a wall-clock deadline for the capture.
 stops after n captured reports.
 .B --events all
 includes modifier-only and release events in evdev mode.
+.TP
+.B --suppress
+Use the safe default: temporarily suppress native compositor shortcuts while
+capturing. This is the default even when the option is omitted.
+.TP
+.B --no-suppress
+Capture through the native compositor without suppressing its shortcut.
+.B --pass-through
+is a compatibility alias.
 .TP
 .B listen --evdev [--device path]
 On Linux, capture readable EV_KEY events from input devices before the

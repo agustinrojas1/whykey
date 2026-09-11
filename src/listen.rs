@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::capture::{CaptureBackend, CaptureBackendId, CapturePolicy, NativeCaptureIo};
+use crate::capture::{CaptureBackend, CaptureBackendId, NativeCaptureIo};
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome};
 use crate::report;
@@ -37,6 +37,7 @@ const MAX_TERMINAL_SEQUENCE_BYTES: usize = 4096;
 const KITTY_CAPTURE_FLAGS: u32 = 1 | 2 | 4 | 8 | 16;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+pub use crate::capture::CapturePolicy;
 pub use crate::hyprland_capture::HyprlandCapturePolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +50,7 @@ pub enum CaptureDisposition {
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
-    pub capture_policy: HyprlandCapturePolicy,
+    pub capture_policy: CapturePolicy,
     pub repeat: bool,
     pub json: bool,
     /// Emit one compact schema-v2 JSON record per captured event. This is a

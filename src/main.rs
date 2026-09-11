@@ -61,7 +61,7 @@ const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "listen",
-        usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
+        usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
         summary: "capture a key and explain its path",
         advanced: false,
     },
@@ -137,7 +137,8 @@ const LISTEN_COMPLETION_OPTIONS: &[&str] = &[
     "--timeout",
     "--count",
     "--events",
-    "--pass-through",
+    "--suppress",
+    "--no-suppress",
     "--terminal",
     "--evdev",
     "--device",
@@ -273,16 +274,32 @@ fn main() -> ExitCode {
         let mut count = None;
         let mut events_all = false;
         let mut output = None;
-        let mut capture_policy = listen::HyprlandCapturePolicy::Suppress;
+        let mut capture_policy = listen::CapturePolicy::Suppress;
+        let mut explicit_policy = None;
         while let Some(option) = arguments.next() {
             match option.as_str() {
                 "--repeat" | "-r" => repeat = true,
-                "--pass-through" => capture_policy = listen::HyprlandCapturePolicy::PassThrough,
+                "--suppress" => {
+                    if explicit_policy == Some("pass-through") {
+                        eprintln!("error: --suppress and --pass-through cannot be used together");
+                        return ExitCode::from(2);
+                    }
+                    capture_policy = listen::CapturePolicy::Suppress;
+                    explicit_policy = Some("suppress");
+                }
+                "--no-suppress" | "--pass-through" => {
+                    if explicit_policy == Some("suppress") {
+                        eprintln!("error: --suppress and --pass-through cannot be used together");
+                        return ExitCode::from(2);
+                    }
+                    capture_policy = listen::CapturePolicy::PassThrough;
+                    explicit_policy = Some("pass-through");
+                }
                 "--terminal" | "-t" => terminal = true,
                 "--evdev" | "-e" => evdev = true,
                 "-h" | "--help" => {
                     println!(
-                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, uses native compositor capture (today: Hyprland) when available, temporarily suppressing shortcuts and falling back to the terminal otherwise. --pass-through captures through Hyprland without suppression; --terminal forces terminal capture; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
+                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, uses native compositor capture (today: Hyprland) when available, temporarily suppressing shortcuts and falling back to the terminal otherwise. --suppress is the explicit default; --no-suppress captures without suppression and --pass-through is its compatibility alias. --terminal forces terminal capture; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -613,7 +630,8 @@ _whykey() {
     '--timeout[stop after this many seconds]:seconds:' \
     '--count[stop after this many reports]:count:' \
     '--events[include modifier and release events]:mode:(all)' \
-    '--pass-through[capture without suppressing Hyprland shortcuts]' \
+    '--suppress[temporarily suppress compositor shortcuts during capture]' \
+    '--no-suppress[capture without suppressing compositor shortcuts]' \
     '--terminal[force terminal capture]' \
     '--evdev[capture Linux input events before the compositor]' \
     '--device[read one /dev/input/event device]:path:' \
@@ -641,7 +659,8 @@ complete -c whykey -s r -l repeat -d 'keep listening'
 complete -c whykey -l timeout -r -d 'stop after this many seconds'
 complete -c whykey -l count -r -d 'stop after this many reports'
 complete -c whykey -l events -r -a 'all' -d 'include modifier and release events'
-complete -c whykey -l pass-through -d 'capture without suppressing Hyprland shortcuts'
+complete -c whykey -l suppress -d 'temporarily suppress compositor shortcuts during capture'
+complete -c whykey -l no-suppress -d 'capture without suppressing compositor shortcuts'
 complete -c whykey -s t -l terminal -d 'force terminal capture'
 complete -c whykey -s e -l evdev -d 'capture Linux input events before the compositor'
 complete -c whykey -l device -r -d 'read one /dev/input/event device'
@@ -1451,6 +1470,22 @@ mod tests {
         let names: Vec<_> = COMMANDS.iter().map(|command| command.name).collect();
         assert!(names.contains(&"inspect"));
         assert!(names.contains(&"doctor"));
+        assert!(help_text().contains("--suppress|--no-suppress|--pass-through"));
+        for shell in COMPLETION_SHELLS {
+            let completion = completions(shell);
+            assert!(
+                completion.contains("--suppress") || completion.contains("-l suppress"),
+                "{shell} missing suppress"
+            );
+            assert!(
+                completion.contains("--no-suppress") || completion.contains("-l no-suppress"),
+                "{shell} missing no-suppress"
+            );
+            assert!(
+                !completion.contains("--pass-through") && !completion.contains("-l pass-through"),
+                "{shell} exposes hidden alias"
+            );
+        }
     }
 
     #[test]

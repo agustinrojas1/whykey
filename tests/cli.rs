@@ -2986,6 +2986,40 @@ fn pass_through_flag_allows_fallback_when_hyprland_fails() {
     assert!(combined.contains("Using terminal capture"));
 }
 
+#[test]
+fn suppress_and_passthrough_conflict() {
+    let output = binary()
+        .args(["listen", "--suppress", "--no-suppress"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--suppress and --pass-through cannot be used together")
+    );
+}
+
+#[test]
+fn passthrough_alias_matches_no_suppress() {
+    let alias = binary()
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent_fake_sig_12345")
+        .args(["listen", "--pass-through", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    let generic = binary()
+        .env("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent_fake_sig_12345")
+        .args(["listen", "--no-suppress", "--timeout", "0.01"])
+        .output()
+        .unwrap();
+    let alias_stderr = String::from_utf8_lossy(&alias.stderr);
+    let generic_stderr = String::from_utf8_lossy(&generic.stderr);
+    assert_eq!(alias.status.code(), generic.status.code());
+    assert_eq!(
+        alias_stderr.contains("Using terminal capture"),
+        generic_stderr.contains("Using terminal capture")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn listen_terminal_mode_claims_observed_only_disposition() {
