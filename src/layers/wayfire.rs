@@ -33,7 +33,7 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
 }
 
 pub fn applicable() -> bool {
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if super::compositor::remote_session() {
         return false;
     }
     env::var("XDG_CURRENT_DESKTOP")
