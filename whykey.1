@@ -138,13 +138,19 @@ stops after n captured reports.
 includes modifier-only and release events in evdev mode.
 .TP
 .B --suppress
-Use the safe default: temporarily suppress native compositor shortcuts while
-capturing. This is the default even when the option is omitted.
+Opt into temporarily suppressing native compositor shortcuts while capturing.
+Capture is observe-only by default; Sway IPC is pass-through-only.
 .TP
 .B --no-suppress
 Capture through the native compositor without suppressing its shortcut.
 .B --pass-through
 is a compatibility alias.
+.TP
+.B --dry-run
+Select a capture backend and policy without arming it.
+.TP
+.B --explain-capture
+Print the compositor detection and capture-factory evidence.
 .TP
 .B listen --evdev [--device path]
 On Linux, capture readable EV_KEY events from input devices before the

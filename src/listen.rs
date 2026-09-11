@@ -50,6 +50,9 @@ pub enum CaptureDisposition {
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     pub capture_policy: CapturePolicy,
+    pub explicit_suppress: bool,
+    pub dry_run: bool,
+    pub explain_capture: bool,
     pub repeat: bool,
     pub json: bool,
     /// Emit one compact schema-v2 JSON record per captured event. This is a
@@ -399,6 +402,16 @@ impl KeyEventType {
     }
 }
 pub fn run(options: Options) -> Result<(), ListenError> {
+    if options.dry_run || options.explain_capture {
+        let discovery = ListenSession::capture();
+        if options.explain_capture {
+            print_capture_explanation(&discovery.environment, options.capture_policy);
+        }
+        if options.dry_run {
+            print_capture_dry_run(&discovery.environment, &options);
+            return Ok(());
+        }
+    }
     if options.evdev || options.device.is_some() {
         return run_evdev(options);
     }
@@ -445,6 +458,60 @@ pub fn run(options: Options) -> Result<(), ListenError> {
         eprintln!("Using terminal capture; shortcuts consumed by the compositor will not appear.");
         run_terminal(options)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn print_capture_dry_run(environment: &crate::environment::Environment, options: &Options) {
+    let forced = if options.evdev || options.device.is_some() {
+        Some("Evdev")
+    } else if options.terminal {
+        Some("Terminal")
+    } else {
+        None
+    };
+    if let Some(backend) = forced {
+        println!("capture backend: {backend} (dry-run; not armed)");
+        return;
+    }
+    match select_native_backend(environment) {
+        Ok(session) => println!(
+            "capture backend: {} (dry-run; not armed; policy={})",
+            session.display(),
+            options.capture_policy
+        ),
+        Err(error) => {
+            println!("capture backend: terminal fallback (dry-run; native unavailable: {error})")
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn print_capture_dry_run(_environment: &crate::environment::Environment, options: &Options) {
+    let backend = if options.evdev || options.device.is_some() {
+        "Evdev"
+    } else {
+        "Terminal"
+    };
+    println!("capture backend: {backend} (dry-run; not armed)");
+}
+
+fn print_capture_explanation(environment: &crate::environment::Environment, policy: CapturePolicy) {
+    println!("capture detection (policy={policy})");
+    for status in &environment.desktops {
+        let capture = crate::registry::DESKTOPS
+            .iter()
+            .find(|entry| entry.id == status.id)
+            .is_some_and(|entry| entry.capture.is_some());
+        println!(
+            "- {}: applicable={} ipc={} capture_factory={}",
+            status.id, status.applicable, status.ipc, capture
+        );
+    }
+    println!("selected compositor: {:?}", environment.selected_compositor);
+    println!(
+        "compositor candidates: {:?}",
+        environment.compositor_candidates
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -502,6 +569,11 @@ fn run_native(
     let mut export = open_export(options.output.as_deref())?;
     if let Some(warning) = capture_session.pre_arm_warning(options.capture_policy) {
         eprintln!("{warning}");
+    }
+    if options.explicit_suppress {
+        eprintln!(
+            "warning: --suppress is opt-in and may temporarily change compositor state; see `whykey doctor`"
+        );
     }
 
     let mut capture_stdout = io::BufWriter::new(io::stdout());

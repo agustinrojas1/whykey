@@ -1737,10 +1737,13 @@ xkb_symbols "pc" {
     }
 
     #[test]
-    fn capture_policy_defaults_to_suppress() {
+    fn capture_policy_defaults_to_pass_through() {
         use crate::listen::Options;
         let default_opts = Options::default();
-        assert_eq!(default_opts.capture_policy, HyprlandCapturePolicy::Suppress);
+        assert_eq!(
+            default_opts.capture_policy,
+            HyprlandCapturePolicy::PassThrough
+        );
     }
 
     #[test]

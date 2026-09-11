@@ -11,8 +11,8 @@ use crate::xkb::XkbKeycode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CapturePolicy {
     #[default]
-    Suppress,
     PassThrough,
+    Suppress,
 }
 
 impl CapturePolicy {
@@ -160,8 +160,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn policy_default_is_suppress() {
-        assert_eq!(CapturePolicy::default(), CapturePolicy::Suppress);
+    fn policy_default_is_pass_through() {
+        assert_eq!(CapturePolicy::default(), CapturePolicy::PassThrough);
         assert!(CapturePolicy::Suppress.suppresses());
         assert!(!CapturePolicy::Suppress.is_pass_through());
         assert!(CapturePolicy::PassThrough.is_pass_through());

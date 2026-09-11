@@ -2930,6 +2930,29 @@ fn terminal_flag_suppresses_fallback_warning() {
 }
 
 #[test]
+fn listen_dry_run_selects_without_arming() {
+    let output = binary()
+        .args(["listen", "--dry-run", "--terminal"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Terminal (dry-run; not armed)"));
+}
+
+#[test]
+fn listen_explain_capture_reports_detection_table() {
+    let output = binary()
+        .args(["listen", "--explain-capture", "--dry-run", "--terminal"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("capture detection"));
+    assert!(stdout.contains("capture_factory="));
+    assert!(stdout.contains("selected compositor:"));
+}
+
+#[test]
 fn listen_events_all_fails_when_hyprland_unavailable() {
     let output = binary()
         .args(["listen", "--events", "all"])
@@ -2960,7 +2983,7 @@ fn listen_json_fallback_warns_on_stderr_without_polluting_stdout() {
 fn hyprland_suppression_failure_fails_closed() {
     let output = binary()
         .env("HYPRLAND_INSTANCE_SIGNATURE", "nonexistent_fake_sig_12345")
-        .args(["listen", "--timeout", "0.01"])
+        .args(["listen", "--suppress", "--timeout", "0.01"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));

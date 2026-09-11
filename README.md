@@ -55,7 +55,8 @@ publication follows the first release; see [`packaging/README.md`](packaging/REA
 whykey ctrl+left                    # inspect one combination
 whykey inspect ctrl+x ctrl+s        # inspect a sequence
 whykey inspect --focused ctrl+z     # inspect the focused application
-whykey listen                       # explain the next shortcut (uses native capture when available)
+whykey listen                       # explain the next shortcut (observe-only by default)
+whykey listen --suppress            # opt into temporary compositor suppression
 whykey listen --no-suppress         # explain the shortcut without suppressing its action
 whykey listen --repeat              # inspect one deliberate shortcut at a time
 whykey listen --terminal            # force terminal-only capture
@@ -100,11 +101,12 @@ configuration. Missing tools and dynamic configuration are reported as
 uncertain evidence instead of guessed answers.
 
 `whykey listen` captures the next deliberate shortcut to explain its path.
-When native compositor capture is available (today: Hyprland), it defaults to
-capturing and temporarily suppressing ordinary compositor bindings via a
-private submap and runtime event hook. Pass `--no-suppress` to observe
-shortcuts while allowing their normal actions to run; `--pass-through` remains
-its compatibility alias. Because Hyprland's key event does not
+When native compositor capture is available (today: Hyprland and pass-through
+Sway IPC), it observes ordinary compositor bindings without suppression by
+default. Pass `--suppress` to opt into temporary suppression where supported;
+Sway IPC is pass-through-only. Pass `--no-suppress` to observe shortcuts while
+allowing their normal actions to run; `--pass-through` remains its
+compatibility alias. Because Hyprland's key event does not
 identify the originating keyboard, device identity is reported as unavailable.
 
 If native compositor capture is unavailable, Whykey falls back to terminal capture,
