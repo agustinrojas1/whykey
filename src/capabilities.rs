@@ -359,13 +359,13 @@ fn extension_capability_entries(environment: &crate::environment::Environment) -
     environment
         .extension_adapters
         .iter()
-        .filter_map(|adapter| {
+        .map(|adapter| {
             let applicable = crate::extension_adapters::applicable_with_context(
                 adapter,
                 &environment.compositor_context,
             );
             let id = Box::leak(format!("compositor.extension.{}", adapter.id).into_boxed_str());
-            Some(available(
+            available(
                 id,
                 "compositor",
                 applicable,
@@ -377,7 +377,7 @@ fn extension_capability_entries(environment: &crate::environment::Environment) -
                 } else {
                     format!("{} manifest is installed but its environment and desktop hints do not match", adapter.display)
                 },
-            ))
+            )
         })
         .collect()
 }
