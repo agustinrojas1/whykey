@@ -599,20 +599,15 @@ pub fn evaluate_conclusion(
             crate::listen::CaptureDisposition::PassedThrough => {
                 preamble = Some(CapturePreamble::HyprlandObserved);
             }
-            crate::listen::CaptureDisposition::ObservedOnly => match &observation.source {
-                crate::listen::CaptureSource::Terminal => {
-                    preamble = Some(CapturePreamble::TerminalObserved);
-                }
-                crate::listen::CaptureSource::Hyprland => {
-                    preamble = Some(CapturePreamble::HyprlandObserved);
-                }
-                crate::listen::CaptureSource::CompositorNative { .. } => {
-                    preamble = Some(CapturePreamble::HyprlandObserved);
-                }
-                crate::listen::CaptureSource::Evdev { .. } => {
-                    preamble = Some(CapturePreamble::EvdevObserved);
-                }
-            },
+            crate::listen::CaptureDisposition::ObservedOnly => {
+                preamble = if observation.source.confirms_terminal() {
+                    Some(CapturePreamble::TerminalObserved)
+                } else if observation.source.proves_compositor_receipt() {
+                    Some(CapturePreamble::HyprlandObserved)
+                } else {
+                    Some(CapturePreamble::EvdevObserved)
+                };
+            }
         }
     }
 
