@@ -473,6 +473,7 @@ fn doctor_returns_structured_json() {
     assert!(value["ime"].is_array());
     assert!(value["shell_snapshot"].is_boolean());
     assert!(value.get("terminal_adapter").is_some());
+    assert!(value["extensions"]["whykey_nvim"]["installed"].is_boolean());
 }
 
 #[test]
