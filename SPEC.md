@@ -1,4 +1,4 @@
-# whykey v1.1.0 specification
+# whykey v1.2.0 specification
 
 ## Goal
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0] - 2026-09-11
+
+### Added
+
+- Ship `extensions/whykey-vscode`, a stdlib-only first-party extension querying user `keybindings.json` across Code, Code - OSS, and VSCodium. Supports comment stripping, chord-prefix matching, `when`-clause triage, and unbind removals (`"command": "-id"`). Product defaults are explicitly not evaluated.
+- Ship `extensions/whykey-emacs`, a stdlib-only first-party extension querying the running Emacs daemon in a single `--eval` to return the active keybinding stack and winning map (`global`, `major`, or `minor`). Reports remediation guidance when no daemon is reachable.
+
 ## [1.1.0] - 2026-09-11
 
 ### Added
