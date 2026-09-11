@@ -508,7 +508,7 @@ fn run_native(
     let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
     let mut captured_events = 0_usize;
 
-    // Keep one terminal raw-mode guard for the complete Hyprland listening session
+    // Keep one terminal raw-mode guard for the complete native listening session.
     let mut terminal = TerminalSession::open()?;
     let original_termios = terminal.original;
     let tty_fd = terminal.tty.as_raw_fd();
@@ -524,9 +524,10 @@ fn run_native(
             );
             eprintln!("No key was captured and no shortcut was executed.");
             eprintln!("Use --pass-through to capture without suppression.");
-            return Err(ListenError::Setup(
-                "could not suppress Hyprland shortcuts".into(),
-            ));
+            return Err(ListenError::Setup(format!(
+                "could not suppress {} shortcuts",
+                capture_session.display()
+            )));
         } else {
             return Err(ListenError::Setup(format!(
                 "{} capture failed to arm: {err}",
@@ -540,7 +541,10 @@ fn run_native(
     } else {
         println!("whykey listen");
         if options.capture_policy == HyprlandCapturePolicy::Suppress {
-            println!("Hyprland shortcuts are temporarily suppressed.");
+            println!(
+                "{} shortcuts are temporarily suppressed.",
+                capture_session.display()
+            );
         }
         println!("Press a key combination. Press Esc or Ctrl+C to exit.");
         if options.repeat {

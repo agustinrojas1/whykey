@@ -297,12 +297,10 @@ fn inspect_compositor(
     };
     match session.selected_compositor {
         Some("compositor") | None => extension().unwrap_or_else(|| {
-            if session.selected_compositor.is_none()
-                && hyprland::remote_session_without_compositor()
-            {
+            if session.ssh && session.selected_compositor.is_none() {
                 // Keep the explicit SSH explanation for remote terminals while
-                // avoiding a fabricated Hyprland failure for ordinary consoles.
-                hyprland::Hyprland.inspect_with_input(key, physical_input)
+                // avoiding a fabricated compositor failure for ordinary consoles.
+                compositor::remote_without_local_adapter()
             } else {
                 compositor::inspect()
             }

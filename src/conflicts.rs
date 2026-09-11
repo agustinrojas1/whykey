@@ -241,6 +241,36 @@ mod tests {
     }
 
     #[test]
+    fn extension_manifest_bindings_are_grouped_for_conflicts() {
+        let entries = vec![
+            bindings::BindingRecord {
+                device: None,
+                submap: None,
+                source: "herbstluftwm".into(),
+                key: "SUPER+RETURN".into(),
+                action: "spawn foot".into(),
+                context: Some("default".into()),
+                certainty: "script-reported; runtime activation conditional".into(),
+            },
+            bindings::BindingRecord {
+                device: None,
+                submap: None,
+                source: "herbstluftwm".into(),
+                key: "SUPER+RETURN".into(),
+                action: "spawn kitty".into(),
+                context: Some("default".into()),
+                certainty: "script-reported; runtime activation conditional".into(),
+            },
+        ];
+
+        let (conflicts, unknown_context_groups) = build_conflicts(&entries);
+        assert_eq!(unknown_context_groups, 0);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].source, "herbstluftwm");
+        assert_eq!(conflicts[0].actions, vec!["spawn foot", "spawn kitty"]);
+    }
+
+    #[test]
     fn different_devices_are_not_grouped_as_conflicts() {
         let entries = vec![
             bindings::BindingRecord {

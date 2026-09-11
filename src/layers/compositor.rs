@@ -75,8 +75,8 @@ pub fn inspect() -> LayerResult {
 }
 
 /// Result for a console or otherwise display-less session. Keeping this
-/// separate from `inspect` avoids manufacturing a Hyprland IPC failure when
-/// there is no desktop compositor to query.
+/// separate from `inspect` avoids manufacturing a compositor IPC failure when
+/// there is no local desktop compositor to query.
 pub fn not_detected() -> LayerResult {
     LayerResult::new(
         "Desktop compositor",
@@ -84,6 +84,22 @@ pub fn not_detected() -> LayerResult {
         Outcome::Pass,
         "no desktop compositor session detected",
         vec!["the diagnostic starts at the terminal/TTY path for this session".into()],
+    )
+}
+
+/// Result for a remote session where no local compositor adapter is visible.
+/// This preserves the useful SSH explanation without attributing it to any
+/// particular compiled-in compositor.
+pub fn remote_without_local_adapter() -> LayerResult {
+    LayerResult::new(
+        "Desktop compositor",
+        LayerId::Compositor,
+        Outcome::Pass,
+        "not applicable in this remote session",
+        vec![
+            "SSH session detected without a local compositor IPC signature".into(),
+            "the remote terminal/session layers are inspected instead".into(),
+        ],
     )
 }
 
