@@ -154,6 +154,7 @@ pub(crate) fn inspect_with_environment(
     request: &InspectRequest<'_>,
     session: &crate::environment::Environment,
 ) -> Vec<LayerResult> {
+    let generations_before = session.reload_generations();
     let remapper_result = (!command::deadline_exceeded()).then(|| {
         crate::remapper::inspect_with_detections(
             request.physical_input.as_ref(),
@@ -177,7 +178,80 @@ pub(crate) fn inspect_with_environment(
             results.insert(insert_at, ime_result.expect("IME result is present"));
         }
     }
+    let generations_after = session.reload_generations();
+    mark_stale_generation_evidence(&mut results, &generations_before, &generations_after);
     results
+}
+
+fn mark_stale_generation_evidence(
+    results: &mut [LayerResult],
+    before: &[(&'static str, Option<String>)],
+    after: &[(&'static str, Option<String>)],
+) {
+    let changed = before
+        .iter()
+        .zip(after)
+        .filter(
+            |((before_id, before_generation), (after_id, after_generation))| {
+                before_id == after_id && before_generation != after_generation
+            },
+        )
+        .map(|(entry, _)| entry.0)
+        .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return;
+    }
+    let detail = format!(
+        "binding evidence may be stale: adapter configuration generation changed ({})",
+        changed.join(", ")
+    );
+    if let Some(compositor) = results
+        .iter_mut()
+        .find(|result| result.id == LayerId::Compositor)
+    {
+        compositor.details.push(detail);
+    } else if let Some(first) = results.first_mut() {
+        first.details.push(detail);
+    }
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+
+    #[test]
+    fn generation_bump_marks_evidence_stale() {
+        let mut results = vec![LayerResult::new(
+            "Compositor",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "binding found",
+            vec![],
+        )];
+        mark_stale_generation_evidence(
+            &mut results,
+            &[("test", Some("1".into()))],
+            &[("test", Some("2".into()))],
+        );
+        assert!(results[0].details[0].contains("may be stale"));
+    }
+
+    #[test]
+    fn unchanged_generation_keeps_results_unchanged() {
+        let mut results = vec![LayerResult::new(
+            "Compositor",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "no binding",
+            vec![],
+        )];
+        mark_stale_generation_evidence(
+            &mut results,
+            &[("test", Some("1".into()))],
+            &[("test", Some("1".into()))],
+        );
+        assert!(results[0].details.is_empty());
+    }
 }
 
 /// Continuation policy defines when a layer finding halts further inspection.

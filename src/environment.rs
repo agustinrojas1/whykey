@@ -282,6 +282,19 @@ impl Environment {
             .insert(adapter.id.clone(), result.clone());
         result
     }
+
+    /// Capture reload generations once before and after a route inspection.
+    /// `None` means the adapter does not expose a generation marker.
+    pub fn reload_generations(&self) -> Vec<(&'static str, Option<String>)> {
+        crate::registry::DESKTOPS
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .reload_generation
+                    .map(|generation| (entry.id, generation()))
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
