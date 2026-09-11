@@ -726,39 +726,89 @@ fn run_native(_options: Options) -> Result<(), ListenError> {
 }
 
 fn run_terminal(options: Options) -> Result<(), ListenError> {
+    let snapshot = ListenSession::capture();
+    let mut backend = TerminalBackend::new();
+    backend
+        .arm(CapturePolicy::PassThrough)
+        .map_err(ListenError::Setup)?;
+    let original_termios = backend
+        .original_termios()
+        .ok_or_else(|| ListenError::Setup("terminal capture failed to arm".into()))?;
+    run_observed_loop(options, backend, snapshot, Some(original_termios))
+}
+
+fn run_observed_loop<B: CaptureBackend>(
+    options: Options,
+    mut backend: B,
+    snapshot: ListenSession,
+    terminal_termios: Option<libc::termios>,
+) -> Result<(), ListenError> {
     let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
-    let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
-    // Discovery can be slow and must not happen while the user's terminal is
-    // in raw mode. Capture mode is entered only after the prompt is visible.
-    let session = ListenSession::capture();
     let mut capture_stdout = io::BufWriter::new(io::stdout());
-
     if options.json {
-        eprintln!("whykey listen: press a key combination (Esc or Ctrl+C exits)");
+        eprintln!(
+            "whykey listen{}: press a key combination (Esc or Ctrl+C exits)",
+            if backend.id() == CaptureBackendId::Evdev {
+                " --evdev"
+            } else {
+                ""
+            }
+        );
     } else {
-        println!("whykey listen");
+        println!(
+            "whykey listen{}",
+            if backend.id() == CaptureBackendId::Evdev {
+                " --evdev"
+            } else {
+                ""
+            }
+        );
         println!("Press a key combination. Press Esc or Ctrl+C to exit.");
+        if backend.id() == CaptureBackendId::Evdev {
+            println!("Read-only capture; the input device is not grabbed.");
+        }
         if options.repeat {
             println!("Repeat mode is on.");
         }
         println!();
     }
+    if options.json {
+        eprintln!("Waiting for input...");
+    } else {
+        println!("Waiting for input...");
+    }
+    let _ = io::stdout().flush();
+    let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
     let mut captured_events = 0_usize;
-
     loop {
-        let Some((observed, original_termios)) =
-            capture_terminal_key(deadline, &signals, options.json)?
+        if signals.received() {
+            let _ = backend.close();
+            return Err(ListenError::Message(
+                "interrupted; terminal settings restored".into(),
+            ));
+        }
+        if deadline.is_some_and(|value| Instant::now() >= value) {
+            let _ = backend.close();
+            return Err(ListenError::Message("capture timed out".into()));
+        }
+        let Some(observed) = backend
+            .next_event(options.events_all)
+            .map_err(ListenError::Message)?
         else {
+            continue;
+        };
+        if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
+            backend.close().map_err(ListenError::Io)?;
             if options.json {
                 eprintln!("Stopped.");
             } else {
                 println!("\nStopped.");
             }
             return Ok(());
-        };
-
-        let results = session.inspect(&observed, Some(&original_termios));
+        }
+        backend.close().map_err(ListenError::Io)?;
+        let results = snapshot.inspect(&observed, terminal_termios.as_ref());
         let rendered = if options.json {
             if options.ndjson {
                 report::render_ndjson(&observed.combo, &results, Some(&observed))
@@ -774,21 +824,29 @@ fn run_terminal(options: Options) -> Result<(), ListenError> {
             report::render_observed(&observed, &results, options.verbose)
         };
         write_capture(&mut export, &mut capture_stdout, &rendered)?;
-
         captured_events += 1;
         let count_reached = options.count.is_some_and(|count| captured_events >= count);
         let keep_listening = options.repeat || options.count.is_some_and(|count| count > 1);
         if !keep_listening || count_reached {
             return Ok(());
         }
+        backend
+            .arm(CapturePolicy::PassThrough)
+            .map_err(ListenError::Setup)?;
         if !options.json {
             println!();
+        }
+        if options.json {
+            eprintln!("Waiting for input...");
+        } else {
+            println!("Waiting for input...");
         }
     }
 }
 
 /// Capture one intentional terminal key, restoring termios and the keyboard
 /// protocol before returning it for analysis.
+#[allow(dead_code)]
 fn capture_terminal_key(
     deadline: Option<Instant>,
     signals: &SignalGuard,
@@ -960,6 +1018,18 @@ fn run_evdev(_options: Options) -> Result<(), ListenError> {
 
 #[cfg(target_os = "linux")]
 fn run_evdev(options: Options) -> Result<(), ListenError> {
+    let snapshot = ListenSession::capture();
+    let mut backend = EvdevBackend::open(options.device.as_deref())?;
+    backend.set_events_all(options.events_all);
+    backend
+        .arm(CapturePolicy::PassThrough)
+        .map_err(ListenError::Setup)?;
+    run_observed_loop(options, backend, snapshot, None)
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+fn run_evdev_legacy(options: Options) -> Result<(), ListenError> {
     let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
     let mut session = EvdevSession::open(options.device.as_deref())?;
@@ -1792,11 +1862,11 @@ pub struct TerminalBackend {
 }
 
 impl TerminalBackend {
-    pub fn open() -> io::Result<Self> {
-        Ok(Self {
-            session: Some(TerminalSession::open()?),
+    pub fn new() -> Self {
+        Self {
+            session: None,
             pending: VecDeque::new(),
-        })
+        }
     }
 
     pub fn original_termios(&self) -> Option<libc::termios> {
@@ -1822,6 +1892,12 @@ impl TerminalBackend {
     }
 }
 
+impl Default for TerminalBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CaptureBackend for TerminalBackend {
     fn id(&self) -> CaptureBackendId {
         CaptureBackendId::Terminal
@@ -1839,7 +1915,15 @@ impl CaptureBackend for TerminalBackend {
     }
 
     fn next_observed_event(&mut self, _events_all: bool) -> Result<Option<ObservedKey>, String> {
-        self.read_one()
+        loop {
+            let Some(observed) = self.read_one()? else {
+                return Ok(None);
+            };
+            if observed.event_type != KeyEventType::Press || is_terminal_modifier_key(&observed) {
+                continue;
+            }
+            return Ok(Some(observed));
+        }
     }
 
     fn wait_for_chord_release(
@@ -1855,9 +1939,12 @@ impl CaptureBackend for TerminalBackend {
     }
 
     fn close(&mut self) -> io::Result<()> {
-        self.session
+        let result = self
+            .session
             .as_mut()
-            .map_or(Ok(()), TerminalSession::restore)
+            .map_or(Ok(()), TerminalSession::restore);
+        self.session = None;
+        result
     }
 }
 
@@ -1873,6 +1960,12 @@ impl EvdevBackend {
         Ok(Self {
             session: Some(EvdevSession::open(device)?),
         })
+    }
+
+    pub fn set_events_all(&mut self, events_all: bool) {
+        if let Some(session) = self.session.as_mut() {
+            session.include_modifiers = events_all;
+        }
     }
 }
 
