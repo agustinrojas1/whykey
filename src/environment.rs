@@ -9,10 +9,6 @@ use crate::{ime, remapper};
 /// Session identity and selected integration points, collected once.
 #[derive(Debug, Clone)]
 pub struct Environment {
-    pub desktop: Option<String>,
-    pub session_desktop: Option<String>,
-    pub session_type: Option<String>,
-    pub display_server: Option<String>,
     pub ssh: bool,
     pub tty_available: bool,
     pub shell: String,
@@ -111,16 +107,6 @@ impl Environment {
         };
 
         Self {
-            desktop: std::env::var("XDG_CURRENT_DESKTOP").ok(),
-            session_desktop: std::env::var("XDG_SESSION_DESKTOP").ok(),
-            session_type: std::env::var("XDG_SESSION_TYPE").ok(),
-            display_server: if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-                Some("Wayland".to_owned())
-            } else if std::env::var_os("DISPLAY").is_some() {
-                Some("X11".to_owned())
-            } else {
-                None
-            },
             ssh: std::env::var_os("SSH_CONNECTION").is_some()
                 || std::env::var_os("SSH_TTY").is_some(),
             tty_available: std::fs::File::open("/dev/tty").is_ok(),
