@@ -1046,6 +1046,8 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         multiplexer_names.push("zellij");
     }
     let multiplexer_display = &environment.multiplexer;
+    let nvim_extension = detect_extension("whykey-nvim");
+    let nvim_server = detect_nvim_server();
 
     let compositor_context_available = ssh
         || generic_compositor
@@ -1113,6 +1115,12 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             "shell_snapshot": shell_snapshot,
             "multiplexer": multiplexer_display,
             "ssh": ssh,
+            "extensions": {
+                "whykey_nvim": {
+                    "installed": nvim_extension,
+                    "server": nvim_server,
+                }
+            },
         });
         legacy_value
             .as_object_mut()
@@ -1273,6 +1281,16 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         if ssh {
             println!("  SSH session: yes");
         }
+        if nvim_extension {
+            println!("✓ Neovim extension: installed (whykey-nvim)");
+            if let Some(server) = &nvim_server {
+                println!("  Neovim server: reachable ({server})");
+            } else {
+                println!("  Neovim server: none active (start nvim with --listen)");
+            }
+        } else {
+            println!("- Neovim extension: not found on PATH or extensions/ (whykey-nvim)");
+        }
         if !next_steps.is_empty() {
             println!("\nNext steps:");
             for step in &next_steps {
@@ -1346,6 +1364,48 @@ fn detected_terminal_program() -> Option<String> {
             )
             .then_some(term)
         })
+}
+
+fn detect_extension(name: &str) -> bool {
+    if let Some(paths) = env::var_os("PATH") {
+        for dir in env::split_paths(&paths) {
+            if dir.join(name).is_file() {
+                return true;
+            }
+        }
+    }
+    std::path::Path::new("extensions").join(name).is_file()
+}
+
+fn detect_nvim_server() -> Option<String> {
+    env::var("NVIM_LISTEN_ADDRESS")
+        .ok()
+        .or_else(|| env::var("NVIM").ok())
+        .filter(|s| !s.is_empty())
+        .or_else(scan_proc_nvim_server)
+}
+
+fn scan_proc_nvim_server() -> Option<String> {
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let pid_str = name.to_str()?;
+        if !pid_str.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let cmdline_path = entry.path().join("cmdline");
+        let Ok(bytes) = std::fs::read(cmdline_path) else {
+            continue;
+        };
+        let cmd = String::from_utf8_lossy(&bytes);
+        let first_arg = cmd.split('\0').next().unwrap_or("");
+        if first_arg == "nvim" || first_arg.ends_with("/nvim") {
+            if let Some(server) = whykey::layers::application::nvim_server_from_command(&cmd) {
+                return Some(server);
+            }
+        }
+    }
+    None
 }
 
 fn print_check(name: &str, ok: bool, hint: &str) {

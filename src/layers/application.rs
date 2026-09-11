@@ -708,7 +708,7 @@ fn vim_server_from_command(command: &str) -> Option<String> {
     })
 }
 
-fn nvim_server_from_command(command: &str) -> Option<String> {
+pub fn nvim_server_from_command(command: &str) -> Option<String> {
     let arguments: Vec<_> = command.split('\0').collect();
     let arguments = if arguments.len() == 1 {
         command.split_whitespace().collect()
