@@ -45,15 +45,13 @@ impl Wayfire {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Wayfire",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect Wayfire shortcuts".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "Wayfire",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect Wayfire shortcuts",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -61,15 +59,13 @@ impl Wayfire {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Wayfire",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no matching Wayfire binding found".into(),
-                details: vec![format!("source: {}", config_description())],
-            };
+            return LayerResult::new(
+                "Wayfire",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no matching Wayfire binding found",
+                vec![format!("source: {}", config_description())],
+            );
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -79,15 +75,13 @@ impl Wayfire {
             "Wayfire plugin activation, reload state, and runtime precedence remain conditional"
                 .into(),
         );
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Wayfire",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "Wayfire config contains a matching binding".into(),
+        LayerResult::new(
+            "Wayfire",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "Wayfire config contains a matching binding",
             details,
-        }
+        )
     }
 }
 

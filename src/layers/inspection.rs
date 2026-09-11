@@ -440,15 +440,7 @@ mod tests {
     use super::*;
 
     fn dummy_result(outcome: Outcome) -> LayerResult {
-        LayerResult {
-            layer: "Test",
-            id: LayerId::Unknown,
-            outcome,
-            summary: "test".into(),
-            details: Vec::new(),
-            verbose_details: Vec::new(),
-            binding: None,
-        }
+        LayerResult::new("Test", LayerId::Unknown, outcome, "test", Vec::new())
     }
 
     #[test]
@@ -510,15 +502,13 @@ mod tests {
 
     #[test]
     fn target_endpoint_selection() {
-        let app_handled = LayerResult {
-            layer: "Neovim",
-            id: LayerId::Application,
-            outcome: Outcome::HandledUncertain,
-            summary: "mode-dependent".into(),
-            details: Vec::new(),
-            verbose_details: Vec::new(),
-            binding: None,
-        };
+        let app_handled = LayerResult::new(
+            "Neovim",
+            LayerId::Application,
+            Outcome::HandledUncertain,
+            "mode-dependent",
+            Vec::new(),
+        );
         let app_pass = dummy_result(Outcome::Pass);
 
         // Without explicit target, app match selects InteractiveApplication

@@ -51,15 +51,13 @@ impl Mate {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let (bindings, errors) = load_bindings();
         if bindings.is_empty() && !errors.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "MATE",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "could not inspect MATE global shortcuts".into(),
-                details: errors,
-            };
+            return LayerResult::new(
+                "MATE",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "could not inspect MATE global shortcuts",
+                errors,
+            );
         }
         let matches = bindings
             .iter()
@@ -71,15 +69,13 @@ impl Mate {
                 .map(|schema| format!("source: gsettings list-recursively {schema}"))
                 .collect::<Vec<_>>();
             details.extend(errors);
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "MATE",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active MATE global shortcut found".into(),
+            return LayerResult::new(
+                "MATE",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active MATE global shortcut found",
                 details,
-            };
+            );
         }
 
         let mut details = SCHEMAS
@@ -98,15 +94,13 @@ impl Mate {
             ));
         }
         details.extend(errors);
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "MATE",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "MATE global shortcut consumes the key".into(),
+        LayerResult::new(
+            "MATE",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "MATE global shortcut consumes the key",
             details,
-        }
+        )
     }
 }
 

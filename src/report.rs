@@ -958,15 +958,13 @@ mod tests {
     #[test]
     fn renders_a_forwarded_result() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
-        let layer = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Pass,
-            summary: "no active binding found".into(),
-            details: vec!["active submap: default".into()],
-        };
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "no active binding found",
+            vec!["active submap: default".into()],
+        );
 
         let output = render(&key, std::slice::from_ref(&layer), false);
 
@@ -984,24 +982,20 @@ mod tests {
     fn uses_the_layer_that_stops_the_key() {
         let key: KeyCombo = "ctrl+z".parse().unwrap();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::HandledAndPassed,
-                summary: "binding found".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Consumed,
-                summary: "binding found".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::HandledAndPassed,
+                "binding found",
+                vec![],
+            ),
+            LayerResult::new(
+                "Readline",
+                LayerId::Shell,
+                Outcome::Consumed,
+                "binding found",
+                vec![],
+            ),
         ];
 
         let output = render(&key, &layers, false);
@@ -1014,24 +1008,20 @@ mod tests {
     fn qualifies_a_later_handler_after_uncertainty() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "forwarding uncertain".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Bash / Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Consumed,
-                summary: "bound to backward-word".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "forwarding uncertain",
+                vec![],
+            ),
+            LayerResult::new(
+                "Bash / Readline",
+                LayerId::Shell,
+                Outcome::Consumed,
+                "bound to backward-word",
+                vec![],
+            ),
         ];
 
         let output = render(&key, &layers, false);
@@ -1043,15 +1033,13 @@ mod tests {
     #[test]
     fn explains_a_redirected_key() {
         let key: KeyCombo = "ctrl+p".parse().unwrap();
-        let layer = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Redirected,
-            summary: "active binding found; event is redirected to another window".into(),
-            details: vec!["binding: pass class:example".into()],
-        };
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Redirected,
+            "active binding found; event is redirected to another window",
+            vec!["binding: pass class:example".into()],
+        );
 
         let output = render(&key, &[layer], false);
 
@@ -1063,24 +1051,20 @@ mod tests {
     fn keeps_handlers_from_earlier_forwarding_layers() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::HandledAndPassed,
-                summary: "binding found".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Ghostty",
-                id: LayerId::Terminal,
-                outcome: Outcome::Pass,
-                summary: "no binding found".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::HandledAndPassed,
+                "binding found",
+                vec![],
+            ),
+            LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::Pass,
+                "no binding found",
+                vec![],
+            ),
         ];
 
         let output = render(&key, &layers, false);
@@ -1095,24 +1079,20 @@ mod tests {
     fn keeps_confirmed_and_possible_handlers() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::UncertainContinues,
-                summary: "binding may run".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Ghostty",
-                id: LayerId::Terminal,
-                outcome: Outcome::HandledAndPassed,
-                summary: "binding found".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::UncertainContinues,
+                "binding may run",
+                vec![],
+            ),
+            LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::HandledAndPassed,
+                "binding found",
+                vec![],
+            ),
         ];
 
         let output = render(&key, &layers, false);
@@ -1128,15 +1108,13 @@ mod tests {
     #[test]
     fn renders_unavailable_before_indeterminate_propagation() {
         let key: KeyCombo = "ctrl+z".parse().unwrap();
-        let layer = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Unavailable,
-            summary: "inspection failed".into(),
-            details: vec![],
-        };
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Unavailable,
+            "inspection failed",
+            vec![],
+        );
 
         let output = render(&key, &[layer], false);
 
@@ -1148,24 +1126,20 @@ mod tests {
     fn keeps_unavailable_context_visible_when_nothing_handles() {
         let key: KeyCombo = "ctrl+f".parse().unwrap();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "inspection failed".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Pass,
-                summary: "no binding".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "inspection failed",
+                vec![],
+            ),
+            LayerResult::new(
+                "Readline",
+                LayerId::Shell,
+                Outcome::Pass,
+                "no binding",
+                vec![],
+            ),
         ];
 
         let output = render(&key, &layers, false);
@@ -1216,24 +1190,20 @@ mod tests {
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "forwarding uncertain".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Readline",
-                id: LayerId::Shell,
-                outcome: Outcome::Consumed,
-                summary: "bound to backward-word".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "forwarding uncertain",
+                vec![],
+            ),
+            LayerResult::new(
+                "Readline",
+                LayerId::Shell,
+                Outcome::Consumed,
+                "bound to backward-word",
+                vec![],
+            ),
         ];
 
         let output = render_observed(&observed, &layers, true);
@@ -1268,15 +1238,13 @@ mod tests {
             },
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Pass,
-            summary: "no active binding found".into(),
-            details: vec![],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "no active binding found",
+            vec![],
+        )];
 
         let output = render_observed(&observed, &layers, false);
         assert!(output.contains("source: evdev (Test Keyboard; /dev/input/event0)"));
@@ -1308,15 +1276,13 @@ mod tests {
             source: crate::listen::CaptureSource::Hyprland,
             disposition: crate::listen::CaptureDisposition::PassedThrough,
         };
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Pass,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )];
 
         let output = render_observed(&observed, &layers, true);
         assert!(output.contains("source: Hyprland"));
@@ -1371,15 +1337,14 @@ mod tests {
             source: crate::listen::CaptureSource::Hyprland,
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )
+        .with_binding(opaque_herdr_evidence())];
 
         let output = render_observed(&observed, &layers, false);
         assert!(output.contains("source: Hyprland"));
@@ -1415,15 +1380,14 @@ mod tests {
             source: crate::listen::CaptureSource::Hyprland,
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching binding; runtime effect unknown".into(),
-            details: vec!["opaque runtime hook with a Herdr label".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching binding; runtime effect unknown",
+            vec!["opaque runtime hook with a Herdr label".into()],
+        )
+        .with_binding(opaque_herdr_evidence())];
 
         let output = render_observed(&observed, &layers, false);
 
@@ -1461,17 +1425,16 @@ mod tests {
             has_universal_match: true,
             ..opaque_herdr_evidence()
         };
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(universal),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            // No "(all submaps)" marker: the conclusion must follow the
-            // typed scope, never the detail wording.
-            details: vec!["opaque runtime hook with a Herdr label".into()],
-        }];
+        // No "(all submaps)" marker: the conclusion must follow the
+        // typed scope, never the detail wording.
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["opaque runtime hook with a Herdr label".into()],
+        )
+        .with_binding(universal)];
 
         let output = render_observed(&observed, &layers, false);
         assert!(output.contains("source: Hyprland"));
@@ -1486,15 +1449,14 @@ mod tests {
     #[test]
     fn schema_v1_json_keeps_normal_and_verbose_evidence() {
         let key: KeyCombo = "ctrl+x".parse().unwrap();
-        let layers = [LayerResult {
-            verbose_details: vec!["verbose evidence".into()],
-            binding: None,
-            layer: "test",
-            id: LayerId::Diagnostic,
-            outcome: Outcome::Pass,
-            summary: "not handled".into(),
-            details: vec!["normal evidence".into()],
-        }];
+        let layers = [LayerResult::new(
+            "test",
+            LayerId::Diagnostic,
+            Outcome::Pass,
+            "not handled",
+            vec!["normal evidence".into()],
+        )
+        .with_verbose_details(vec!["verbose evidence".into()])];
         let value: serde_json::Value =
             serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
         assert_eq!(
@@ -1506,15 +1468,13 @@ mod tests {
     #[test]
     fn layer_summary_is_separated_from_its_details() {
         let key: KeyCombo = "ctrl+x".parse().unwrap();
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "active binding found; forwarding cannot be determined".into(),
-            details: vec!["active submap: default".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "active binding found; forwarding cannot be determined",
+            vec!["active submap: default".into()],
+        )];
         let output = render(&key, &layers, false);
         assert!(output.contains(
             "  ? active binding found; forwarding cannot be determined\n    active submap: default\n"
@@ -1534,20 +1494,19 @@ mod tests {
             alternate_key: Some("physical keycode 28 (RETURN)".into()),
             ..observed
         };
-        let layers = [LayerResult {
-            verbose_details: vec![
-                "main keyboard: at-translated-set-2-keyboard".into(),
-                "active XKB layout group index: 0".into(),
-                "2 matching binding(s) exist in inactive submap(s); current submap is default"
-                    .into(),
-            ],
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )
+        .with_verbose_details(vec![
+            "main keyboard: at-translated-set-2-keyboard".into(),
+            "active XKB layout group index: 0".into(),
+            "2 matching binding(s) exist in inactive submap(s); current submap is default".into(),
+        ])
+        .with_binding(opaque_herdr_evidence())];
         let normal = render_observed(&observed, &layers, false);
         assert!(
             normal.lines().count() < 24,
@@ -1591,15 +1550,15 @@ mod tests {
     fn text_and_json_share_the_conclusion() {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
         let observed = suppressed_observed();
-        let layers = [LayerResult {
-            verbose_details: vec!["main keyboard: test".into()],
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )
+        .with_verbose_details(vec!["main keyboard: test".into()])
+        .with_binding(opaque_herdr_evidence())];
         let text = render_observed(&observed, &layers, false);
         let assessment = text
             .lines()
@@ -1635,24 +1594,20 @@ mod tests {
     fn inactive_ime_stays_context_not_a_traversed_handler() {
         let observed = suppressed_observed();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active binding found".into(),
-                details: vec![],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Input method",
-                id: LayerId::Ime,
-                outcome: Outcome::UncertainContinues,
-                summary: "input method was detected but inactive or closed; application-side text transformation remains unobserved".into(),
-                details: vec!["runtime state: inactive".into()],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active binding found",
+                vec![],
+            ),
+            LayerResult::new(
+                "Input method",
+                LayerId::Ime,
+                Outcome::UncertainContinues,
+                "input method was detected but inactive or closed; application-side text transformation remains unobserved",
+                vec!["runtime state: inactive".into()],
+            ),
         ];
         let output = render_observed(&observed, &layers, false);
         assert!(!output.contains("Final handler: Input method"));
@@ -1698,24 +1653,22 @@ mod tests {
     #[test]
     fn detail_wording_never_changes_the_conclusion() {
         let observed = suppressed_observed();
-        let plain = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
-        let reworded = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            details: vec!["a runtime hook labeled Herdr (all submaps)".into()],
-        }];
+        let plain = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )
+        .with_binding(opaque_herdr_evidence())];
+        let reworded = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["a runtime hook labeled Herdr (all submaps)".into()],
+        )
+        .with_binding(opaque_herdr_evidence())];
         assert_eq!(
             conclusion_lines(&render_observed(&observed, &plain, false)),
             conclusion_lines(&render_observed(&observed, &reworded, false)),
@@ -1726,15 +1679,14 @@ mod tests {
     #[test]
     fn schema_v2_carries_binding_evidence_while_v1_omits_it() {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(opaque_herdr_evidence()),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )
+        .with_binding(opaque_herdr_evidence())];
         let v1: serde_json::Value =
             serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
         assert!(v1["layers"][0].get("binding").is_none());
@@ -1766,15 +1718,13 @@ mod tests {
             source: crate::listen::CaptureSource::Hyprland,
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Pass,
-            summary: "active binding found".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "active binding found",
+            vec!["binding: __lua 285; Herdr".into()],
+        )];
 
         let v1_json = render_listen_json(&key, &layers, Some(&observed), 1);
         let v1_val: serde_json::Value = serde_json::from_str(&v1_json).unwrap();
@@ -1795,24 +1745,20 @@ mod tests {
     fn renders_each_sequence_step_in_text() {
         let sequence: KeySequence = "ctrl+x ctrl+s".parse().unwrap();
         let reports = vec![
-            vec![LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active binding found".into(),
-                details: vec![],
-            }],
-            vec![LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Consumed,
-                summary: "binding found".into(),
-                details: vec![],
-            }],
+            vec![LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active binding found",
+                vec![],
+            )],
+            vec![LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Consumed,
+                "binding found",
+                vec![],
+            )],
         ];
 
         let output = render_sequence(&sequence, &reports, false);
@@ -1840,24 +1786,20 @@ mod tests {
     fn upstream_match_is_not_masked_by_trailing_unavailable_layer() {
         let key: KeyCombo = "ctrl+alt+delete".parse().unwrap();
         let layers = [
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::HandledUncertain,
-                summary: "active binding found; forwarding cannot be determined".into(),
-                details: vec!["binding: __lua 11; Close all windows".into()],
-            },
-            LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Shell input",
-                id: LayerId::Shell,
-                outcome: Outcome::Unavailable,
-                summary: "shell 'unknown shell' is not inspected".into(),
-                details: vec![],
-            },
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::HandledUncertain,
+                "active binding found; forwarding cannot be determined",
+                vec!["binding: __lua 11; Close all windows".into()],
+            ),
+            LayerResult::new(
+                "Shell input",
+                LayerId::Shell,
+                Outcome::Unavailable,
+                "shell 'unknown shell' is not inspected",
+                vec![],
+            ),
         ];
         let output = render(&key, &layers, false);
         assert!(output.contains(
@@ -1870,24 +1812,23 @@ mod tests {
     #[test]
     fn candidate_multiplexer_binding_reports_unverified_delivery() {
         let key: KeyCombo = "alt+return".parse().unwrap();
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(BindingEvidence {
-                dispatcher: None,
-                action: Some("split-window -v".into()),
-                description: None,
-                submap: None,
-                scope: BindingScope::Unknown,
-                source: None,
-                has_universal_match: false,
-                uncertainty: Some(UncertaintyReason::UnverifiedTerminalBytes),
-            }),
-            layer: "tmux",
-            id: LayerId::Multiplexer,
-            outcome: Outcome::HandledUncertain,
-            summary: "candidate binding matches in tmux root table; delivery is unverified".into(),
-            details: vec!["binding: bind-key -T root M-Enter split-window -v".into()],
-        }];
+        let layers = [LayerResult::new(
+            "tmux",
+            LayerId::Multiplexer,
+            Outcome::HandledUncertain,
+            "candidate binding matches in tmux root table; delivery is unverified",
+            vec!["binding: bind-key -T root M-Enter split-window -v".into()],
+        )
+        .with_binding(BindingEvidence {
+            dispatcher: None,
+            action: Some("split-window -v".into()),
+            description: None,
+            submap: None,
+            scope: BindingScope::Unknown,
+            source: None,
+            has_universal_match: false,
+            uncertainty: Some(UncertaintyReason::UnverifiedTerminalBytes),
+        })];
         let output = render(&key, &layers, false);
         assert!(output.contains(
             "tmux has a candidate binding for ALT + RETURN in the root table, but terminal byte delivery could not be verified."
@@ -1898,24 +1839,23 @@ mod tests {
     #[test]
     fn active_application_target_reports_application_uncertainty_without_shell() {
         let key: KeyCombo = "ctrl+w".parse().unwrap();
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(BindingEvidence {
-                dispatcher: None,
-                action: Some("<C-W>".into()),
-                description: None,
-                submap: None,
-                scope: BindingScope::Unknown,
-                source: None,
-                has_universal_match: false,
-                uncertainty: Some(UncertaintyReason::UnresolvedMode),
-            }),
-            layer: "Neovim",
-            id: LayerId::Application,
-            outcome: Outcome::HandledUncertain,
-            summary: "runtime mapping found; Neovim may consume the key".into(),
-            details: vec!["runtime mapping: mode n: <C-W>".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Neovim",
+            LayerId::Application,
+            Outcome::HandledUncertain,
+            "runtime mapping found; Neovim may consume the key",
+            vec!["runtime mapping: mode n: <C-W>".into()],
+        )
+        .with_binding(BindingEvidence {
+            dispatcher: None,
+            action: Some("<C-W>".into()),
+            description: None,
+            submap: None,
+            scope: BindingScope::Unknown,
+            source: None,
+            has_universal_match: false,
+            uncertainty: Some(UncertaintyReason::UnresolvedMode),
+        })];
         let output = render(&key, &layers, false);
         assert!(output.contains(
             "Selected target: Neovim has a matching keymap for CTRL + W, but mode-dependent execution is uncertain."
@@ -1926,24 +1866,20 @@ mod tests {
 
     #[test]
     fn evaluate_conclusion_precedence() {
-        let consumer = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Ghostty",
-            id: LayerId::Terminal,
-            outcome: Outcome::Consumed,
-            summary: "copy".into(),
-            details: vec![],
-        };
-        let app = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Neovim",
-            id: LayerId::Application,
-            outcome: Outcome::HandledUncertain,
-            summary: "mode".into(),
-            details: vec![],
-        };
+        let consumer = LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::Consumed,
+            "copy",
+            vec![],
+        );
+        let app = LayerResult::new(
+            "Neovim",
+            LayerId::Application,
+            Outcome::HandledUncertain,
+            "mode",
+            vec![],
+        );
 
         // Consumer before app -> ConfiguredConsumer takes precedence
         let eval = evaluate_conclusion(&[consumer.clone(), app.clone()], None, false);
@@ -1968,24 +1904,23 @@ mod tests {
 
     #[test]
     fn evaluate_conclusion_typed_modifier_ambiguity() {
-        let layer = LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(BindingEvidence {
-                dispatcher: None,
-                action: None,
-                description: None,
-                submap: None,
-                scope: BindingScope::Unknown,
-                source: None,
-                has_universal_match: false,
-                uncertainty: Some(UncertaintyReason::ModifierAmbiguity),
-            }),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::UncertainContinues,
-            summary: "arbitrary reworded summary text".into(),
-            details: vec![],
-        };
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::UncertainContinues,
+            "arbitrary reworded summary text",
+            vec![],
+        )
+        .with_binding(BindingEvidence {
+            dispatcher: None,
+            action: None,
+            description: None,
+            submap: None,
+            scope: BindingScope::Unknown,
+            source: None,
+            has_universal_match: false,
+            uncertainty: Some(UncertaintyReason::ModifierAmbiguity),
+        });
         let eval = evaluate_conclusion(&[layer], None, false);
         assert_eq!(
             eval.conclusion,
@@ -1996,24 +1931,23 @@ mod tests {
     #[test]
     fn evaluate_conclusion_summary_wording_independence() {
         // Changing summary text must not change the conclusion when typed uncertainty is present
-        let layer = LayerResult {
-            verbose_details: Vec::new(),
-            binding: Some(BindingEvidence {
-                dispatcher: None,
-                action: None,
-                description: None,
-                submap: None,
-                scope: BindingScope::Unknown,
-                source: None,
-                has_universal_match: false,
-                uncertainty: Some(UncertaintyReason::ModifierAmbiguity),
-            }),
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::UncertainContinues,
-            summary: "something completely custom and unrelated to bindings".into(),
-            details: vec![],
-        };
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::UncertainContinues,
+            "something completely custom and unrelated to bindings",
+            vec![],
+        )
+        .with_binding(BindingEvidence {
+            dispatcher: None,
+            action: None,
+            description: None,
+            submap: None,
+            scope: BindingScope::Unknown,
+            source: None,
+            has_universal_match: false,
+            uncertainty: Some(UncertaintyReason::ModifierAmbiguity),
+        });
         let eval = evaluate_conclusion(&[layer], None, false);
         assert_eq!(
             eval.conclusion,
@@ -2024,15 +1958,13 @@ mod tests {
     #[test]
     fn evaluate_conclusion_display_label_independence() {
         // Generic unadapted target with custom display label
-        let custom_app = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Custom Process Display Name",
-            id: LayerId::Application,
-            outcome: Outcome::UnadaptedTarget,
-            summary: "custom process summary".into(),
-            details: vec![],
-        };
+        let custom_app = LayerResult::new(
+            "Custom Process Display Name",
+            LayerId::Application,
+            Outcome::UnadaptedTarget,
+            "custom process summary",
+            vec![],
+        );
         let eval = evaluate_conclusion(&[custom_app], None, false);
         assert_eq!(
             eval.conclusion,
@@ -2043,15 +1975,13 @@ mod tests {
         );
 
         // Profiled editor with custom display label (no matching keymap)
-        let profiled_app = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "My Customized Neovim",
-            id: LayerId::Application,
-            outcome: Outcome::Unknown,
-            summary: "no matching mapping".into(),
-            details: vec![],
-        };
+        let profiled_app = LayerResult::new(
+            "My Customized Neovim",
+            LayerId::Application,
+            Outcome::Unknown,
+            "no matching mapping",
+            vec![],
+        );
         let eval2 = evaluate_conclusion(&[profiled_app], None, false);
         assert_eq!(
             eval2.conclusion,

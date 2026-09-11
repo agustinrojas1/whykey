@@ -54,31 +54,27 @@ pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
 impl Kde {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "KDE Plasma",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "KDE global shortcut configuration is unavailable".into(),
-                details: vec![
+            return LayerResult::new(
+                "KDE Plasma",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "KDE global shortcut configuration is unavailable",
+                vec![
                     "kglobalshortcutsrc was not found; runtime-only shortcuts remain unknown"
                         .into(),
                 ],
-            };
+            );
         };
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "KDE Plasma",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not read KDE global shortcut configuration".into(),
-                    details: vec![format!("config: {}: {error}", path.display())],
-                };
+                return LayerResult::new(
+                    "KDE Plasma",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not read KDE global shortcut configuration",
+                    vec![format!("config: {}: {error}", path.display())],
+                );
             }
         };
         let matches = parse_bindings(&content)
@@ -90,15 +86,13 @@ impl Kde {
             details.push(
                 "no matching static shortcut found; runtime D-Bus registrations may differ".into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "KDE Plasma",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "KDE global shortcut state is conditional".into(),
+            return LayerResult::new(
+                "KDE Plasma",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "KDE global shortcut state is conditional",
                 details,
-            };
+            );
         }
         for binding in &matches {
             let action = binding.description.as_deref().map_or_else(
@@ -107,16 +101,13 @@ impl Kde {
             );
             details.push(format!("{}: {action}", binding.group));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "KDE Plasma",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching KDE global shortcut configured; runtime activation is conditional"
-                .into(),
+        LayerResult::new(
+            "KDE Plasma",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching KDE global shortcut configured; runtime activation is conditional",
             details,
-        }
+        )
     }
 }
 

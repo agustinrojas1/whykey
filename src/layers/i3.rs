@@ -105,15 +105,13 @@ impl I3 {
         let bindings = match run_i3msg() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "i3",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect effective i3 bindings".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "i3",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect effective i3 bindings",
+                    vec![error],
+                );
             }
         };
 
@@ -136,15 +134,13 @@ impl I3 {
         }
 
         if exact_matches.is_empty() && possible_matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "i3",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active binding found".into(),
-                details: vec!["source: i3-msg -t get_bindings".into()],
-            };
+            return LayerResult::new(
+                "i3",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active binding found",
+                vec!["source: i3-msg -t get_bindings".into()],
+            );
         }
 
         let mut details = vec!["source: i3-msg -t get_bindings".into()];
@@ -176,19 +172,17 @@ impl I3 {
                 Some(Propagation::Indeterminate) | None => Outcome::HandledUncertain,
             }
         };
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "i3",
-            id: LayerId::Compositor,
+        LayerResult::new(
+            "i3",
+            LayerId::Compositor,
             outcome,
-            summary: if exact_matches.is_empty() {
-                "possible binding found; modifier matching is conditional".into()
+            if exact_matches.is_empty() {
+                "possible binding found; modifier matching is conditional".to_owned()
             } else {
-                "active binding found".into()
+                "active binding found".to_owned()
             },
             details,
-        }
+        )
     }
 }
 

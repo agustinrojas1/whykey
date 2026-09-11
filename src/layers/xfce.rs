@@ -45,15 +45,13 @@ impl Xfce {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Xfce",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect Xfce keyboard shortcuts".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "Xfce",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect Xfce keyboard shortcuts",
+                    vec![error],
+                );
             }
         };
 
@@ -62,30 +60,26 @@ impl Xfce {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Xfce",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active Xfce keyboard shortcut found".into(),
-                details: vec![format!("source: xfconf-query -c {CHANNEL} -l -v")],
-            };
+            return LayerResult::new(
+                "Xfce",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active Xfce keyboard shortcut found",
+                vec![format!("source: xfconf-query -c {CHANNEL} -l -v")],
+            );
         }
 
         let mut details = vec![format!("source: xfconf-query -c {CHANNEL} -l -v")];
         for binding in matches {
             details.push(format!("binding: {} ({})", binding.action, binding.context));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Xfce",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "Xfce global shortcut consumes the key".into(),
+        LayerResult::new(
+            "Xfce",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "Xfce global shortcut consumes the key",
             details,
-        }
+        )
     }
 }
 

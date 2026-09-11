@@ -45,15 +45,13 @@ impl Labwc {
         let (path, bindings) = match load_bindings() {
             Ok(value) => value,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "labwc",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect labwc keybinds".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "labwc",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect labwc keybinds",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -66,28 +64,24 @@ impl Labwc {
                 "no matching static labwc keybind found; runtime reload state remains unknown"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "labwc",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "labwc shortcut state is conditional".into(),
+            return LayerResult::new(
+                "labwc",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "labwc shortcut state is conditional",
                 details,
-            };
+            );
         }
         for binding in matches {
             details.push(format!("binding: {}", binding.action));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "labwc",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching labwc keybind configured; runtime activation is conditional".into(),
+        LayerResult::new(
+            "labwc",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching labwc keybind configured; runtime activation is conditional",
             details,
-        }
+        )
     }
 }
 

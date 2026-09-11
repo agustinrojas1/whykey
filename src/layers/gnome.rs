@@ -92,15 +92,13 @@ impl Gnome {
                 }
             ));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "GNOME",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "GNOME global shortcut consumes the key".into(),
+        LayerResult::new(
+            "GNOME",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "GNOME global shortcut consumes the key",
             details,
-        }
+        )
     }
 }
 

@@ -184,15 +184,13 @@ mod tests {
     #[test]
     fn creates_a_versioned_snapshot_without_observation_injection() {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
-        let layers = [LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Hyprland",
-            id: crate::layers::LayerId::Compositor,
-            outcome: crate::layers::Outcome::HandledUncertain,
-            summary: "runtime effect unknown".into(),
-            details: vec!["binding: __lua 285; Herdr".into()],
-        }];
+        let layers = [LayerResult::new(
+            "Hyprland",
+            crate::layers::LayerId::Compositor,
+            crate::layers::Outcome::HandledUncertain,
+            "runtime effect unknown",
+            vec!["binding: __lua 285; Herdr".into()],
+        )];
 
         let snapshot = create(&key, &layers);
 

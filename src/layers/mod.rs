@@ -129,24 +129,14 @@ mod tests {
 
     #[test]
     fn ime_result_is_placed_before_the_tty_stage() {
-        let tty = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "TTY driver",
-            id: LayerId::Tty,
-            outcome: Outcome::Pass,
-            summary: "tty".into(),
-            details: Vec::new(),
-        };
-        let ime = LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "IME",
-            id: LayerId::Ime,
-            outcome: Outcome::HandledAndPassed,
-            summary: "ime".into(),
-            details: Vec::new(),
-        };
+        let tty = LayerResult::new("TTY driver", LayerId::Tty, Outcome::Pass, "tty", Vec::new());
+        let ime = LayerResult::new(
+            "IME",
+            LayerId::Ime,
+            Outcome::HandledAndPassed,
+            "ime",
+            Vec::new(),
+        );
         let mut results = vec![tty];
         let insert_at = results
             .iter()

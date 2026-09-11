@@ -39,31 +39,27 @@ pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
 impl X11 {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "X11 xbindkeys",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "xbindkeys configuration is unavailable".into(),
-                details: vec![
+            return LayerResult::new(
+                "X11 xbindkeys",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "xbindkeys configuration is unavailable",
+                vec![
                     "set XBINDKEYSRC or provide ~/.xbindkeysrc for static X11 shortcut evidence"
                         .into(),
                 ],
-            };
+            );
         };
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "X11 xbindkeys",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not read xbindkeys configuration".into(),
-                    details: vec![format!("config: {}: {error}", path.display())],
-                };
+                return LayerResult::new(
+                    "X11 xbindkeys",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not read xbindkeys configuration",
+                    vec![format!("config: {}: {error}", path.display())],
+                );
             }
         };
         let matches = parse_bindings(&content)
@@ -76,28 +72,24 @@ impl X11 {
                 "no matching literal xbindkeys binding found; other X11 clients remain unknown"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "X11 xbindkeys",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "X11 shortcut state is conditional".into(),
+            return LayerResult::new(
+                "X11 xbindkeys",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "X11 shortcut state is conditional",
                 details,
-            };
+            );
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.command));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-binding: None,
-            layer: "X11 xbindkeys",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching xbindkeys shortcut configured; daemon activation and X11 precedence are conditional".into(),
+        LayerResult::new(
+            "X11 xbindkeys",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching xbindkeys shortcut configured; daemon activation and X11 precedence are conditional",
             details,
-        }
+        )
     }
 }
 

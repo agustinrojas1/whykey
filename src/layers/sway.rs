@@ -107,15 +107,13 @@ impl Sway {
         let bindings = match run_swaymsg() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Sway",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect effective Sway bindings".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "Sway",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect effective Sway bindings",
+                    vec![error],
+                );
             }
         };
 
@@ -144,15 +142,13 @@ impl Sway {
         }
 
         if exact_matches.is_empty() && possible_matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Sway",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active binding found".into(),
-                details: vec!["swaymsg -t get_bindings -r".into()],
-            };
+            return LayerResult::new(
+                "Sway",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active binding found",
+                vec!["swaymsg -t get_bindings -r".into()],
+            );
         }
 
         let mut details = vec!["source: swaymsg -t get_bindings -r".into()];
@@ -186,19 +182,17 @@ impl Sway {
                 Some(Propagation::Indeterminate) | None => Outcome::HandledUncertain,
             }
         };
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Sway",
-            id: LayerId::Compositor,
+        LayerResult::new(
+            "Sway",
+            LayerId::Compositor,
             outcome,
-            summary: if exact_matches.is_empty() {
-                "possible binding found; modifier matching is conditional".into()
+            if exact_matches.is_empty() {
+                "possible binding found; modifier matching is conditional".to_owned()
             } else {
-                "active binding found".into()
+                "active binding found".to_owned()
             },
             details,
-        }
+        )
     }
 }
 

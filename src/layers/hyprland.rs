@@ -99,18 +99,16 @@ impl Hyprland {
         physical_input: Option<&PhysicalInput>,
     ) -> LayerResult {
         if remote_session_without_compositor() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "not applicable in this remote session".into(),
-                details: vec![
+            return LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "not applicable in this remote session",
+                vec![
                     "SSH session detected without a local Hyprland IPC signature".into(),
                     "the remote terminal/session layers are inspected instead".into(),
                 ],
-            };
+            );
         }
         match inspect_system(key, physical_input) {
             Ok(result) => result,
@@ -133,15 +131,13 @@ fn ipc_uncertain_result(message: String) -> LayerResult {
     details.push(
         "the active submap, runtime overrides, and input-inhibitor state remain unknown".into(),
     );
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Hyprland",
-        id: LayerId::Compositor,
-        outcome: Outcome::UncertainContinues,
-        summary: "Hyprland IPC is unavailable; effective binding state is unknown".into(),
+    LayerResult::new(
+        "Hyprland",
+        LayerId::Compositor,
+        Outcome::UncertainContinues,
+        "Hyprland IPC is unavailable; effective binding state is unknown",
         details,
-    }
+    )
 }
 
 pub(crate) fn remote_session_without_compositor() -> bool {
@@ -1366,14 +1362,12 @@ fn inspect_json_with_keycode(
 
     if matches.is_empty() {
         if skipped_bindings > 0 {
-            return Ok(LayerResult {
-                verbose_details: inactive_submap_details(&inactive_bindings),
-                binding: None,
-                layer: "Hyprland",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "effective bindings are incomplete; no definitive match".into(),
-                details: details_with_physical_input(
+            return Ok(LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "effective bindings are incomplete; no definitive match",
+                details_with_physical_input(
                     vec![
                         format!("active submap: {active_submap}"),
                         format!(
@@ -1383,20 +1377,20 @@ fn inspect_json_with_keycode(
                     ],
                     physical_input,
                 ),
-            });
+            )
+            .with_verbose_details(inactive_submap_details(&inactive_bindings)));
         }
-        return Ok(LayerResult {
-            verbose_details: inactive_submap_details(&inactive_bindings),
-            binding: None,
-            layer: "Hyprland",
-            id: LayerId::Compositor,
-            outcome: Outcome::Pass,
-            summary: "no active binding found".into(),
-            details: details_with_physical_input(
+        return Ok(LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "no active binding found",
+            details_with_physical_input(
                 vec![format!("active submap: {active_submap}")],
                 physical_input,
             ),
-        });
+        )
+        .with_verbose_details(inactive_submap_details(&inactive_bindings)));
     }
 
     let mut details = details_with_physical_input(
@@ -1578,14 +1572,12 @@ fn inspect_json_with_keycode(
         evidence
     });
 
-    Ok(LayerResult {
-        verbose_details,
-        layer: "Hyprland",
-        id: LayerId::Compositor,
-        outcome,
-        summary: summary.into(),
-        details,
-        binding,
+    Ok({
+        let mut result =
+            LayerResult::new("Hyprland", LayerId::Compositor, outcome, summary, details)
+                .with_verbose_details(verbose_details);
+        result.binding = binding;
+        result
     })
 }
 

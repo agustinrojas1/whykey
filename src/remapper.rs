@@ -72,15 +72,13 @@ pub fn inspect_with_detections(
     detections: &[Detection],
 ) -> LayerResult {
     if detections.is_empty() {
-        return LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Input remapper",
-            id: LayerId::Remapper,
-            outcome: Outcome::Pass,
-            summary: "no supported pre-compositor remapper detected".into(),
-            details: Vec::new(),
-        };
+        return LayerResult::new(
+            "Input remapper",
+            LayerId::Remapper,
+            Outcome::Pass,
+            "no supported pre-compositor remapper detected",
+            Vec::new(),
+        );
     }
     let mut details = Vec::new();
     for detection in detections {
@@ -115,15 +113,13 @@ pub fn inspect_with_detections(
         "virtual-device routing, timing-dependent transforms, and firmware changes remain unknown"
             .into(),
     );
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Input remapper",
-        id: LayerId::Remapper,
-        outcome: Outcome::UncertainContinues,
-        summary: "a pre-compositor remapper may transform this input".into(),
+    LayerResult::new(
+        "Input remapper",
+        LayerId::Remapper,
+        Outcome::UncertainContinues,
+        "a pre-compositor remapper may transform this input",
         details,
-    }
+    )
 }
 
 fn known_remappers() -> [(

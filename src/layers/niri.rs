@@ -48,15 +48,13 @@ impl Niri {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Niri",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect Niri key bindings".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "Niri",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect Niri key bindings",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -64,15 +62,13 @@ impl Niri {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Niri",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no matching Niri binding found in config.kdl".into(),
-                details: vec![format!("source: {}", config_description())],
-            };
+            return LayerResult::new(
+                "Niri",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no matching Niri binding found in config.kdl",
+                vec![format!("source: {}", config_description())],
+            );
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -81,15 +77,13 @@ impl Niri {
         details.push(
             "Niri runtime reload state, inhibitor state, and active mode remain conditional".into(),
         );
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Niri",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "Niri config contains a matching binding".into(),
+        LayerResult::new(
+            "Niri",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "Niri config contains a matching binding",
             details,
-        }
+        )
     }
 }
 

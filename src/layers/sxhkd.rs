@@ -44,28 +44,24 @@ pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
 impl Sxhkd {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "sxhkd",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "sxhkd configuration is unavailable".into(),
-                details: vec!["set SXHKD_CONFIG or provide ~/.config/sxhkd/sxhkdrc".into()],
-            };
+            return LayerResult::new(
+                "sxhkd",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "sxhkd configuration is unavailable",
+                vec!["set SXHKD_CONFIG or provide ~/.config/sxhkd/sxhkdrc".into()],
+            );
         };
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "sxhkd",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not read sxhkd configuration".into(),
-                    details: vec![format!("config: {}: {error}", path.display())],
-                };
+                return LayerResult::new(
+                    "sxhkd",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not read sxhkd configuration",
+                    vec![format!("config: {}: {error}", path.display())],
+                );
             }
         };
         let matches = parse_bindings(&content)
@@ -78,28 +74,24 @@ impl Sxhkd {
                 "no matching static sxhkd binding found; runtime reload state remains unknown"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "sxhkd",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "sxhkd shortcut state is conditional".into(),
+            return LayerResult::new(
+                "sxhkd",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "sxhkd shortcut state is conditional",
                 details,
-            };
+            );
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.command));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "sxhkd",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching sxhkd shortcut configured; runtime activation is conditional".into(),
+        LayerResult::new(
+            "sxhkd",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching sxhkd shortcut configured; runtime activation is conditional",
             details,
-        }
+        )
     }
 }
 

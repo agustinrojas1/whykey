@@ -251,6 +251,52 @@ pub struct SourceLocation {
     pub line: Option<u32>,
 }
 
+/// One binding returned by a supported desktop source: the single inventory
+/// representation every adapter produces. `context`, `device`, and `submap`
+/// are typed payload metadata, never inferred; `None` means the adapter did
+/// not report one, which never matches an active `--device`/`--submap` filter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BindingRecord {
+    pub source: String,
+    pub key: String,
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submap: Option<String>,
+    pub certainty: String,
+}
+
+impl BindingRecord {
+    /// Ordinary constructor with sensible defaults: no context, device, or
+    /// submap metadata. Use [`Self::with_context`] for the common context
+    /// case; the Hyprland adapter fills device/submap directly.
+    pub fn new(
+        source: impl Into<String>,
+        key: String,
+        action: String,
+        certainty: impl Into<String>,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            key,
+            action,
+            context: None,
+            device: None,
+            submap: None,
+            certainty: certainty.into(),
+        }
+    }
+
+    /// Attach the configuration context the binding was read from.
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerResult {
     pub layer: &'static str,
@@ -284,7 +330,39 @@ pub struct PhysicalInput {
 }
 
 impl LayerResult {
-    /// Constructs a Pass result (no matching binding found, continues).
+    /// Ordinary constructor with sensible defaults: no verbose-only details,
+    /// no binding evidence. Use [`Self::with_binding`] and
+    /// [`Self::with_verbose_details`] for the non-default cases.
+    pub fn new(
+        layer: &'static str,
+        id: LayerId,
+        outcome: Outcome,
+        summary: impl Into<String>,
+        details: Vec<String>,
+    ) -> Self {
+        Self {
+            layer,
+            id,
+            outcome,
+            summary: summary.into(),
+            details,
+            verbose_details: Vec::new(),
+            binding: None,
+        }
+    }
+
+    /// Attach typed binding evidence to the result.
+    pub fn with_binding(mut self, binding: BindingEvidence) -> Self {
+        self.binding = Some(binding);
+        self
+    }
+
+    /// Attach verbose-only evidence lines (shown with `--verbose` in text).
+    pub fn with_verbose_details(mut self, verbose_details: Vec<String>) -> Self {
+        self.verbose_details = verbose_details;
+        self
+    }
+
     pub fn pass(
         layer: &'static str,
         id: LayerId,

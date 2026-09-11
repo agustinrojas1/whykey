@@ -45,28 +45,24 @@ pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
 impl Openbox {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(path) = config_path() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Openbox",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "Openbox configuration is unavailable".into(),
-                details: vec!["set OPENBOX_CONFIG or provide ~/.config/openbox/rc.xml".into()],
-            };
+            return LayerResult::new(
+                "Openbox",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "Openbox configuration is unavailable",
+                vec!["set OPENBOX_CONFIG or provide ~/.config/openbox/rc.xml".into()],
+            );
         };
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "Openbox",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not read Openbox configuration".into(),
-                    details: vec![format!("config: {}: {error}", path.display())],
-                };
+                return LayerResult::new(
+                    "Openbox",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not read Openbox configuration",
+                    vec![format!("config: {}: {error}", path.display())],
+                );
             }
         };
         let matches = parse_bindings(&content)
@@ -79,29 +75,24 @@ impl Openbox {
                 "no matching static Openbox keybind found; runtime reload state remains unknown"
                     .into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Openbox",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: "Openbox shortcut state is conditional".into(),
+            return LayerResult::new(
+                "Openbox",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "Openbox shortcut state is conditional",
                 details,
-            };
+            );
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.action));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Openbox",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "matching Openbox keybind configured; runtime activation is conditional"
-                .into(),
+        LayerResult::new(
+            "Openbox",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching Openbox keybind configured; runtime activation is conditional",
             details,
-        }
+        )
     }
 }
 

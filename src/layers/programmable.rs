@@ -82,42 +82,36 @@ pub struct Programmable;
 impl Programmable {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
         let Some(desktop) = detect() else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Programmable X11 WM",
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: "AwesomeWM, Qtile, and XMonad were not detected".into(),
-                details: vec!["set XDG_CURRENT_DESKTOP or an explicit config variable".into()],
-            };
+            return LayerResult::new(
+                "Programmable X11 WM",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "AwesomeWM, Qtile, and XMonad were not detected",
+                vec!["set XDG_CURRENT_DESKTOP or an explicit config variable".into()],
+            );
         };
         let Some(path) = config_path(desktop) else {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: desktop.name(),
-                id: LayerId::Compositor,
-                outcome: Outcome::Unavailable,
-                summary: format!("{} configuration is unavailable", desktop.name()),
-                details: vec![format!(
+            return LayerResult::new(
+                desktop.name(),
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                format!("{} configuration is unavailable", desktop.name()),
+                vec![format!(
                     "set {} or provide the standard config path",
                     desktop.env_names()[0]
                 )],
-            };
+            );
         };
         let content = match read_config(&path) {
             Ok(content) => content,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: desktop.name(),
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: format!("could not read {} configuration", desktop.name()),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    desktop.name(),
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    format!("could not read {} configuration", desktop.name()),
+                    vec![error],
+                );
             }
         };
         let matches = parse(desktop, &content)
@@ -129,31 +123,27 @@ impl Programmable {
             details.push(
                 "no matching literal binding found; executable helpers, modes, and runtime reload state remain unknown".into(),
             );
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: desktop.name(),
-                id: LayerId::Compositor,
-                outcome: Outcome::Unknown,
-                summary: format!("{} shortcut state is conditional", desktop.name()),
+            return LayerResult::new(
+                desktop.name(),
+                LayerId::Compositor,
+                Outcome::Unknown,
+                format!("{} shortcut state is conditional", desktop.name()),
                 details,
-            };
+            );
         }
         for binding in &matches {
             details.push(format!("{}: {}", binding.context, binding.action));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: desktop.name(),
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: format!(
+        LayerResult::new(
+            desktop.name(),
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            format!(
                 "matching {} binding configured; executable runtime and precedence are conditional",
                 desktop.name()
             ),
             details,
-        }
+        )
     }
 }
 

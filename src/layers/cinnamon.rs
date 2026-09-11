@@ -83,15 +83,13 @@ impl Cinnamon {
                     .unwrap_or_default()
             ));
         }
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "Cinnamon",
-            id: LayerId::Compositor,
-            outcome: Outcome::Consumed,
-            summary: "Cinnamon global shortcut consumes the key".into(),
+        LayerResult::new(
+            "Cinnamon",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "Cinnamon global shortcut consumes the key",
             details,
-        }
+        )
     }
 }
 

@@ -130,25 +130,21 @@ pub fn inspect_with_env(
             } else {
                 Propagation::Indeterminate
             };
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "Session context",
-                id: LayerId::Session,
-                outcome: Outcome::from_parts(&status, &propagation),
-                summary: "nested multiplexer layers detected; handling order is conditional".into(),
+            return LayerResult::new(
+                "Session context",
+                LayerId::Session,
+                Outcome::from_parts(&status, &propagation),
+                "nested multiplexer layers detected; handling order is conditional",
                 details,
-            };
+            );
         }
     }
 
-    LayerResult {
-        verbose_details: Vec::new(),
-        binding: None,
-        layer: "Session context",
-        id: LayerId::Session,
-        outcome: Outcome::Pass,
-        summary: "no tmux, GNU Screen, or Zellij session detected".into(),
+    LayerResult::new(
+        "Session context",
+        LayerId::Session,
+        Outcome::Pass,
+        "no tmux, GNU Screen, or Zellij session detected",
         details,
-    }
+    )
 }

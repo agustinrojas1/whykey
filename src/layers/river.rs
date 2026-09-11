@@ -45,15 +45,13 @@ impl River {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "River",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect River init bindings".into(),
-                    details: vec![error],
-                };
+                return LayerResult::new(
+                    "River",
+                    LayerId::Compositor,
+                    Outcome::Unavailable,
+                    "could not inspect River init bindings",
+                    vec![error],
+                );
             }
         };
         let matches = bindings
@@ -61,15 +59,13 @@ impl River {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "River",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no matching River map command found".into(),
-                details: vec![format!("source: {}", config_description())],
-            };
+            return LayerResult::new(
+                "River",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no matching River map command found",
+                vec![format!("source: {}", config_description())],
+            );
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -81,15 +77,13 @@ impl River {
         details.push(
             "River init reload state, mode, and runtime map precedence remain conditional".into(),
         );
-        LayerResult {
-            verbose_details: Vec::new(),
-            binding: None,
-            layer: "River",
-            id: LayerId::Compositor,
-            outcome: Outcome::HandledUncertain,
-            summary: "River init contains a matching map command".into(),
+        LayerResult::new(
+            "River",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "River init contains a matching map command",
             details,
-        }
+        )
     }
 }
 
