@@ -36,7 +36,8 @@ pub fn current() -> Vec<Capability> {
         "fish" => env::var_os("WHYKEY_FISH_BINDINGS").is_some(),
         _ => false,
     };
-    let native_compositor = native_capture_available();
+    let native_compositor = native_capture_available_for_doctor();
+    let native_backend = crate::capture::NativeBackendId::Hyprland.display();
     // Focus availability comes from the registry: adapters that expose a
     // focused-window PID operation, evaluated on the same Environment
     // snapshot as every other capability entry.
@@ -133,9 +134,13 @@ pub fn current() -> Vec<Capability> {
             "capture",
             native_compositor,
             if native_compositor {
-                "Native compositor capture (Hyprland): Hyprland socket2 IPC is available"
+                format!(
+                    "Native compositor capture ({native_backend}): compositor IPC connection accepted"
+                )
             } else {
-                "Native compositor capture (Hyprland): Hyprland socket2 IPC is unavailable"
+                format!(
+                    "Native compositor capture ({native_backend}): compositor IPC connection unavailable"
+                )
             },
         ),
         implemented(
@@ -268,10 +273,6 @@ pub fn native_capture_available_for_doctor() -> bool {
 #[cfg(not(target_os = "linux"))]
 pub fn native_capture_available_for_doctor() -> bool {
     false
-}
-
-fn native_capture_available() -> bool {
-    native_capture_available_for_doctor()
 }
 
 /// Human-readable inventory. By default only applicable and available

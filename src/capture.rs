@@ -55,6 +55,11 @@ pub trait CaptureBackend {
     ) -> Result<ChordReleaseStatus, String>;
     fn is_suppressing(&self) -> bool;
     fn close(&mut self) -> io::Result<()>;
+
+    /// Optional backend-specific warning shown before arming.
+    fn pre_arm_warning(&self, _policy: CapturePolicy) -> Option<String> {
+        None
+    }
 }
 
 /// Transport operations kept separate from the backend's capture contract.

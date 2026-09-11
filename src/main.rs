@@ -1033,6 +1033,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     let shell_snapshot = shell_snapshot_available(&shell);
     let evdev = listen::evdev_available();
     let native_compositor = whykey::capabilities::native_capture_available_for_doctor();
+    let native_backend = whykey::capture::NativeBackendId::Hyprland.display();
     let evdev_devices = listen::evdev_devices();
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
@@ -1110,7 +1111,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             "evdev": {"available": evdev, "devices": evdev_devices},
             "native-compositor": {
                 "available": native_compositor,
-                "backend": "Hyprland"
+                "backend": native_compositor.then_some(native_backend)
             },
             "remappers": remappers,
             "ime": ime,
@@ -1150,7 +1151,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         println!("whykey doctor\n");
         print_check("controlling TTY", tty, "run inside a terminal");
         print_check(
-            "Native capture (Hyprland)",
+            &format!("Native capture ({native_backend})"),
             native_compositor,
             "set HYPRLAND_INSTANCE_SIGNATURE and ensure socket2 IPC is reachable",
         );

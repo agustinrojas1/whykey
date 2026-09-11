@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::capture::{NativeBackendId, NativeCaptureIo};
+use crate::capture::NativeCaptureIo;
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome};
 use crate::report;
@@ -277,16 +277,11 @@ impl Serialize for CaptureSource {
         match self {
             Self::Terminal => serializer.serialize_str("Terminal"),
             Self::Hyprland => serializer.serialize_str("Hyprland"),
-            Self::CompositorNative { backend } if backend == "Hyprland" => {
-                serializer.serialize_str("Hyprland")
-            }
             Self::CompositorNative { backend } => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry(
-                    "CompositorNative",
-                    &serde_json::json!({ "backend": backend }),
-                )?;
+                map.serialize_entry("kind", "compositor-native")?;
+                map.serialize_entry("backend", backend)?;
                 map.end()
             }
             Self::Evdev { device, path } => {
@@ -311,7 +306,9 @@ impl<'de> Deserialize<'de> for CaptureSource {
         match value {
             serde_json::Value::String(source) => match source.as_str() {
                 "Terminal" => Ok(Self::Terminal),
-                "Hyprland" => Ok(Self::Hyprland),
+                "Hyprland" => Ok(Self::CompositorNative {
+                    backend: "Hyprland".into(),
+                }),
                 other => Err(serde::de::Error::custom(format!(
                     "unknown capture source {other}"
                 ))),
@@ -468,11 +465,8 @@ fn run_native<B: NativeCaptureIo>(
     let mut export = open_export(options.output.as_deref())?;
     let snapshot = ListenSession::capture();
 
-    if capture_session.id() == NativeBackendId::Hyprland
-        && options.capture_policy == HyprlandCapturePolicy::Suppress
-        && crate::hyprland_capture::has_universal_bindings()
-    {
-        eprintln!("warning: universal Hyprland bindings remain active during capture");
+    if let Some(warning) = capture_session.pre_arm_warning(options.capture_policy) {
+        eprintln!("{warning}");
     }
 
     let mut capture_stdout = io::BufWriter::new(io::stdout());
@@ -3300,10 +3294,15 @@ xkb_symbols "pc" {
         assert_eq!(native.backend_name(), Some("Hyprland"));
         assert!(native.proves_compositor_receipt());
         let encoded = serde_json::to_value(&native).unwrap();
-        assert_eq!(encoded, serde_json::json!("Hyprland"));
+        assert_eq!(
+            encoded,
+            serde_json::json!({"kind": "compositor-native", "backend": "Hyprland"})
+        );
         assert_eq!(
             serde_json::from_value::<CaptureSource>(encoded).unwrap(),
-            CaptureSource::Hyprland
+            CaptureSource::CompositorNative {
+                backend: "Hyprland".into()
+            }
         );
     }
 
@@ -3320,6 +3319,38 @@ xkb_symbols "pc" {
                 backend: "Sway".into()
             }
         );
+    }
+
+    #[test]
+    fn non_hyprland_native_round_trips_through_canonical_shape() {
+        let source = CaptureSource::CompositorNative {
+            backend: "Sway".into(),
+        };
+        let encoded = serde_json::to_value(&source).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({"kind": "compositor-native", "backend": "Sway"})
+        );
+        assert_eq!(
+            serde_json::from_value::<CaptureSource>(encoded).unwrap(),
+            source
+        );
+    }
+
+    #[test]
+    fn capture_fixtures_use_accepted_source_shapes() {
+        for fixture in [
+            include_str!("../tests/fixtures/differential/capture-terminal-stub.json"),
+            include_str!("../tests/fixtures/differential/capture-hyprland-stub.json"),
+        ] {
+            let document: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            let source: CaptureSource =
+                serde_json::from_value(document["observation"]["source"].clone()).unwrap();
+            assert!(matches!(
+                source,
+                CaptureSource::Terminal | CaptureSource::CompositorNative { .. }
+            ));
+        }
     }
 
     #[test]

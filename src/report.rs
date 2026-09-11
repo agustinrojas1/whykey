@@ -41,6 +41,8 @@ struct NdjsonReport<'a> {
     context: serde_json::Value,
     input: NdjsonInput<'a>,
     assessment: NdjsonAssessment,
+    // The value indirection exists only to add source_label alongside the
+    // canonical source object without changing ObservedKey's public fields.
     observation: Option<serde_json::Value>,
     path: Vec<NdjsonPathEntry<'a>>,
 }
@@ -105,12 +107,11 @@ fn render_json_for_operation(
     if schema_version == 2 {
         return render_json_v2(key, layers, observed, operation);
     }
-    let observed_v1 = observed.and_then(|obs| {
-        let mut val = serde_json::to_value(obs).ok()?;
+    let observed_v1 = observed.and_then(observation_value_v1).map(|mut val| {
         if let serde_json::Value::Object(map) = &mut val {
             map.remove("disposition");
         }
-        Some(val)
+        val
     });
     serde_json::to_string_pretty(&JsonReport {
         schema_version: 1,
@@ -206,16 +207,26 @@ fn render_json_v2(
         + "\n"
 }
 
-/// Schema v2 names native capture backends explicitly while keeping the v1
-/// `"Hyprland"` source string intact. Readers accept both forms.
-fn observation_value_v2(observed: &ObservedKey) -> Option<serde_json::Value> {
+/// Schema v1 keeps the historical Hyprland source string. This shaping is
+/// explicit because the in-memory native source has one canonical v2 form.
+fn observation_value_v1(observed: &ObservedKey) -> Option<serde_json::Value> {
     let mut value = serde_json::to_value(observed).ok()?;
     if let crate::listen::CaptureSource::CompositorNative { backend } = &observed.source {
+        if backend == "Hyprland" {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("source".into(), serde_json::json!("Hyprland"));
+            }
+        }
+    }
+    Some(value)
+}
+
+/// Schema v2 carries the canonical native source object and adds the stable
+/// human-readable label used by renderers and consumers.
+fn observation_value_v2(observed: &ObservedKey) -> Option<serde_json::Value> {
+    let mut value = serde_json::to_value(observed).ok()?;
+    if let crate::listen::CaptureSource::CompositorNative { .. } = &observed.source {
         if let Some(object) = value.as_object_mut() {
-            object.insert(
-                "source".into(),
-                serde_json::json!({ "kind": "compositor-native", "backend": backend }),
-            );
             object.insert(
                 "source_label".into(),
                 serde_json::json!(observed.source.label()),
@@ -534,7 +545,6 @@ pub enum SuppressedHandledOutcome {
 pub enum CapturePreamble {
     Suppressed { universal_match: bool },
     TerminalObserved,
-    HyprlandObserved,
     CompositorObserved { backend: String },
     EvdevObserved,
 }
@@ -609,8 +619,6 @@ pub fn evaluate_conclusion(
             crate::listen::CaptureDisposition::ObservedOnly => {
                 preamble = if observation.source.confirms_terminal() {
                     Some(CapturePreamble::TerminalObserved)
-                } else if matches!(observation.source, crate::listen::CaptureSource::Hyprland) {
-                    Some(CapturePreamble::HyprlandObserved)
                 } else if observation.source.proves_compositor_receipt() {
                     Some(CapturePreamble::CompositorObserved {
                         backend: observation
@@ -767,11 +775,6 @@ fn render_conclusion(
                 universal_match: false,
             } => {
                 output.push_str("  Whykey captured and suppressed this event.\n");
-            }
-            CapturePreamble::HyprlandObserved => {
-                output.push_str(
-                    "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
-                );
             }
             CapturePreamble::CompositorObserved { backend } => {
                 output.push_str(&format!(
@@ -1785,6 +1788,9 @@ mod tests {
         assert_eq!(value["observation"]["source"]["kind"], "compositor-native");
         assert_eq!(value["observation"]["source"]["backend"], "Hyprland");
         assert_eq!(value["observation"]["source_label"], "Hyprland");
+        let legacy: serde_json::Value =
+            serde_json::from_str(&render_listen_json(&key, &[], Some(&observed), 1)).unwrap();
+        assert_eq!(legacy["observed"]["source"], "Hyprland");
     }
 
     #[test]

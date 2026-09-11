@@ -15,13 +15,37 @@ trait CaptureBackend {
     fn is_suppressing(&self) -> bool;
     fn close(&mut self) -> io::Result<()>;
 }
+
+trait NativeCaptureIo: CaptureBackend {
+    fn socket_fd(&self) -> RawFd;
+    fn read_incoming(&mut self) -> io::Result<usize>;
+    fn renew_lease(&self) -> io::Result<()>;
+}
 ```
 
 The listen loop owns terminal setup, polling, inspection, reporting, and
 export. A backend owns its transport and capture-specific lifecycle. Add a
 backend by implementing `CaptureBackend` and `NativeCaptureIo`, then adding one
-arm to `select_native_backend` in `listen.rs`. The registry entry should expose
+arm to `select_native_backend` in `listen.rs`. That selector is currently
+Hyprland-concrete; it must become enum or trait-object dispatch when a second
+transport is added. The registry entry should expose
 the same stable display name to capabilities and doctor.
+
+Source wire shapes have one canonical mapping:
+
+| Context | Native source shape |
+| --- | --- |
+| In memory | `CompositorNative { backend }` |
+| Schema v2 | `{"kind":"compositor-native","backend":"..."}` plus `source_label` |
+| Schema v1 | `"Hyprland"` for the current backend, read and normalized as native |
+
+The old externally tagged `{"CompositorNative":{"backend":"..."}}` object
+is accepted as a reader-only compatibility form. New writers do not emit it.
+
+`NativeCaptureIo` is the current Unix polling seam. Its file descriptor and
+lease-renewal methods reflect Hyprland today. A Sway, portal, or extension
+backend without a lease or Unix socket should move those operations into a
+separate transport abstraction before it is registered.
 
 Backends must preserve the D-016 lifecycle:
 

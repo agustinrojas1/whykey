@@ -704,9 +704,15 @@ impl HyprlandCaptureSession {
     /// Check whether a Hyprland capture socket is advertised without opening
     /// it or querying compositor state.
     pub fn probe_available() -> bool {
-        hyprland_instance_signature()
-            .and_then(|signature| socket2_path(&signature))
-            .is_some()
+        let Some(signature) = hyprland_instance_signature() else {
+            return false;
+        };
+        let Some(path) = socket2_path(&signature) else {
+            return false;
+        };
+        // This is a read-only connectivity probe. The stream is dropped
+        // immediately and no compositor state or hook is touched.
+        UnixStream::connect(path).is_ok()
     }
 
     pub fn connect() -> Result<Self, String> {
@@ -1269,6 +1275,14 @@ impl CaptureBackend for HyprlandCaptureSession {
 
     fn close(&mut self) -> io::Result<()> {
         Self::close(self)
+    }
+
+    fn pre_arm_warning(&self, policy: crate::capture::CapturePolicy) -> Option<String> {
+        if policy == HyprlandCapturePolicy::Suppress && has_universal_bindings() {
+            Some("warning: universal Hyprland bindings remain active during capture".into())
+        } else {
+            None
+        }
     }
 }
 
