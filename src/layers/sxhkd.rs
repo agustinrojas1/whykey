@@ -1,5 +1,4 @@
 use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::key::KeyCombo;
@@ -154,65 +153,14 @@ fn parse_bindings(content: &str) -> Vec<Binding> {
     bindings
 }
 
-const MAX_INCLUDE_DEPTH: usize = 16;
-const MAX_RESOLVED_BYTES: usize = 256 * 1024;
-
 fn resolved_config(root: &Path) -> Result<String, std::io::Error> {
-    let mut visited = std::collections::HashSet::new();
-    let mut output = String::new();
-    collect_config(root, &mut visited, &mut output, 0)?;
-    Ok(output)
-}
-
-fn collect_config(
-    path: &Path,
-    visited: &mut std::collections::HashSet<PathBuf>,
-    output: &mut String,
-    depth: usize,
-) -> Result<(), std::io::Error> {
-    if depth > MAX_INCLUDE_DEPTH {
-        return Ok(());
-    }
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-    if !visited.insert(canonical.clone()) {
-        return Ok(());
-    }
-    let content = crate::util::read_bounded(&canonical, MAX_RESOLVED_BYTES).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "config is unreadable or too large",
-        )
-    })?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        let include = trimmed
-            .strip_prefix("include ")
-            .or_else(|| trimmed.strip_prefix("source "))
-            .map(str::trim)
-            .map(|value| value.trim_matches(['"', '\'']));
-        if let Some(include) = include {
-            let include_path = Path::new(include);
-            let include_path = if include_path.is_absolute() {
-                include_path.to_owned()
-            } else {
-                canonical
-                    .parent()
-                    .unwrap_or(Path::new("."))
-                    .join(include_path)
-            };
-            if include_path.is_file() {
-                collect_config(&include_path, visited, output, depth + 1)?;
-            }
-        } else if output.len() < MAX_RESOLVED_BYTES {
-            output.push_str(line);
-            output.push('\n');
-        }
-    }
-    Ok(())
+    Ok(crate::config_resolver::resolve(root, &["include", "source"])?.text())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
