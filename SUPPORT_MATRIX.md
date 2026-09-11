@@ -47,6 +47,9 @@ contract shared by the capability registry and tests.
 | `compositor.gnome` | compositor | Implemented | Inspect GNOME global shortcuts through read-only GSettings queries. |
 | `compositor.programmable-x11` | compositor | Implemented | Inspect literal AwesomeWM, Qtile, and XMonad mappings. |
 | `compositor.x11.xbindkeys` | compositor | Implemented | Inspect literal X11 xbindkeys configuration. |
+| `compositor.portal-globalshortcuts` | compositor | Implemented | Probe read-only xdg-desktop-portal GlobalShortcuts availability; the API does not expose an existing binding inventory. |
+| `compositor.kglobalaccel-runtime` | compositor | Implemented | Probe live org.kde.KGlobalAccel registrations while retaining kglobalshortcutsrc as the static inventory source. |
+| `compositor.gnome-shell-runtime` | compositor | Implemented | Probe GNOME Shell runtime reachability; Shell does not expose a read-only full keybinding dump. |
 | `compositor.generic` | compositor | Implemented | Report generic desktop/session context with opaque global bindings. |
 | `compositor.additional-desktops` | compositor | Planned | Additional desktop integrations beyond the supported adapter set. |
 | `terminal.dedicated` | terminal | Implemented | Detect and query a dedicated terminal adapter when available. |

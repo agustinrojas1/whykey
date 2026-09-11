@@ -153,6 +153,11 @@ Support is best effort where a program does not expose its live keymap.
 Generated configuration, plugins, firmware mappings, browser shortcuts, and
 focus changes during inspection can remain uncertain.
 
+On Wayland sessions, `whykey doctor` also probes read-only runtime surfaces for
+KDE KGlobalAccel, xdg-desktop-portal GlobalShortcuts, and GNOME Shell. These
+probes report service reachability and API limits; they never register a
+shortcut or claim a binding inventory when the API does not expose one.
+
 ### Compositor extension adapters
 
 User-owned manifests in `~/.config/whykey/adapters/*.toml` add static

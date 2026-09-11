@@ -1076,6 +1076,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     let multiplexer_display = &environment.multiplexer;
     let nvim_extension = detect_extension("whykey-nvim");
     let nvim_server = detect_nvim_server();
+    let runtime_readers = whykey::runtime_readers::current();
 
     let compositor_context_available = ssh
         || generic_compositor
@@ -1190,6 +1191,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             },
             "extension-adapters": extension_checks,
             "extension-adapter-warnings": manifest_warnings,
+            "runtime-readers": runtime_readers,
         });
         legacy_value
             .as_object_mut()
@@ -1224,6 +1226,10 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 native_cause.label(),
                 native_cause.next_check()
             );
+        }
+        println!("\nLive compositor runtime readers:");
+        for reader in &runtime_readers {
+            print_check(reader.id, reader.availability.available(), &reader.evidence);
         }
         if !native_available && !native_attempts.is_empty() {
             let attempted = native_attempts

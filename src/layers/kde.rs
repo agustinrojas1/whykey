@@ -31,7 +31,7 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
                 description.map_or_else(|| action.clone(), |d| format!("{action} ({d})")),
                 "configured; runtime registration conditional",
             )
-            .with_context(group)
+            .with_context(format!("{group}; live runtime: org.kde.KGlobalAccel"))
         })
         .collect())
 }
@@ -88,6 +88,9 @@ impl Kde {
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
         let mut details = vec![format!("config: {}", path.display())];
+        details.push(crate::runtime_readers::evidence_line(
+            "kglobalaccel-runtime",
+        ));
         if matches.is_empty() {
             details.push(
                 "no matching static shortcut found; runtime D-Bus registrations may differ".into(),

@@ -71,6 +71,11 @@ channel; Cinnamon and MATE are queried through their GSettings schemas. These
 queries are read-only and only report accelerator values exposed by the active
 session.
 .PP
+The doctor command also introspects KDE KGlobalAccel, xdg-desktop-portal
+GlobalShortcuts, and GNOME Shell through bounded read-only D-Bus queries. It
+reports service reachability and explicit API limits; it never registers a
+shortcut or invents a binding list.
+.PP
 External integration commands use a two-second timeout and a one-megabyte
 stdout/stderr limit. Set
 .B WHYKEY_COMMAND_TIMEOUT_MS
