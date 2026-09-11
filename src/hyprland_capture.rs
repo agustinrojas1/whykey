@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::capture::{CaptureBackend, NativeBackendId, NativeCaptureIo};
+use crate::capture::{
+    CaptureBackend, CaptureBackendId, CaptureToken, NativeBackendId, NativeCaptureIo,
+};
 pub use crate::capture::{CapturePolicy as HyprlandCapturePolicy, ChordReleaseStatus};
 use crate::command;
 use crate::key::KeyCombo;
@@ -1247,8 +1249,8 @@ impl HyprlandCaptureSession {
 }
 
 impl CaptureBackend for HyprlandCaptureSession {
-    fn id(&self) -> NativeBackendId {
-        NativeBackendId::Hyprland
+    fn id(&self) -> CaptureBackendId {
+        CaptureBackendId::Native(NativeBackendId::Hyprland)
     }
 
     fn display(&self) -> &'static str {
@@ -1259,7 +1261,20 @@ impl CaptureBackend for HyprlandCaptureSession {
         Self::arm(self, policy)
     }
 
+    fn arm_token(&mut self, policy: crate::capture::CapturePolicy) -> Result<CaptureToken, String> {
+        Self::arm(self, policy)?;
+        Ok(CaptureToken::new(
+            self.id(),
+            self.guard.token().to_owned(),
+            self.is_suppressing(),
+        ))
+    }
+
     fn next_observed_event(&mut self, events_all: bool) -> Result<Option<ObservedKey>, String> {
+        Self::next_observed_event(self, events_all)
+    }
+
+    fn next_event(&mut self, events_all: bool) -> Result<Option<ObservedKey>, String> {
         Self::next_observed_event(self, events_all)
     }
 
