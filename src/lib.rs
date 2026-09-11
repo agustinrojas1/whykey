@@ -23,6 +23,7 @@ pub mod ime;
 pub mod key;
 pub mod layers;
 pub mod listen;
+pub(crate) mod listen_protocol;
 pub mod registry;
 pub mod remapper;
 pub mod replay;

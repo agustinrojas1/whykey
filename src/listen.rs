@@ -2236,13 +2236,13 @@ fn query_keyboard_protocol(tty: &mut File) -> io::Result<(Option<u32>, Vec<u8>)>
         }
     }
 
-    if let Some(value) = parse_protocol_response(&response) {
+    if let Some(value) = crate::listen_protocol::parse_protocol_response(&response) {
         return Ok((Some(value), Vec::new()));
     }
     Ok((None, response))
 }
 
-fn parse_protocol_response(response: &[u8]) -> Option<u32> {
+pub(crate) fn parse_protocol_response(response: &[u8]) -> Option<u32> {
     if !response.starts_with(b"\x1b[?") || response.last() != Some(&b'u') {
         return None;
     }
@@ -2257,7 +2257,9 @@ fn read_event(reader: &mut InputReader<'_>, deadline: Option<Instant>) -> io::Re
     if bytes.is_empty() {
         return Ok(ReadEvent::Idle);
     }
-    Ok(ReadEvent::Key(Box::new(decode_bytes(bytes)?)))
+    Ok(ReadEvent::Key(Box::new(crate::listen_protocol::decode(
+        bytes,
+    )?)))
 }
 
 fn remaining_millis(deadline: Instant) -> i32 {
@@ -2306,7 +2308,7 @@ fn is_complete_escape_sequence(bytes: &[u8]) -> bool {
     bytes.len() > 2 && (last.is_ascii_alphabetic() || last == b'~')
 }
 
-fn decode_bytes(bytes: Vec<u8>) -> Result<ObservedKey, io::Error> {
+pub(crate) fn decode_bytes(bytes: Vec<u8>) -> Result<ObservedKey, io::Error> {
     let decoded = decode_key(&bytes);
     // Metadata from a Kitty-looking byte sequence is evidence only when the
     // sequence itself decoded successfully. Otherwise malformed input must
