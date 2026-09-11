@@ -72,6 +72,11 @@ whykey extension extensions/whykey-vscode ctrl+x # query user VS Code keybinding
 whykey extension extensions/whykey-emacs ctrl+x # query live Emacs keymap stack via emacsclient
 ```
 
+`whykey doctor --json` includes a cause taxonomy (`not-installed`,
+`permission-missing`, `ipc-unreachable`, or `api-does-not-expose`) and a safe
+next check for unavailable integrations. It never repairs permissions or
+changes compositor configuration.
+
 Normal reports fit one screen: key, assessment, one result statement,
 capture source, matching layer, binding action, and concrete uncertainty.
 Use `--verbose` for the full route with raw events, probe bytes, encoding

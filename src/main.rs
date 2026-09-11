@@ -1052,7 +1052,15 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             })
         })
         .collect::<Vec<_>>();
+    let native_cause = if native_available {
+        whykey::doctor::Cause::Available
+    } else if native_attempts.is_empty() {
+        whykey::doctor::Cause::NotInstalled
+    } else {
+        whykey::doctor::Cause::IpcUnreachable
+    };
     let evdev_devices = listen::evdev_devices();
+    let evdev_cause = whykey::doctor::evdev(!evdev_devices.is_empty(), evdev);
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
     let mut multiplexer_names = Vec::new();
@@ -1153,10 +1161,17 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 "generic_terminal_fallback": generic_terminal_fallback,
             },
             "xkb": {"compiler": xkb},
-            "evdev": {"available": evdev, "devices": evdev_devices},
+            "evdev": {
+                "available": evdev,
+                "devices": evdev_devices,
+                "cause": evdev_cause,
+                "next_check": evdev_cause.next_check(),
+            },
             "native-compositor": {
                 "available": native_available,
                 "backend": native_available.then_some(native_backend),
+                "cause": native_cause,
+                "next_check": native_cause.next_check(),
                 "attempted": native_attempts.clone(),
             },
             "remappers": remappers,
@@ -1203,6 +1218,13 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             native_available,
             "run inside a supported compositor session and ensure its IPC is reachable",
         );
+        if !native_available {
+            println!(
+                "  cause: {} — {}",
+                native_cause.label(),
+                native_cause.next_check()
+            );
+        }
         if !native_available && !native_attempts.is_empty() {
             let attempted = native_attempts
                 .iter()

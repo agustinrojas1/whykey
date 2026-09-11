@@ -642,6 +642,8 @@ fn doctor_returns_structured_json() {
     assert!(value["evdev"]["available"].is_boolean());
     assert!(value["evdev"]["devices"].is_array());
     assert!(value["native-compositor"]["available"].is_boolean());
+    assert!(value["native-compositor"]["cause"].is_string());
+    assert!(value["native-compositor"]["next_check"].is_string());
     assert!(
         value["native-compositor"]["backend"].is_null()
             || value["native-compositor"]["backend"] == "Hyprland"
