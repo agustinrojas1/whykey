@@ -18,6 +18,8 @@ jobs:
           components: rustfmt, clippy
       - name: Check generated support matrix
         run: python3 tools/generate_support_matrix.py --check
+      - name: Check adapter fixture gate
+        run: tools/check_adapter_gate.sh
       - name: Check dependency provenance
         run: python3 tools/generate_dependency_provenance.py --check
       - name: Check defect register is packaged documentation

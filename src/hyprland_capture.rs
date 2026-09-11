@@ -1452,6 +1452,22 @@ mod tests {
     }
 
     #[test]
+    fn session_fixture_covers_event_restore_and_stale_token_contract() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/sessions/hyprland.json")).unwrap();
+        assert_eq!(fixture["id"], "hyprland");
+        assert!(matches!(
+            parse_socket_line(fixture["socket_event"].as_str().unwrap()),
+            SocketMessage::Key(_)
+        ));
+        assert_eq!(fixture["restore_submap"], "default");
+        assert_eq!(fixture["stale_token"], "refused");
+        assert_eq!(fixture["cleanup_attempts"], 3);
+        assert_eq!(fixture["pass_through_restores"], false);
+        assert_eq!(fixture["chord_release_timeout"], "no-report");
+    }
+
+    #[test]
     fn ignore_unrelated_hyprland_events_and_events_from_another_token() {
         assert_eq!(
             parse_socket_line("activelayout>>keyboard,us"),

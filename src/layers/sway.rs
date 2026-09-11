@@ -168,4 +168,20 @@ mod tests {
         assert_eq!(ipc.input_code, Some(36));
         assert_eq!(ipc.keycodes, vec![36]);
     }
+
+    #[test]
+    fn session_fixture_covers_positive_and_ipc_failure_shapes() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/sessions/sway.json")).unwrap();
+        assert_eq!(fixture["id"], "sway");
+        let binding: SwayBinding = serde_json::from_value(fixture["bindings"][0].clone()).unwrap();
+        assert_eq!(to_ipc_binding(&binding).keys, vec!["Return"]);
+        assert_eq!(fixture["focused_tree"]["pid"], 4242);
+        assert!(fixture["ipc_failure"].as_str().unwrap().contains("swaymsg"));
+        assert!(
+            serde_json::from_str::<Vec<SwayBinding>>("[]")
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

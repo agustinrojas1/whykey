@@ -1,0 +1,6 @@
+{
+  "id": "sway",
+  "bindings": [{"command": "exec foot", "keysym": "Return", "input_code": 36}],
+  "focused_tree": {"focused": true, "pid": 4242},
+  "ipc_failure": "swaymsg exited non-zero"
+}

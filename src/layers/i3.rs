@@ -164,4 +164,20 @@ mod tests {
         assert_eq!(ipc.input_code, Some(46));
         assert_eq!(ipc.keycodes, vec![46]);
     }
+
+    #[test]
+    fn session_fixture_covers_positive_and_ipc_failure_shapes() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/sessions/i3.json")).unwrap();
+        assert_eq!(fixture["id"], "i3");
+        let binding: I3Binding = serde_json::from_value(fixture["bindings"][0].clone()).unwrap();
+        assert_eq!(to_ipc_binding(&binding).keys, vec!["Return"]);
+        assert_eq!(fixture["focused_tree"]["pid"], 4343);
+        assert!(fixture["ipc_failure"].as_str().unwrap().contains("i3-msg"));
+        assert!(
+            serde_json::from_str::<Vec<I3Binding>>("[]")
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
