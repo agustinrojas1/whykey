@@ -5,6 +5,7 @@
 //! registry instead of scattered adapter lists. Adding a desktop adapter
 //! requires its module and one entry in [`DESKTOPS`].
 
+use crate::capture::NativeCaptureIo;
 use crate::key::KeyCombo;
 use crate::layers::{
     BindingRecord, LayerResult, PhysicalInput, cinnamon, compositor, gnome, hyprland, i3, kde,
@@ -39,6 +40,10 @@ pub struct DoctorMeta {
 /// an unavailable reason already prefixed with the adapter's source label.
 pub type BindingInventory = fn() -> Result<Vec<BindingRecord>, String>;
 
+/// Native capture transport factory. `None` means the adapter is currently
+/// static-only and has no live capture transport.
+pub type CaptureFactory = fn() -> Result<Box<dyn NativeCaptureIo>, String>;
+
 /// Static adapter descriptor: one registry entry plus its adapter module.
 pub struct AdapterDescriptor {
     /// Stable ID used by selection and tests.
@@ -57,6 +62,8 @@ pub struct AdapterDescriptor {
     pub capability: Option<CapabilityMeta>,
     /// Doctor check metadata, when the adapter has its own check.
     pub doctor: Option<DoctorMeta>,
+    /// Live native capture transport, when the adapter provides one.
+    pub capture: Option<CaptureFactory>,
 }
 
 // Inspect wrappers: one uniform signature per adapter. Only Hyprland needs
@@ -168,6 +175,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "run inside the Hyprland session",
             json_key: "hyprland",
         }),
+        capture: Some(crate::hyprland_capture::capture_connect),
     },
     AdapterDescriptor {
         id: "sway",
@@ -187,6 +195,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "run inside the Sway session",
             json_key: "sway",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "i3",
@@ -206,6 +215,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "run inside the i3 session",
             json_key: "i3",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "kde",
@@ -225,6 +235,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "make kglobalshortcutsrc readable or enable the KDE session",
             json_key: "kde",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "xfce",
@@ -244,6 +255,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "install xfconf-query or enable the Xfce session",
             json_key: "xfce",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "cinnamon",
@@ -263,6 +275,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "install or enable gsettings for the Cinnamon session",
             json_key: "cinnamon",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "mate",
@@ -282,6 +295,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "install or enable gsettings for the MATE session",
             json_key: "mate",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "niri",
@@ -301,6 +315,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set NIRI_CONFIG or provide ~/.config/niri/config.kdl",
             json_key: "niri",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "river",
@@ -320,6 +335,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set RIVER_INIT or provide ~/.config/river/init",
             json_key: "river",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "wayfire",
@@ -339,6 +355,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set WAYFIRE_CONFIG or provide ~/.config/wayfire.ini",
             json_key: "wayfire",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "labwc",
@@ -358,6 +375,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set LABWC_CONFIG or provide ~/.config/labwc/rc.xml",
             json_key: "labwc",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "sxhkd",
@@ -377,6 +395,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set SXHKD_CONFIG or provide ~/.config/sxhkd/sxhkdrc",
             json_key: "bspwm_sxhkd",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "openbox",
@@ -396,6 +415,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set OPENBOX_CONFIG or provide ~/.config/openbox/rc.xml",
             json_key: "openbox",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "gnome",
@@ -415,6 +435,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "install or enable gsettings",
             json_key: "gnome",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "programmable",
@@ -434,6 +455,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set the corresponding *_CONFIG variable or provide its standard config",
             json_key: "programmable_x11",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "x11",
@@ -453,6 +475,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "set XBINDKEYSRC or provide ~/.xbindkeysrc",
             json_key: "x11_xbindkeys",
         }),
+        capture: None,
     },
     AdapterDescriptor {
         id: "compositor",
@@ -464,6 +487,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         focus: None,
         capability: None,
         doctor: None,
+        capture: None,
     },
 ];
 
@@ -496,7 +520,14 @@ mod tests {
             .iter()
             .find(|entry| environment.desktop(entry.id).applicable)
             .map(|entry| entry.id);
-        assert_eq!(environment.selected_compositor, expected);
+        assert_eq!(
+            environment.selected_compositor,
+            environment
+                .compositor_candidates
+                .first()
+                .map(|candidate| candidate.id)
+                .or(expected)
+        );
     }
 
     #[test]

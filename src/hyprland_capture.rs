@@ -49,6 +49,11 @@ pub fn connect_socket2(signature: &str) -> io::Result<UnixStream> {
     Ok(stream)
 }
 
+/// Construct the registered Hyprland native capture transport.
+pub fn capture_connect() -> Result<Box<dyn NativeCaptureIo>, String> {
+    Ok(Box::new(HyprlandCaptureSession::connect()?))
+}
+
 pub fn generate_token() -> String {
     format!(
         "wk_{}_{}",

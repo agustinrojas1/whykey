@@ -34,6 +34,8 @@ pub struct Environment {
     pub ime: Vec<ime::Detection>,
     /// Selected compositor in inspect priority order, if any.
     pub selected_compositor: Option<&'static str>,
+    /// Every applicable compositor candidate, scored from the same snapshot.
+    pub compositor_candidates: Vec<CompositorCandidate>,
     /// Per-desktop (applicable, ipc) flags in registry priority order.
     pub desktops: Vec<DesktopStatus>,
 }
@@ -44,6 +46,34 @@ pub struct DesktopStatus {
     pub id: &'static str,
     pub applicable: bool,
     pub ipc: bool,
+}
+
+/// Candidate compositor context used for deterministic backend selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompositorCandidate {
+    pub id: &'static str,
+    pub applicable: bool,
+    pub ipc: bool,
+    pub score: u8,
+}
+
+fn explicit_environment_hint(id: &str) -> bool {
+    match id {
+        "hyprland" => {
+            std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|value| !value.is_empty())
+        }
+        "sway" => std::env::var_os("SWAYSOCK").is_some_and(|value| !value.is_empty()),
+        "i3" => std::env::var_os("I3SOCK").is_some_and(|value| !value.is_empty()),
+        _ => false,
+    }
+}
+
+fn desktop_hint(id: &str, display: &str, context: &compositor::Context) -> bool {
+    context.desktop.as_deref().is_some_and(|desktop| {
+        desktop
+            .split(':')
+            .any(|value| value.eq_ignore_ascii_case(id) || value.eq_ignore_ascii_case(display))
+    })
 }
 
 impl DesktopStatus {
@@ -88,10 +118,25 @@ impl Environment {
                 }
             })
             .collect::<Vec<_>>();
-        let selected_compositor = desktops
+        let mut compositor_candidates = crate::registry::DESKTOPS
             .iter()
-            .find(|status| status.applicable)
-            .map(|status| status.id);
+            .zip(&desktops)
+            .filter(|(_, status)| status.applicable)
+            .map(|(descriptor, status)| CompositorCandidate {
+                id: status.id,
+                applicable: status.applicable,
+                ipc: status.ipc,
+                score: u8::from(status.ipc) * 3
+                    + u8::from(explicit_environment_hint(status.id)) * 2
+                    + u8::from(desktop_hint(
+                        status.id,
+                        descriptor.display,
+                        &compositor_context,
+                    )),
+            })
+            .collect::<Vec<_>>();
+        compositor_candidates.sort_by(|left, right| right.score.cmp(&left.score));
+        let selected_compositor = compositor_candidates.first().map(|candidate| candidate.id);
 
         let shell = std::env::var("SHELL").unwrap_or_default();
         let shell_name = shell
@@ -146,6 +191,7 @@ impl Environment {
             hyprland_probe,
             ime: ime::detect_with_snapshot(&snapshot),
             selected_compositor,
+            compositor_candidates,
             desktops,
         }
     }
@@ -181,6 +227,10 @@ mod tests {
             "one snapshot per command must give a stable selection"
         );
         assert_eq!(first.desktops.len(), second.desktops.len());
+        assert_eq!(
+            first.compositor_candidates, second.compositor_candidates,
+            "candidate scoring must be stable within one environment snapshot"
+        );
         assert_eq!(first.compositor_context, second.compositor_context);
         assert_eq!(first.remappers, second.remappers);
         assert_eq!(first.ime, second.ime);

@@ -2907,7 +2907,7 @@ fn default_source_selection_falls_back_to_terminal_without_hyprland() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(combined.contains("Native compositor capture (Hyprland) is unavailable:"));
+    assert!(combined.contains("Native compositor capture is unavailable:"));
     assert!(
         combined.contains(
             "Using terminal capture; shortcuts consumed by the compositor will not appear."
@@ -2926,7 +2926,7 @@ fn terminal_flag_suppresses_fallback_warning() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!combined.contains("Native compositor capture (Hyprland) is unavailable"));
+    assert!(!combined.contains("Native compositor capture is unavailable"));
 }
 
 #[test]
@@ -2948,7 +2948,7 @@ fn listen_json_fallback_warns_on_stderr_without_polluting_stdout() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Native compositor capture (Hyprland) is unavailable"));
+    assert!(stderr.contains("Native compositor capture is unavailable"));
     assert!(
         stderr.contains(
             "Using terminal capture; shortcuts consumed by the compositor will not appear."
@@ -2982,7 +2982,7 @@ fn pass_through_flag_allows_fallback_when_hyprland_fails() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(combined.contains("Native compositor capture (Hyprland) is unavailable"));
+    assert!(combined.contains("Native compositor capture is unavailable"));
     assert!(combined.contains("Using terminal capture"));
 }
 

@@ -416,13 +416,14 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     if options.terminal {
         return run_terminal(options);
     }
+    let discovery = ListenSession::capture();
     #[cfg(target_os = "linux")]
-    match select_native_backend() {
-        Ok(session) => run_native(options, session),
+    match select_native_backend(&discovery.environment) {
+        Ok(session) => run_native(options, session, discovery),
         Err(error) => {
             if options.events_all {
                 return Err(ListenError::Message(format!(
-                    "Native compositor capture (Hyprland) unavailable: {error}; --events all requires native compositor or evdev capture"
+                    "Native compositor capture unavailable: {error}; --events all requires native compositor or evdev capture"
                 )));
             }
             if options.capture_policy == HyprlandCapturePolicy::Suppress
@@ -434,10 +435,10 @@ pub fn run(options: Options) -> Result<(), ListenError> {
                 eprintln!("No key was captured and no shortcut was executed.");
                 eprintln!("Use --pass-through to capture without suppression.");
                 return Err(ListenError::Setup(format!(
-                    "native compositor capture (Hyprland) unavailable: {error}"
+                    "native compositor capture unavailable: {error}"
                 )));
             }
-            eprintln!("Native compositor capture (Hyprland) is unavailable: {error}");
+            eprintln!("Native compositor capture is unavailable: {error}");
             eprintln!(
                 "Using terminal capture; shortcuts consumed by the compositor will not appear."
             );
@@ -451,28 +452,65 @@ pub fn run(options: Options) -> Result<(), ListenError> {
                 "--events all requires evdev capture on non-Linux platforms".into(),
             ));
         }
-        eprintln!("Native compositor capture (Hyprland) is unavailable: only supported on Linux");
+        eprintln!("Native compositor capture is unavailable: only supported on Linux");
         eprintln!("Using terminal capture; shortcuts consumed by the compositor will not appear.");
         run_terminal(options)
     }
 }
 
 #[cfg(target_os = "linux")]
-fn select_native_backend() -> Result<crate::hyprland_capture::HyprlandCaptureSession, String> {
-    // Future native backends add one registry arm here without changing the
-    // listener loop.
-    crate::hyprland_capture::HyprlandCaptureSession::connect()
+#[derive(Debug)]
+struct SelectError {
+    attempted: Vec<(String, String)>,
 }
 
 #[cfg(target_os = "linux")]
-fn run_native<B: NativeCaptureIo>(
+impl fmt::Display for SelectError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.attempted.is_empty() {
+            return formatter.write_str("no registered native compositor backend");
+        }
+        let details = self
+            .attempted
+            .iter()
+            .map(|(backend, reason)| format!("{backend}: {reason}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(formatter, "tried {details}")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn select_native_backend(
+    environment: &crate::environment::Environment,
+) -> Result<Box<dyn NativeCaptureIo>, SelectError> {
+    let mut attempted = Vec::new();
+    for candidate in &environment.compositor_candidates {
+        let Some(descriptor) = crate::registry::DESKTOPS
+            .iter()
+            .find(|entry| entry.id == candidate.id)
+        else {
+            continue;
+        };
+        let Some(factory) = descriptor.capture else {
+            continue;
+        };
+        match factory() {
+            Ok(backend) => return Ok(backend),
+            Err(error) => attempted.push((descriptor.display.to_owned(), error)),
+        }
+    }
+    Err(SelectError { attempted })
+}
+
+#[cfg(target_os = "linux")]
+fn run_native<B: NativeCaptureIo + ?Sized>(
     options: Options,
-    mut capture_session: B,
+    mut capture_session: Box<B>,
+    snapshot: ListenSession,
 ) -> Result<(), ListenError> {
     let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
-    let snapshot = ListenSession::capture();
-
     if let Some(warning) = capture_session.pre_arm_warning(options.capture_policy) {
         eprintln!("{warning}");
     }
