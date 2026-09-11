@@ -2897,6 +2897,39 @@ mod tests {
         assert_eq!(KITTY_CAPTURE_FLAGS, 31);
     }
 
+    #[test]
+    fn kitty_negotiation_matrix_rejects_malformed_or_contradictory_responses() {
+        let cases = [
+            ("empty", b"".as_slice(), None),
+            ("valid zero", b"\x1b[?0u".as_slice(), Some(0)),
+            ("valid flags", b"\x1b[?31u".as_slice(), Some(31)),
+            ("truncated escape", b"\x1b[?31".as_slice(), None),
+            ("wrong final byte", b"\x1b[?31x".as_slice(), None),
+            ("missing question marker", b"\x1b[31u".as_slice(), None),
+            ("contradictory CSI", b"\x1b[1;5D".as_slice(), None),
+            ("negative flags", b"\x1b[?-1u".as_slice(), None),
+            ("overflow flags", b"\x1b[?4294967296u".as_slice(), None),
+            ("non-UTF8 flags", b"\x1b[?\xffu".as_slice(), None),
+        ];
+        for (label, response, expected) in cases {
+            assert_eq!(parse_protocol_response(response), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn kitty_event_matrix_preserves_lifecycle_for_press_repeat_release() {
+        let cases = [
+            (b"\x1b[97;1:1u".as_slice(), Some(KeyEventType::Press)),
+            (b"\x1b[97;1:2u".as_slice(), Some(KeyEventType::Repeat)),
+            (b"\x1b[97;1:3u".as_slice(), Some(KeyEventType::Release)),
+            (b"\x1b[97;1:4u".as_slice(), None),
+            (b"\x1b[97;1:bogus u".as_slice(), None),
+        ];
+        for (bytes, expected) in cases {
+            assert_eq!(kitty_event_type(bytes), expected);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn queries_fragmented_keyboard_protocol_response() {
