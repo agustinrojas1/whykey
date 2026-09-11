@@ -4,6 +4,7 @@
     {"adapter": "hyprland", "test": "inspect_accepts_an_explicit_hyprland_instance", "fixtures": ["../hyprland/instances.json", "../hyprland/binds-representative.json"]},
     {"adapter": "sway", "test": "sway_adapter_reads_effective_bindings", "fixtures": ["swaymsg-bindings.sh"]},
     {"adapter": "i3", "test": "i3_adapter_reads_effective_bindings", "fixtures": ["i3-msg-bindings.sh"]},
+    {"adapter": "dwl", "test": "dwl_adapter_reads_literal_config_conditionally", "fixtures": ["dwl.json"]},
     {"adapter": "gnome", "test": "gnome_adapter_reads_media_key_bindings", "fixtures": ["gsettings-gnome.sh"]},
     {"adapter": "kde", "test": "kde_adapter_reads_global_shortcut_configuration", "fixtures": ["kglobalshortcutsrc"]},
     {"adapter": "xfce", "test": "xfce_adapter_reads_effective_channel_shortcuts", "fixtures": ["xfconf-query-shortcuts.sh"]},
@@ -42,6 +43,13 @@
       "positive": "bindings and focused tree parse",
       "negative": "empty binding response is unknown",
       "ipc_failure": "i3-msg failure is reported"
+    },
+    {
+      "id": "dwl",
+      "fixture": "dwl.json",
+      "positive": "literal config.h key table is parsed",
+      "negative": "missing DWL_CONFIG is unavailable",
+      "ipc_failure": "dwl has no global-shortcut IPC and remains conditional"
     }
   ]
 }

@@ -1,0 +1,7 @@
+{
+  "id": "dwl",
+  "config": "static const Key keys[] = { { MODKEY, XKB_KEY_Return, spawn, {.v = termcmd} }, };",
+  "positive": "literal config.h key table is parsed",
+  "negative": "missing DWL_CONFIG is unavailable",
+  "ipc_failure": "dwl has no global-shortcut IPC and remains conditional"
+}

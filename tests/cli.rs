@@ -2311,6 +2311,7 @@ fn virtual_session_matrix_covers_supported_desktop_adapters() {
         "hyprland",
         "sway",
         "i3",
+        "dwl",
         "gnome",
         "kde",
         "xfce",
@@ -2364,6 +2365,43 @@ fn virtual_session_matrix_covers_supported_desktop_adapters() {
             "missing fixture entry for {adapter}"
         );
     }
+}
+
+#[test]
+fn dwl_adapter_reads_literal_config_conditionally() {
+    let base = temp_dir("dwl-cli");
+    fs::create_dir_all(&base).unwrap();
+    let config = base.join("config.h");
+    fs::write(
+        &config,
+        "static const Key keys[] = {\n { MODKEY, XKB_KEY_Return, spawn, {.v = termcmd} },\n};",
+    )
+    .unwrap();
+
+    let output = binary()
+        .args(["--verbose", "super+return"])
+        .env("XDG_CURRENT_DESKTOP", "dwl")
+        .env("XDG_SESSION_DESKTOP", "dwl")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env("DWL_CONFIG", &config)
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("dwl"),
+        "stdout={text:?} stderr={:?}",
+        output.stderr
+    );
+    assert!(text.contains("config.h contains a matching key binding"));
+    assert!(text.contains("conditional"));
+    let _ = fs::remove_dir_all(base);
 }
 
 #[cfg(unix)]
