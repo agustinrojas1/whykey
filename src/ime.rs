@@ -16,6 +16,16 @@ pub enum EvidenceStatus {
     Unobserved,
 }
 
+impl EvidenceStatus {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::Conditional => "conditional",
+            Self::Unobserved => "unobserved",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TextReconstruction {
     /// Text committed by the application cannot be attributed to one key
@@ -36,6 +46,17 @@ impl Default for TextReconstruction {
             compose_dead_key: EvidenceStatus::Unobserved,
             application_preedit: EvidenceStatus::Unobserved,
         }
+    }
+}
+
+impl TextReconstruction {
+    fn detail(&self) -> String {
+        format!(
+            "text reconstruction: committed text {}, Compose/dead-key history {}, application preedit {}",
+            self.committed_text.label(),
+            self.compose_dead_key.label(),
+            self.application_preedit.label()
+        )
     }
 }
 
@@ -175,7 +196,11 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         }
     }
     details.push(
-        "committed text may differ from the physical key; Compose/dead-key history and application-side preedit state remain unobserved".into(),
+        detections
+            .iter()
+            .map(|detection| detection.text_reconstruction.detail())
+            .collect::<Vec<_>>()
+            .join("; "),
     );
     LayerResult::new(
         "Input method",
@@ -527,6 +552,56 @@ mod tests {
                 .details
                 .iter()
                 .any(|detail| detail.contains("session bus"))
+        );
+    }
+
+    #[test]
+    fn renders_the_fcitx5_state_matrix_without_stringly_typed_evidence() {
+        for state in ["active", "inactive", "closed"] {
+            let result = inspect_with_detections(&[Detection {
+                engine: "fcitx5".into(),
+                sources: vec!["GTK_IM_MODULE=fcitx".into()],
+                processes: vec!["fcitx5".into()],
+                active_engine: Some("keyboard-us".into()),
+                state: Some(state.into()),
+                query_error: None,
+                text_reconstruction: TextReconstruction::default(),
+            }]);
+            assert_eq!(result.outcome, Outcome::UncertainContinues);
+            assert!(result.details.iter().any(|detail| {
+                detail.contains("text reconstruction:") && detail.contains("conditional")
+            }));
+        }
+    }
+
+    #[test]
+    fn renders_ibus_active_and_unreachable_as_distinct_evidence() {
+        let active = inspect_with_detections(&[Detection {
+            engine: "ibus".into(),
+            sources: vec!["GTK_IM_MODULE=ibus".into()],
+            processes: vec!["ibus-daemon".into()],
+            active_engine: Some("xkb:us::eng".into()),
+            state: Some("active".into()),
+            query_error: None,
+            text_reconstruction: TextReconstruction::default(),
+        }]);
+        assert!(active.summary.contains("active input method"));
+
+        let unreachable = inspect_with_detections(&[Detection {
+            engine: "ibus".into(),
+            sources: vec!["GTK_IM_MODULE=ibus".into()],
+            processes: vec![],
+            active_engine: None,
+            state: None,
+            query_error: Some("session bus unavailable".into()),
+            text_reconstruction: TextReconstruction::default(),
+        }]);
+        assert!(unreachable.summary.contains("runtime API is unreachable"));
+        assert!(
+            unreachable
+                .details
+                .iter()
+                .any(|detail| { detail.contains("application preedit unobserved") })
         );
     }
 
