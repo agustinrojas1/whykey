@@ -35,6 +35,12 @@ Whykey requires Linux and Rust 1.85 or newer:
 cargo install --git https://github.com/agustinrojas1/whykey --locked
 ```
 
+Whykey is intentionally a Linux-only binary. Its diagnostic contract includes
+Linux evdev, PTY/termios, XDG session discovery, and Linux desktop IPC; the
+project does not promise Windows or macOS support. Non-Linux builds fail with
+an explicit platform message rather than producing a partially functional
+binary.
+
 Arch, Debian, RPM, and Nix packaging recipes are available in
 [`packaging/`](packaging/).
 

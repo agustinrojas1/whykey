@@ -1,5 +1,13 @@
 # whykey v1.2.1 specification
 
+## Platform scope
+
+Whykey is a Linux-only program. The supported binary depends on Linux evdev,
+PTY/termios, XDG session paths, and Linux compositor/session IPC. Windows and
+macOS are outside this specification; non-Linux targets fail at compile time
+with an explicit message. A future portable `whykey-core` would be a separate
+workspace decision and is not implied by this binary.
+
 ## Goal
 
 Given one key combination, report how the running Linux compositor, terminal and downstream session handle it. Hyprland, Sway, i3, GNOME, KDE Plasma, Xfce, Cinnamon, MATE, Niri, River, Wayfire, labwc, bspwm/sxhkd, Openbox, X11 `xbindkeys`, AwesomeWM, Qtile, and XMonad have read-only desktop adapters; unsupported desktops are reported as an explicit conditional context.

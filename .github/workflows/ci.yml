@@ -10,6 +10,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    name: Linux gate
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -68,6 +69,7 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
+    name: Linux MSRV gate
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
