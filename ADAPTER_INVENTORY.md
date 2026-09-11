@@ -7,11 +7,13 @@ not observable. Adapter applicability never means that every binding is known.
 
 ## Desktop and compositor adapters
 
-Native capture backends are separate from static desktop adapters. The current
-backend is Hyprland: it uses socket2 IPC and a temporary Lua hook, restores the
-recorded submap before reporting, and exposes `capture.native-compositor` in
-capabilities and doctor. Other desktops keep their static inspection adapters;
-they fall back to terminal or evdev capture until a native backend is added.
+Native capture backends are separate from static desktop adapters. Hyprland
+uses socket2 IPC and a temporary Lua hook, restores the recorded submap before
+reporting, and exposes `capture.native-compositor`. Sway exposes read-only
+binding notifications through IPC in pass-through mode (`capture.native-sway`);
+Sway IPC has no suppression/restoration hook, so default suppression fails
+closed and users must select `--no-suppress`. Other desktops keep their static
+inspection adapters and fall back to terminal or evdev capture.
 
 Support tiers are T1 live IPC, T2 live query, T3 literal configuration, and
 T4 manifest extension. T4 manifests are opt-in, bounded, and conditional. They

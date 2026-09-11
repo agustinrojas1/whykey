@@ -40,6 +40,7 @@ pub fn current() -> Vec<Capability> {
     };
     let native_compositor = native_capture_available_for_doctor();
     let native_backend = crate::capture::NativeBackendId::Hyprland.display();
+    let native_sway = crate::sway_capture::probe_available();
     // Focus availability comes from the registry: adapters that expose a
     // focused-window PID operation, evaluated on the same Environment
     // snapshot as every other capability entry.
@@ -150,6 +151,16 @@ pub fn current() -> Vec<Capability> {
                 format!(
                     "Native compositor capture ({native_backend}): compositor IPC connection unavailable"
                 )
+            },
+        ),
+        available(
+            "capture.native-sway",
+            "capture",
+            native_sway,
+            if native_sway {
+                "Native compositor capture (Sway): IPC connection accepted; observation is pass-through only"
+            } else {
+                "Native compositor capture (Sway): SWAYSOCK is unavailable or unreachable"
             },
         ),
         implemented(

@@ -30,8 +30,8 @@ trait NativeCaptureIo: CaptureBackend {
 The listen loop owns terminal setup, polling, inspection, reporting, and
 export. A backend owns its transport and capture-specific lifecycle. Add a
 backend by implementing `CaptureBackend`, its transport, and `NativeCaptureIo`,
-then adding one arm to `select_native_backend` in `listen.rs`. That selector is currently
-Native capture selection now walks the scored compositor candidates and the
+then adding one arm to `select_native_backend` in `listen.rs`. That selector is
+implemented through the registry: native capture selection walks the scored compositor candidates and the
 registry's optional capture factory. It returns a boxed transport, so adding
 a second native backend does not change the listen loop. The registry entry
 should expose the same stable display name to capabilities and doctor.
@@ -73,6 +73,7 @@ filtering, chord-release handling, disconnects, retries, stale tokens, and
 pass-through behavior without requiring a live compositor. Live tests belong in
 the ignored integration suite and must never run in CI.
 
-The current registry has one native backend, Hyprland. Sway IPC, portals, and
+The current registry has Hyprland and Sway native backends. Sway is
+pass-through-only because its IPC has no suppression hook; portals and
 extension capture can be added without changing report routing or the terminal
 fallback.

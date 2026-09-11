@@ -28,5 +28,6 @@ pub mod replay;
 pub mod report;
 pub mod schema;
 pub mod snapshot;
+pub mod sway_capture;
 pub mod util;
 pub mod xkb;
