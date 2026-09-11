@@ -2,6 +2,8 @@ use std::env;
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
+mod cli;
+
 use whykey::bindings;
 use whykey::capabilities;
 use whykey::command;
@@ -11,8 +13,8 @@ use whykey::extensions;
 use whykey::focus;
 use whykey::key::{KeyCombo, KeySequence};
 use whykey::layers::{
-    LayerId, LayerResult, LayerStatus, Outcome, Propagation, hyprland, inspect_default_chain,
-    inspect_default_chain_for_pid, inspect_default_chain_for_pid_with_source, programmable,
+    Outcome, hyprland, inspect_default_chain, inspect_default_chain_for_pid,
+    inspect_default_chain_for_pid_with_source, programmable,
 };
 use whykey::listen;
 use whykey::replay;
@@ -209,41 +211,20 @@ fn take_value(
 }
 
 fn main() -> ExitCode {
-    let raw_arguments: Vec<_> = env::args().skip(1).collect();
-    let json = raw_arguments
-        .iter()
-        .any(|argument| argument == "--json" || argument == "--json-v2" || argument == "--ndjson");
-    let ndjson = raw_arguments.iter().any(|argument| argument == "--ndjson");
-    let verbose = raw_arguments
-        .iter()
-        .any(|argument| argument == "--verbose" || argument == "-v");
-    let mut schema_version = schema::DEFAULT_VERSION;
-    let mut filtered_arguments = Vec::with_capacity(raw_arguments.len());
-    let mut index = 0;
-    while index < raw_arguments.len() {
-        match raw_arguments[index].as_str() {
-            "--json" | "--ndjson" => {}
-            "--verbose" | "-v" => {}
-            "--json-v2" => schema_version = 2,
-            "--schema-version" => {
-                let Some(value) = raw_arguments.get(index + 1) else {
-                    eprintln!("error: --schema-version requires 1 or 2");
-                    return ExitCode::from(2);
-                };
-                schema_version = match value.parse::<u8>() {
-                    Ok(1 | 2) => value.parse().expect("validated schema version"),
-                    _ => {
-                        eprintln!("error: --schema-version must be 1 or 2");
-                        return ExitCode::from(2);
-                    }
-                };
-                index += 1;
-            }
-            argument => filtered_arguments.push(argument.to_owned()),
+    let parsed = match cli::parse_global_arguments(env::args().skip(1).collect()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(2);
         }
-        index += 1;
-    }
-    let raw_arguments = filtered_arguments;
+    };
+    let cli::GlobalArguments {
+        arguments: raw_arguments,
+        json,
+        ndjson,
+        verbose,
+        schema_version,
+    } = parsed;
     let mut arguments = raw_arguments.into_iter();
     let Some(argument) = arguments.next() else {
         eprintln!("{}", help_text());
@@ -508,7 +489,7 @@ fn main() -> ExitCode {
     let results = command::with_deadline(command::configured_diagnostic_timeout(), || {
         inspect_default_chain(&key)
     });
-    let unavailable = inspection_failed(&results, false);
+    let unavailable = cli::exit_for_inspection(&results, false);
     if json {
         print!(
             "{}",
@@ -518,38 +499,7 @@ fn main() -> ExitCode {
         print!("{}", report::render(&key, &results, verbose));
     }
 
-    if unavailable {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    }
-}
-
-fn inspection_failed(layers: &[LayerResult], has_explicit_target: bool) -> bool {
-    let target_unavailable = layers
-        .iter()
-        .any(|l| l.id == LayerId::Application && l.status() == LayerStatus::Unavailable);
-    if has_explicit_target && target_unavailable {
-        return true;
-    }
-    let budget_exceeded = layers
-        .iter()
-        .any(|l| l.id == LayerId::Diagnostic && l.status() == LayerStatus::Unavailable);
-    if budget_exceeded {
-        return true;
-    }
-    let has_handled = layers.iter().any(|l| {
-        l.status() == LayerStatus::Handled
-            || l.propagation() == Propagation::Stops
-            || l.propagation() == Propagation::Redirected
-    });
-    if has_handled {
-        return false;
-    }
-    !layers.is_empty()
-        && layers
-            .iter()
-            .all(|l| l.status() == LayerStatus::Unavailable)
+    unavailable
 }
 
 fn shell_init(shell: &str) -> String {
@@ -807,7 +757,7 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
     let has_explicit_target = target_pid.is_some() || focused;
     let unavailable = reports
         .iter()
-        .any(|steps| inspection_failed(steps, has_explicit_target));
+        .any(|steps| cli::inspection_failed(steps, has_explicit_target));
 
     if json {
         print!(
