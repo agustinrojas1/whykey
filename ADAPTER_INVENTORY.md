@@ -100,6 +100,10 @@ Adding a new adapter requires updating this inventory, the generated support
 matrix where its capability is user-visible, and a test or documented
 limitation for each advertised behavior.
 
+Listener internals keep terminal protocol decoding (legacy escape sequences
+and Kitty keyboard protocol) behind `listen_protocol`; terminal restoration,
+evdev reads, and report rendering remain separate transport responsibilities.
+
 The deterministic desktop-session fixtures and their CLI-test mapping are in
 [`tests/fixtures/sessions/matrix.json`](tests/fixtures/sessions/matrix.json).
 They cover the adapter shapes without claiming live runtime or version state.
