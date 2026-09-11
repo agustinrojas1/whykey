@@ -20,6 +20,13 @@ pub fn current() -> Vec<Capability> {
     // One snapshot per command: desktop discovery runs once here instead
     // of once per adapter call site.
     let environment = crate::environment::Environment::collect();
+    current_with_environment(&environment)
+}
+
+/// Build capabilities from a caller-owned snapshot. Schema-v2 JSON also
+/// needs that snapshot for its context, so this avoids collecting desktop and
+/// process state twice in one capabilities command.
+pub fn current_with_environment(environment: &crate::environment::Environment) -> Vec<Capability> {
     let ssh = environment.ssh;
     let tty = environment.tty_available;
     let generic_compositor = environment.desktop("compositor").applicable;
@@ -221,9 +228,9 @@ pub fn current() -> Vec<Capability> {
             "Fcitx5 runtime inspection uses bounded read-only D-Bus calls and never launches fcitx5-remote",
         ),
     ];
-    capabilities.extend(desktop_capability_entries(&environment));
+    capabilities.extend(desktop_capability_entries(environment));
     capabilities.extend(runtime_capability_entries());
-    capabilities.extend(extension_capability_entries(&environment));
+    capabilities.extend(extension_capability_entries(environment));
     capabilities.extend(vec![
         available(
             "compositor.generic",
@@ -322,11 +329,20 @@ pub fn render_text(capabilities: &[Capability], all: bool) -> String {
 }
 
 pub fn render_json(capabilities: &[Capability], schema_version: u8) -> String {
+    let environment = crate::environment::Environment::collect();
+    render_json_with_environment(capabilities, schema_version, &environment)
+}
+
+pub fn render_json_with_environment(
+    capabilities: &[Capability],
+    schema_version: u8,
+    environment: &crate::environment::Environment,
+) -> String {
     if schema_version == 2 {
         return serde_json::to_string_pretty(&serde_json::json!({
             "schema_version": 2,
             "operation": "capabilities",
-            "context": schema::context(),
+            "context": schema::context_for_environment(environment),
             "capabilities": capabilities,
         }))
         .expect("capabilities are serializable")

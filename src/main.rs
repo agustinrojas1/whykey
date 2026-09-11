@@ -791,13 +791,14 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
 }
 
 fn run_capabilities(json: bool, all: bool, schema_version: u8) -> ExitCode {
+    let environment = whykey::environment::Environment::collect();
     let capabilities = command::with_deadline(command::configured_diagnostic_timeout(), || {
-        capabilities::current()
+        capabilities::current_with_environment(&environment)
     });
     if json {
         print!(
             "{}",
-            capabilities::render_json(&capabilities, schema_version)
+            capabilities::render_json_with_environment(&capabilities, schema_version, &environment)
         );
     } else {
         print!("{}", capabilities::render_text(&capabilities, all));
