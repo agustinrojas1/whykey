@@ -5,6 +5,7 @@ pub mod dwl;
 pub mod ghostty;
 pub mod gnome;
 pub mod gsettings;
+pub mod herbstluftwm;
 pub mod hyprland;
 pub mod i3;
 pub mod inspection;

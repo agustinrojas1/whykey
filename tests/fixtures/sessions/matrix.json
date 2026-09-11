@@ -50,6 +50,13 @@
       "positive": "literal config.h key table is parsed",
       "negative": "missing DWL_CONFIG is unavailable",
       "ipc_failure": "dwl has no global-shortcut IPC and remains conditional"
+    },
+    {
+      "id": "herbstluftwm",
+      "fixture": "herbstluftwm.json",
+      "positive": "herbstclient list_keybinds returns an effective table",
+      "negative": "missing herbstluftwm socket is unavailable",
+      "ipc_failure": "herbstclient failure remains conditional"
     }
   ]
 }
