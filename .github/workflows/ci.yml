@@ -35,6 +35,8 @@ jobs:
         run: tools/check_package_versions.sh
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Run extension tests
+        run: python3 extensions/tests/run_all.py
       - name: Run tests
         run: cargo test --all-targets --all-features
       - name: Run clippy

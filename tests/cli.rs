@@ -412,6 +412,59 @@ fn whykey_nvim_extension_returns_valid_schema_v1() {
 
 #[cfg(unix)]
 #[test]
+fn whykey_nvim_extension_matches_fixture_runtime_queries() {
+    let fixture_bin = std::fs::canonicalize("tests/fixtures/extensions/nvim/bin").unwrap();
+    let path_env = format!(
+        "{}:{}",
+        fixture_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // 1. Exact mapping: ctrl+x -> :echo 1<CR> (stops)
+    let output = binary()
+        .args(["extension", "extensions/whykey-nvim", "ctrl+x", "--json"])
+        .env("PATH", &path_env)
+        .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains(":echo 1<CR>"));
+
+    // 2. Insert-mode mapping: ctrl+left -> copilot#Accept()
+    let output = binary()
+        .args(["extension", "extensions/whykey-nvim", "ctrl+left", "--json"])
+        .env("PATH", &path_env)
+        .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("copilot#Accept()"));
+
+    // 3. Absent key: ctrl+q -> not_handled / continues
+    let output = binary()
+        .args(["extension", "extensions/whykey-nvim", "ctrl+q", "--json"])
+        .env("PATH", &path_env)
+        .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("no mapping"));
+}
+
+#[cfg(unix)]
+#[test]
 fn whykey_vscode_extension_returns_valid_schema_v1() {
     let output = binary()
         .args(["extension", "extensions/whykey-vscode", "ctrl+x", "--json"])
