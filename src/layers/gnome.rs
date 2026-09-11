@@ -53,15 +53,12 @@ impl Gnome {
         let bindings = match load_bindings() {
             Ok(bindings) => bindings,
             Err(error) => {
-                return LayerResult {
-                    verbose_details: Vec::new(),
-                    binding: None,
-                    layer: "GNOME",
-                    id: LayerId::Compositor,
-                    outcome: Outcome::Unavailable,
-                    summary: "could not inspect GNOME global shortcuts".into(),
-                    details: vec![error],
-                };
+                return LayerResult::unavailable(
+                    "GNOME",
+                    LayerId::Compositor,
+                    "could not inspect GNOME global shortcuts",
+                    vec![error],
+                );
             }
         };
 
@@ -70,15 +67,12 @@ impl Gnome {
             .filter(|binding| &binding.combo == key)
             .collect::<Vec<_>>();
         if matches.is_empty() {
-            return LayerResult {
-                verbose_details: Vec::new(),
-                binding: None,
-                layer: "GNOME",
-                id: LayerId::Compositor,
-                outcome: Outcome::Pass,
-                summary: "no active GNOME global shortcut found".into(),
-                details: vec![format!("source: gsettings {MEDIA_KEYS_SCHEMA}")],
-            };
+            return LayerResult::pass(
+                "GNOME",
+                LayerId::Compositor,
+                "no active GNOME global shortcut found",
+                vec![format!("source: gsettings {MEDIA_KEYS_SCHEMA}")],
+            );
         }
 
         let mut details = vec![format!("source: gsettings {MEDIA_KEYS_SCHEMA}")];

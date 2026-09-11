@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Whykey Verified Baseline Identity Manifest",
+  "description": "Recorded provenance for the pre-refactor reference baseline binary used by the differential comparator.",
+  "source_commit": "fe52e3604ec028b39843f641c48500abe73c5a7e",
+  "source_summary": "fix: preserve diagnostic uncertainty and target routing",
+  "clean_worktree": true,
+  "build_command": "cargo +1.98.1 build --locked --release",
+  "profile": "release",
+  "toolchain": {
+    "channel": "1.98.1",
+    "target": "x86_64-unknown-linux-gnu",
+    "rustc_version": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo_version": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "host": "x86_64-unknown-linux-gnu",
+    "llvm_version": "22.1.8"
+  },
+  "platform_scope": {
+    "os": "Linux",
+    "arch": "x86_64",
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "kernel": "7.1.9-arch1-2 #1 SMP PREEMPT_DYNAMIC Fri, 21 Aug 2026 22:18:59 +0000",
+    "scope_limitation": "This baseline binary hash and artifact are strictly limited to x86_64-unknown-linux-gnu built with the exact recorded Rust 1.98.1 toolchain. Cross-platform bit-for-bit identity is not claimed; runtime behavioral equivalence under controlled test suites is verified."
+  },
+  "cargo_lock_sha256": "5ec9c59ddd4c14a720d22f79603002cfd421d36ac3a9daf229ddaec378b71aa6",
+  "binary_sha256": "5f07d283aa3ada028b000968beb8d264e0a21743b2f5e392a1bc2272c7c4d659",
+  "binary_size_bytes": 2889024,
+  "reconstruction_prerequisites": {
+    "git_checkout_required": true,
+    "documentation": "Reconstructing this baseline requires a Git repository checkout where commit fe52e3604ec028b39843f641c48500abe73c5a7e is reachable. A released source archive or snapshot lacking .git history does not contain historical commits and is insufficient for baseline reconstruction. To rebuild, use: tools/rebuild_baseline.sh --toolchain 1.98.1 fe52e36 target/baseline/whykey"
+  }
+}

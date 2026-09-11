@@ -1,0 +1,58 @@
+{
+  "assessment": {
+    "confidence": "high",
+    "terminal_reached": false
+  },
+  "context": {
+    "desktop": "Hyprland",
+    "display_server": "Wayland",
+    "session_desktop": "Hyprland",
+    "session_type": "wayland",
+    "shell": null,
+    "ssh": false,
+    "terminal": "Ghostty"
+  },
+  "input": {
+    "key": {
+      "key": "Return",
+      "modifiers": 8
+    },
+    "key_display": "SUPER + RETURN",
+    "kind": "key"
+  },
+  "observation": null,
+  "operation": "inspect",
+  "path": [
+    {
+      "binding": {
+        "action": "kitty",
+        "description": "Spawn terminal",
+        "dispatcher": "exec",
+        "has_universal_match": false,
+        "scope": {
+          "Submap": "default"
+        },
+        "source": {
+          "file": "/etc/hyprland/hyprland.conf",
+          "line": 42
+        },
+        "submap": "default"
+      },
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "active submap: default"
+        },
+        {
+          "kind": "detail",
+          "text": "binding: exec kitty; Spawn terminal (default)"
+        }
+      ],
+      "layer": "Hyprland",
+      "propagation": "Stops",
+      "status": "Handled",
+      "summary": "active binding found; event is consumed"
+    }
+  ],
+  "schema_version": 2
+}

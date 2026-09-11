@@ -441,15 +441,98 @@ fn render_inner(
     output
 }
 
-/// The conclusion answers the user's question first: which layer finally
-/// handles the key, or why no layer can claim it.
-fn render_conclusion(
-    key: &KeyCombo,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conclusion {
+    SuppressedHandled {
+        universal_match: bool,
+        handled: SuppressedHandledOutcome,
+    },
+    ConfiguredConsumer {
+        layer: &'static str,
+        assumes_earlier_forward: bool,
+    },
+    ConfiguredRedirect {
+        layer: &'static str,
+        assumes_earlier_forward: bool,
+    },
+    SelectedApplication {
+        layer: &'static str,
+        status: ApplicationStatus,
+    },
+    UnverifiedSession {
+        layer: &'static str,
+    },
+    HandledAndForwarded {
+        layers: Vec<&'static str>,
+        uncertain: bool,
+        uninspected_layer: Option<&'static str>,
+    },
+    CouldNotInspect {
+        layer: &'static str,
+    },
+    ModifierAmbiguity {
+        layer: &'static str,
+    },
+    IndeterminateForwarding {
+        layer: &'static str,
+    },
+    ConditionalForwarding,
+    NoLayersInspected,
+    UnhandledContinues,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApplicationStatus {
+    Unavailable,
+    UnresolvedMode,
+    UnverifiedExecution,
+    InteractiveGeneric(String),
+    NoMatchingKeymap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuppressedHandledOutcome {
+    IndeterminatePropagation {
+        action: Option<String>,
+    },
+    Universal {
+        layer: &'static str,
+        action: Option<String>,
+    },
+    Opaque {
+        layer: &'static str,
+        action: Option<String>,
+    },
+    Standard {
+        layer: &'static str,
+        action: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapturePreamble {
+    Suppressed { universal_match: bool },
+    HyprlandPassedThrough,
+    TerminalObserved,
+    HyprlandObserved,
+    EvdevObserved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvaluatedConclusion {
+    pub preamble: Option<CapturePreamble>,
+    pub conclusion: Conclusion,
+}
+
+/// Pure conclusion evaluation converting layer findings and capture context
+/// into a typed conclusion before rendering.
+pub fn evaluate_conclusion(
     layers: &[LayerResult],
     observation: Option<&ObservedKey>,
     terminal_observed: bool,
-) -> String {
-    let mut output = String::from("Result:\n");
+) -> EvaluatedConclusion {
+    let mut preamble = None;
+
     if let Some(observation) = observation {
         match observation.disposition {
             crate::listen::CaptureDisposition::Suppressed => {
@@ -458,17 +541,7 @@ fn render_conclusion(
                         .as_ref()
                         .is_some_and(BindingEvidence::includes_universal_match)
                 });
-                if universal_match {
-                    output.push_str(
-                        "  Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute.\n",
-                    );
-                } else {
-                    output.push_str("  Whykey captured and suppressed this event.\n");
-                }
                 if let Some(layer) = layers.iter().find(|l| l.status() == LayerStatus::Handled) {
-                    // Decisions read typed evidence only: detail wording never
-                    // changes the conclusion, and an opaque dispatcher never
-                    // becomes "executed" or "consumed".
                     let evidence = layer.binding.as_ref();
                     let action = evidence.and_then(|binding| {
                         binding
@@ -477,142 +550,100 @@ fn render_conclusion(
                             .or_else(|| binding.action.clone())
                     });
                     let opaque = evidence.is_some_and(BindingEvidence::is_opaque);
-                    if layer.propagation() == Propagation::Indeterminate {
-                        output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
-                        if let Some(action) = action {
-                            output.push_str(&format!(
-                                "  The configuration describes the action as {action}; Whykey did not execute the dispatcher.\n"
-                            ));
+                    let handled = if layer.propagation() == Propagation::Indeterminate {
+                        SuppressedHandledOutcome::IndeterminatePropagation { action }
+                    } else if universal_match {
+                        SuppressedHandledOutcome::Universal {
+                            layer: layer.layer,
+                            action,
                         }
-                        return output;
-                    }
-                    match (universal_match, opaque, action) {
-                        (true, _, Some(action)) => {
-                            output.push_str(&format!(
-                                "  The normal configuration indicates that {} may execute {}.\n",
-                                layer.layer, action
-                            ));
+                    } else if opaque {
+                        SuppressedHandledOutcome::Opaque {
+                            layer: layer.layer,
+                            action,
                         }
-                        (true, _, None) => {
-                            output.push_str(&format!(
-                                "  The normal configuration indicates that {} universal binding may handle {key}.\n",
-                                layer.layer
-                            ));
+                    } else {
+                        SuppressedHandledOutcome::Standard {
+                            layer: layer.layer,
+                            action,
                         }
-                        (false, true, Some(action)) => {
-                            output.push_str(&format!(
-                                "  The normal configuration indicates that {} may execute {}; Whykey did not execute the dispatcher.\n",
-                                layer.layer, action
-                            ));
-                        }
-                        (false, true, None) => {
-                            output.push_str(&format!(
-                                "  The normal configuration indicates that {} may handle {key}; Whykey did not execute the dispatcher.\n",
-                                layer.layer
-                            ));
-                        }
-                        (false, false, Some(action)) => {
-                            output.push_str(&format!(
-                                "  The normal configuration indicates that {} would run {}.\n",
-                                layer.layer, action
-                            ));
-                        }
-                        (false, false, None) => {
-                            output.push_str(&format!(
-                                "  The normal configuration indicates that {} would handle and consume {key}.\n",
-                                layer.layer
-                            ));
-                        }
-                    }
-                    return output;
+                    };
+                    return EvaluatedConclusion {
+                        preamble: None,
+                        conclusion: Conclusion::SuppressedHandled {
+                            universal_match,
+                            handled,
+                        },
+                    };
+                } else {
+                    preamble = Some(CapturePreamble::Suppressed { universal_match });
                 }
             }
             crate::listen::CaptureDisposition::PassedThrough => {
-                output.push_str(
-                    "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
-                );
+                preamble = Some(CapturePreamble::HyprlandPassedThrough);
             }
             crate::listen::CaptureDisposition::ObservedOnly => match &observation.source {
                 crate::listen::CaptureSource::Terminal => {
-                    output.push_str(
-                            "  The captured event reached this terminal, so earlier forwarding is confirmed.\n",
-                        );
+                    preamble = Some(CapturePreamble::TerminalObserved);
                 }
                 crate::listen::CaptureSource::Hyprland => {
-                    output.push_str(
-                            "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
-                        );
+                    preamble = Some(CapturePreamble::HyprlandObserved);
                 }
                 crate::listen::CaptureSource::Evdev { .. } => {
-                    output.push_str(
-                            "  The physical key event was captured before the compositor; forwarding is not confirmed.\n",
-                        );
+                    preamble = Some(CapturePreamble::EvdevObserved);
                 }
             },
         }
     }
+
+    let conclusion = evaluate_layer_conclusion(layers, terminal_observed);
+    EvaluatedConclusion {
+        preamble,
+        conclusion,
+    }
+}
+
+fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) -> Conclusion {
     if let Some(layer) = layers
         .iter()
         .find(|l| l.propagation() == Propagation::Stops)
     {
-        let qualifier = (!terminal_observed && prior_uncertainty(layers))
-            .then_some("Assuming earlier uncertain layers forward it, ");
-        output.push_str(&format!(
-            "  ✓ Configured handler: {}\n  {}{} is configured to consume {key}.\n  It should not reach a later layer under this configuration.\n",
-            layer.layer,
-            qualifier.unwrap_or_default(),
-            layer.layer
-        ));
-        output.push('\n');
-        return output;
+        return Conclusion::ConfiguredConsumer {
+            layer: layer.layer,
+            assumes_earlier_forward: !terminal_observed && prior_uncertainty(layers),
+        };
     }
     if let Some(layer) = layers
         .iter()
         .find(|l| l.propagation() == Propagation::Redirected)
     {
-        let qualifier = (!terminal_observed && prior_uncertainty(layers))
-            .then_some("Assuming earlier uncertain layers forward it, ");
-        output.push_str(&format!(
-            "  ✓ Configured handler: {}\n  {}{} is configured to redirect {key} to another window.\n  It should not reach a later layer in this chain under this configuration.\n",
-            layer.layer,
-            qualifier.unwrap_or_default(),
-            layer.layer
-        ));
-        output.push('\n');
-        return output;
+        return Conclusion::ConfiguredRedirect {
+            layer: layer.layer,
+            assumes_earlier_forward: !terminal_observed && prior_uncertainty(layers),
+        };
     }
 
     let active_app = layers
         .last()
         .filter(|l| l.id == LayerId::Application && l.outcome != Outcome::Pass);
     if let Some(app) = active_app {
-        if app.outcome == Outcome::Unavailable {
-            output.push_str(&format!("  Could not inspect {}.\n", app.layer));
+        let status = if app.outcome == Outcome::Unavailable {
+            ApplicationStatus::Unavailable
         } else if let Some(binding) = &app.binding {
             if binding.uncertainty == Some(UncertaintyReason::UnresolvedMode) {
-                output.push_str(&format!(
-                    "  Selected target: {} has a matching keymap for {key}, but mode-dependent execution is uncertain.\n",
-                    app.layer
-                ));
+                ApplicationStatus::UnresolvedMode
             } else {
-                output.push_str(&format!(
-                    "  Selected target: {} matches {key}; execution is unverified.\n",
-                    app.layer
-                ));
+                ApplicationStatus::UnverifiedExecution
             }
-        } else if app.layer == "Interactive application" {
-            output.push_str(&format!(
-                "  Selected target: {}; application shortcut handling is unverified.\n",
-                app.summary
-            ));
+        } else if app.outcome == Outcome::UnadaptedTarget {
+            ApplicationStatus::InteractiveGeneric(app.summary.clone())
         } else {
-            output.push_str(&format!(
-                "  Selected target: {}; no matching keymap was found for {key}.\n",
-                app.layer
-            ));
-        }
-        output.push('\n');
-        return output;
+            ApplicationStatus::NoMatchingKeymap
+        };
+        return Conclusion::SelectedApplication {
+            layer: app.layer,
+            status,
+        };
     }
 
     let unverified_session = layers.iter().find(|l| {
@@ -622,12 +653,9 @@ fn render_conclusion(
                 == Some(UncertaintyReason::UnverifiedTerminalBytes)
     });
     if let Some(session) = unverified_session {
-        output.push_str(&format!(
-            "  {} has a candidate binding for {key} in the root table, but terminal byte delivery could not be verified.\n",
-            session.layer
-        ));
-        output.push('\n');
-        return output;
+        return Conclusion::UnverifiedSession {
+            layer: session.layer,
+        };
     }
 
     let handled_layers: Vec<_> = layers
@@ -635,81 +663,289 @@ fn render_conclusion(
         .filter(|layer| layer.status() == LayerStatus::Handled)
         .collect();
     if !handled_layers.is_empty() {
-        let names: Vec<_> = handled_layers.iter().map(|l| l.layer).collect();
-        if !terminal_observed && has_uncertain_layer(layers) {
-            output.push_str(&format!(
-                "  {} has a matching binding for {key}; forwarding is uncertain. Other layers may also handle it.\n  Downstream layer results are conditional.\n",
-                names.join(", ")
-            ));
-        } else {
-            output.push_str(&format!(
-                "  {} has a matching binding for {key} and is configured to forward it.\n  It should continue to the next layer.\n",
-                names.join(", ")
-            ));
-        }
-        if let Some(unavailable) = layers
+        let names = handled_layers.iter().map(|l| l.layer).collect();
+        let uncertain = !terminal_observed && has_uncertain_layer(layers);
+        let uninspected_layer = layers
             .iter()
             .find(|l| l.status() == LayerStatus::Unavailable)
-        {
-            output.push_str(&format!(
-                "  Note: {} was not inspected.\n",
-                unavailable.layer
-            ));
-        }
-        output.push('\n');
-        return output;
+            .map(|l| l.layer);
+        return Conclusion::HandledAndForwarded {
+            layers: names,
+            uncertain,
+            uninspected_layer,
+        };
     }
+
     if layers
         .iter()
         .all(|l| l.status() == LayerStatus::Unavailable)
     {
-        let layer = layers.last().unwrap();
-        output.push_str(&format!("  Could not inspect {}.\n", layer.layer));
-        output.push('\n');
-        return output;
+        return Conclusion::CouldNotInspect {
+            layer: layers.last().unwrap().layer,
+        };
     }
+
     if let Some(layer) = layers.last().filter(|l| {
         l.status() == LayerStatus::Unavailable
             && (l.id == LayerId::Application || l.id == LayerId::Diagnostic)
     }) {
-        output.push_str(&format!("  Could not inspect {}.\n", layer.layer));
-        output.push('\n');
-        return output;
+        return Conclusion::CouldNotInspect { layer: layer.layer };
     }
 
     if let Some(layer) = layers.iter().find(|l| {
-        l.status() == LayerStatus::Indeterminate && l.summary.contains("no exact binding")
+        l.status() == LayerStatus::Indeterminate
+            && l.binding.as_ref().and_then(|b| b.uncertainty)
+                == Some(UncertaintyReason::ModifierAmbiguity)
     }) {
-        output.push_str(&format!(
-            "  No exact binding for {key} was found in {}.\n  Some same-key bindings may ignore modifiers, so forwarding cannot be proven.\n",
-            layer.layer
-        ));
-        output.push('\n');
-        return output;
+        return Conclusion::ModifierAmbiguity { layer: layer.layer };
     }
     if let Some(layer) = layers.iter().find(|l| {
         l.status() == LayerStatus::Indeterminate && l.propagation() == Propagation::Indeterminate
     }) {
-        output.push_str(&format!(
-            "  Could not determine whether {} forwards {key}.\n",
-            layer.layer
-        ));
-        output.push('\n');
-        return output;
+        return Conclusion::IndeterminateForwarding { layer: layer.layer };
     }
 
     if !terminal_observed && has_uncertain_layer(layers) {
-        output.push_str(&format!(
-            "  {key} may be forwarded, but one or more layers are uncertain.\n  Downstream layer results are conditional.\n"
-        ));
+        Conclusion::ConditionalForwarding
     } else if layers.is_empty() {
-        output.push_str("  No layers were inspected.\n");
+        Conclusion::NoLayersInspected
     } else {
-        output.push_str(&format!(
-            "  No inspected layer has a matching binding for {key}.\n  It should continue to the next layer.\n"
-        ));
+        Conclusion::UnhandledContinues
     }
-    output.push('\n');
+}
+
+/// The conclusion answers the user's question first: which layer finally
+/// handles the key, or why no layer can claim it.
+fn render_conclusion(
+    key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    terminal_observed: bool,
+) -> String {
+    let evaluated = evaluate_conclusion(layers, observation, terminal_observed);
+    let mut output = String::from("Result:\n");
+    if let Some(preamble) = &evaluated.preamble {
+        match preamble {
+            CapturePreamble::Suppressed {
+                universal_match: true,
+            } => {
+                output.push_str(
+                    "  Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute.\n",
+                );
+            }
+            CapturePreamble::Suppressed {
+                universal_match: false,
+            } => {
+                output.push_str("  Whykey captured and suppressed this event.\n");
+            }
+            CapturePreamble::HyprlandPassedThrough => {
+                output.push_str(
+                    "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
+                );
+            }
+            CapturePreamble::TerminalObserved => {
+                output.push_str(
+                    "  The captured event reached this terminal, so earlier forwarding is confirmed.\n",
+                );
+            }
+            CapturePreamble::HyprlandObserved => {
+                output.push_str(
+                    "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
+                );
+            }
+            CapturePreamble::EvdevObserved => {
+                output.push_str(
+                    "  The physical key event was captured before the compositor; forwarding is not confirmed.\n",
+                );
+            }
+        }
+    }
+
+    match &evaluated.conclusion {
+        Conclusion::SuppressedHandled {
+            universal_match,
+            handled,
+        } => {
+            if *universal_match {
+                output.push_str(
+                    "  Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute.\n",
+                );
+            } else {
+                output.push_str("  Whykey captured and suppressed this event.\n");
+            }
+            match handled {
+                SuppressedHandledOutcome::IndeterminatePropagation { action } => {
+                    output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
+                    if let Some(action) = action {
+                        output.push_str(&format!(
+                            "  The configuration describes the action as {action}; Whykey did not execute the dispatcher.\n"
+                        ));
+                    }
+                }
+                SuppressedHandledOutcome::Universal {
+                    layer,
+                    action: Some(action),
+                } => {
+                    output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} may execute {action}.\n"
+                    ));
+                }
+                SuppressedHandledOutcome::Universal {
+                    layer,
+                    action: None,
+                } => {
+                    output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} universal binding may handle {key}.\n"
+                    ));
+                }
+                SuppressedHandledOutcome::Opaque {
+                    layer,
+                    action: Some(action),
+                } => {
+                    output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} may execute {action}; Whykey did not execute the dispatcher.\n"
+                    ));
+                }
+                SuppressedHandledOutcome::Opaque {
+                    layer,
+                    action: None,
+                } => {
+                    output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} may handle {key}; Whykey did not execute the dispatcher.\n"
+                    ));
+                }
+                SuppressedHandledOutcome::Standard {
+                    layer,
+                    action: Some(action),
+                } => {
+                    output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} would run {action}.\n"
+                    ));
+                }
+                SuppressedHandledOutcome::Standard {
+                    layer,
+                    action: None,
+                } => {
+                    output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} would handle and consume {key}.\n"
+                    ));
+                }
+            }
+            return output;
+        }
+        Conclusion::ConfiguredConsumer {
+            layer,
+            assumes_earlier_forward,
+        } => {
+            let qualifier = if *assumes_earlier_forward {
+                "Assuming earlier uncertain layers forward it, "
+            } else {
+                ""
+            };
+            output.push_str(&format!(
+                "  ✓ Configured handler: {layer}\n  {qualifier}{layer} is configured to consume {key}.\n  It should not reach a later layer under this configuration.\n\n"
+            ));
+            return output;
+        }
+        Conclusion::ConfiguredRedirect {
+            layer,
+            assumes_earlier_forward,
+        } => {
+            let qualifier = if *assumes_earlier_forward {
+                "Assuming earlier uncertain layers forward it, "
+            } else {
+                ""
+            };
+            output.push_str(&format!(
+                "  ✓ Configured handler: {layer}\n  {qualifier}{layer} is configured to redirect {key} to another window.\n  It should not reach a later layer in this chain under this configuration.\n\n"
+            ));
+            return output;
+        }
+        Conclusion::SelectedApplication { layer, status } => {
+            match status {
+                ApplicationStatus::Unavailable => {
+                    output.push_str(&format!("  Could not inspect {layer}.\n\n"));
+                }
+                ApplicationStatus::UnresolvedMode => {
+                    output.push_str(&format!(
+                        "  Selected target: {layer} has a matching keymap for {key}, but mode-dependent execution is uncertain.\n\n"
+                    ));
+                }
+                ApplicationStatus::UnverifiedExecution => {
+                    output.push_str(&format!(
+                        "  Selected target: {layer} matches {key}; execution is unverified.\n\n"
+                    ));
+                }
+                ApplicationStatus::InteractiveGeneric(summary) => {
+                    output.push_str(&format!(
+                        "  Selected target: {summary}; application shortcut handling is unverified.\n\n"
+                    ));
+                }
+                ApplicationStatus::NoMatchingKeymap => {
+                    output.push_str(&format!(
+                        "  Selected target: {layer}; no matching keymap was found for {key}.\n\n"
+                    ));
+                }
+            }
+            return output;
+        }
+        Conclusion::UnverifiedSession { layer } => {
+            output.push_str(&format!(
+                "  {layer} has a candidate binding for {key} in the root table, but terminal byte delivery could not be verified.\n\n"
+            ));
+            return output;
+        }
+        Conclusion::HandledAndForwarded {
+            layers,
+            uncertain,
+            uninspected_layer,
+        } => {
+            let names = layers.join(", ");
+            if *uncertain {
+                output.push_str(&format!(
+                    "  {names} has a matching binding for {key}; forwarding is uncertain. Other layers may also handle it.\n  Downstream layer results are conditional.\n"
+                ));
+            } else {
+                output.push_str(&format!(
+                    "  {names} has a matching binding for {key} and is configured to forward it.\n  It should continue to the next layer.\n"
+                ));
+            }
+            if let Some(unavailable) = uninspected_layer {
+                output.push_str(&format!("  Note: {unavailable} was not inspected.\n"));
+            }
+            output.push('\n');
+            return output;
+        }
+        Conclusion::CouldNotInspect { layer } => {
+            output.push_str(&format!("  Could not inspect {layer}.\n\n"));
+            return output;
+        }
+        Conclusion::ModifierAmbiguity { layer } => {
+            output.push_str(&format!(
+                "  No exact binding for {key} was found in {layer}.\n  Some same-key bindings may ignore modifiers, so forwarding cannot be proven.\n\n"
+            ));
+            return output;
+        }
+        Conclusion::IndeterminateForwarding { layer } => {
+            output.push_str(&format!(
+                "  Could not determine whether {layer} forwards {key}.\n\n"
+            ));
+            return output;
+        }
+        Conclusion::ConditionalForwarding => {
+            output.push_str(&format!(
+                "  {key} may be forwarded, but one or more layers are uncertain.\n  Downstream layer results are conditional.\n\n"
+            ));
+        }
+        Conclusion::NoLayersInspected => {
+            output.push_str("  No layers were inspected.\n\n");
+        }
+        Conclusion::UnhandledContinues => {
+            output.push_str(&format!(
+                "  No inspected layer has a matching binding for {key}.\n  It should continue to the next layer.\n\n"
+            ));
+        }
+    }
     output
 }
 
@@ -1715,5 +1951,143 @@ mod tests {
         ));
         assert!(!output.contains("Bash"));
         assert!(!output.contains("Readline"));
+    }
+
+    #[test]
+    fn evaluate_conclusion_precedence() {
+        let consumer = LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "Ghostty",
+            id: LayerId::Terminal,
+            outcome: Outcome::Consumed,
+            summary: "copy".into(),
+            details: vec![],
+        };
+        let app = LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "Neovim",
+            id: LayerId::Application,
+            outcome: Outcome::HandledUncertain,
+            summary: "mode".into(),
+            details: vec![],
+        };
+
+        // Consumer before app -> ConfiguredConsumer takes precedence
+        let eval = evaluate_conclusion(&[consumer.clone(), app.clone()], None, false);
+        assert_eq!(
+            eval.conclusion,
+            Conclusion::ConfiguredConsumer {
+                layer: "Ghostty",
+                assumes_earlier_forward: false,
+            }
+        );
+
+        // App without consumer -> SelectedApplication
+        let eval = evaluate_conclusion(&[app], None, false);
+        assert!(matches!(
+            eval.conclusion,
+            Conclusion::SelectedApplication {
+                layer: "Neovim",
+                status: ApplicationStatus::NoMatchingKeymap,
+            }
+        ));
+    }
+
+    #[test]
+    fn evaluate_conclusion_typed_modifier_ambiguity() {
+        let layer = LayerResult {
+            verbose_details: Vec::new(),
+            binding: Some(BindingEvidence {
+                dispatcher: None,
+                action: None,
+                description: None,
+                submap: None,
+                scope: BindingScope::Unknown,
+                source: None,
+                has_universal_match: false,
+                uncertainty: Some(UncertaintyReason::ModifierAmbiguity),
+            }),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::UncertainContinues,
+            summary: "arbitrary reworded summary text".into(),
+            details: vec![],
+        };
+        let eval = evaluate_conclusion(&[layer], None, false);
+        assert_eq!(
+            eval.conclusion,
+            Conclusion::ModifierAmbiguity { layer: "Hyprland" }
+        );
+    }
+
+    #[test]
+    fn evaluate_conclusion_summary_wording_independence() {
+        // Changing summary text must not change the conclusion when typed uncertainty is present
+        let layer = LayerResult {
+            verbose_details: Vec::new(),
+            binding: Some(BindingEvidence {
+                dispatcher: None,
+                action: None,
+                description: None,
+                submap: None,
+                scope: BindingScope::Unknown,
+                source: None,
+                has_universal_match: false,
+                uncertainty: Some(UncertaintyReason::ModifierAmbiguity),
+            }),
+            layer: "Hyprland",
+            id: LayerId::Compositor,
+            outcome: Outcome::UncertainContinues,
+            summary: "something completely custom and unrelated to bindings".into(),
+            details: vec![],
+        };
+        let eval = evaluate_conclusion(&[layer], None, false);
+        assert_eq!(
+            eval.conclusion,
+            Conclusion::ModifierAmbiguity { layer: "Hyprland" }
+        );
+    }
+
+    #[test]
+    fn evaluate_conclusion_display_label_independence() {
+        // Generic unadapted target with custom display label
+        let custom_app = LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "Custom Process Display Name",
+            id: LayerId::Application,
+            outcome: Outcome::UnadaptedTarget,
+            summary: "custom process summary".into(),
+            details: vec![],
+        };
+        let eval = evaluate_conclusion(&[custom_app], None, false);
+        assert_eq!(
+            eval.conclusion,
+            Conclusion::SelectedApplication {
+                layer: "Custom Process Display Name",
+                status: ApplicationStatus::InteractiveGeneric("custom process summary".into()),
+            }
+        );
+
+        // Profiled editor with custom display label (no matching keymap)
+        let profiled_app = LayerResult {
+            verbose_details: Vec::new(),
+            binding: None,
+            layer: "My Customized Neovim",
+            id: LayerId::Application,
+            outcome: Outcome::Unknown,
+            summary: "no matching mapping".into(),
+            details: vec![],
+        };
+        let eval2 = evaluate_conclusion(&[profiled_app], None, false);
+        assert_eq!(
+            eval2.conclusion,
+            Conclusion::SelectedApplication {
+                layer: "My Customized Neovim",
+                status: ApplicationStatus::NoMatchingKeymap,
+            }
+        );
     }
 }

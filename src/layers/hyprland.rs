@@ -1569,8 +1569,14 @@ fn inspect_json_with_keycode(
     let has_universal_match = matches
         .iter()
         .any(|matched| matched.binding.submap_universal);
-    let binding = primary_match(&matches)
-        .map(|matched| binding_evidence(matched.binding, lua_hints, has_universal_match));
+    let binding = primary_match(&matches).map(|matched| {
+        let mut evidence = binding_evidence(matched.binding, lua_hints, has_universal_match);
+        if evidence.uncertainty.is_none() && matched.certainty == MatchCertainty::PossibleIgnoreMods
+        {
+            evidence.uncertainty = Some(crate::layers::UncertaintyReason::ModifierAmbiguity);
+        }
+        evidence
+    });
 
     Ok(LayerResult {
         verbose_details,

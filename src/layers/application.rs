@@ -107,7 +107,7 @@ fn inspect_for_pid_with_source_inner(
             binding: None,
             layer: "Interactive application",
             id: LayerId::Application,
-            outcome: Outcome::Unknown,
+            outcome: Outcome::UnadaptedTarget,
             summary: format!(
                 "selected process '{bin_name}' ({target_pid}) has no dedicated shortcut adapter; handling is unverified"
             ),

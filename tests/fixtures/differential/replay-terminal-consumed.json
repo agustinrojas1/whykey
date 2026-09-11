@@ -1,0 +1,64 @@
+{
+  "assessment": {
+    "confidence": "high",
+    "terminal_reached": true
+  },
+  "context": {
+    "desktop": "generic",
+    "display_server": "Wayland",
+    "session_desktop": "generic",
+    "session_type": "wayland",
+    "shell": null,
+    "ssh": false,
+    "terminal": "Ghostty"
+  },
+  "input": {
+    "key": {
+      "key": "C",
+      "modifiers": 5
+    },
+    "key_display": "CTRL + SHIFT + C",
+    "kind": "key"
+  },
+  "observation": null,
+  "operation": "inspect",
+  "path": [
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "no desktop compositor"
+        }
+      ],
+      "layer": "Compositor",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no desktop compositor detected; event forwarded to terminal"
+    },
+    {
+      "binding": {
+        "action": "copy_to_clipboard",
+        "description": "Copy selection to clipboard",
+        "dispatcher": "internal",
+        "has_universal_match": false,
+        "scope": "Global",
+        "source": {
+          "file": "/etc/ghostty/config",
+          "line": 10
+        },
+        "submap": null
+      },
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "action: copy_to_clipboard"
+        }
+      ],
+      "layer": "Ghostty",
+      "propagation": "Stops",
+      "status": "Handled",
+      "summary": "Ghostty binding consumes the key"
+    }
+  ],
+  "schema_version": 2
+}

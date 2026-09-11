@@ -1,0 +1,68 @@
+{
+  "assessment": {
+    "confidence": "high",
+    "terminal_reached": true
+  },
+  "context": {
+    "desktop": "generic",
+    "display_server": "Wayland",
+    "session_desktop": "generic",
+    "session_type": "wayland",
+    "shell": null,
+    "ssh": false,
+    "terminal": "Ghostty"
+  },
+  "input": {
+    "key": {
+      "key": "Z",
+      "modifiers": 4
+    },
+    "key_display": "CTRL + Z",
+    "kind": "key"
+  },
+  "observation": null,
+  "operation": "inspect",
+  "path": [
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "no desktop compositor"
+        }
+      ],
+      "layer": "Compositor",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no desktop compositor detected; event forwarded to terminal"
+    },
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "byte: 0x1a"
+        }
+      ],
+      "layer": "Ghostty",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no Ghostty binding; forwarded to terminal"
+    },
+    {
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "termios flag ISIG is enabled"
+        },
+        {
+          "kind": "detail",
+          "text": "c_cc[VSUSP] matches byte 0x1a"
+        }
+      ],
+      "layer": "TTY driver",
+      "propagation": "Stops",
+      "status": "Handled",
+      "summary": "interprets byte 0x1a as VSUSP; sends SIGTSTP to foreground process group"
+    }
+  ],
+  "schema_version": 2
+}
