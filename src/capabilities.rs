@@ -280,8 +280,8 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
                 || env::var_os("ZELLIJ_SESSION_NAME").is_some(),
             "tmux, GNU Screen, and Zellij adapters are available when their session markers are present",
         ),
-        planned(
-            "input.ime",
+        implemented(
+            "input.ime-limits",
             "input",
             "active-engine context is available, but committed text, dead-key/Compose history, and application-side preedit state remain unobservable from a passive terminal diagnostic",
         ),

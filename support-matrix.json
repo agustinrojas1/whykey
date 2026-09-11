@@ -41,14 +41,14 @@
     {"id": "compositor.programmable-x11", "area": "compositor", "implemented": true, "summary": "Inspect literal AwesomeWM, Qtile, and XMonad mappings."},
     {"id": "compositor.x11.xbindkeys", "area": "compositor", "implemented": true, "summary": "Inspect literal X11 xbindkeys configuration."},
     {"id": "compositor.portal-globalshortcuts", "area": "compositor", "implemented": true, "summary": "Probe read-only xdg-desktop-portal GlobalShortcuts availability; the API does not expose an existing binding inventory."},
-    {"id": "compositor.kglobalaccel-runtime", "area": "compositor", "implemented": true, "summary": "Probe live org.kde.KGlobalAccel registrations while retaining kglobalshortcutsrc as the static inventory source."},
+    {"id": "compositor.kglobalaccel-runtime", "area": "compositor", "implemented": true, "summary": "Probe live org.kde.KGlobalAccel availability; no read-only runtime enumeration is claimed, so kglobalshortcutsrc remains the static inventory source."},
     {"id": "compositor.gnome-shell-runtime", "area": "compositor", "implemented": true, "summary": "Probe GNOME Shell runtime reachability; Shell does not expose a read-only full keybinding dump."},
     {"id": "compositor.generic", "area": "compositor", "implemented": true, "summary": "Report generic desktop/session context with opaque global bindings."},
     {"id": "compositor.additional-desktops", "area": "compositor", "implemented": false, "summary": "Additional desktop integrations beyond the supported adapter set."},
     {"id": "terminal.dedicated", "area": "terminal", "implemented": true, "summary": "Detect and query a dedicated terminal adapter when available."},
     {"id": "shell.runtime-snapshot", "area": "shell", "implemented": true, "summary": "Use a live Bash, Zsh, or Fish binding snapshot when shell-init supplied one."},
     {"id": "session.multiplexers", "area": "session", "implemented": true, "summary": "Detect tmux, GNU Screen, and Zellij session context."},
-    {"id": "input.ime", "area": "input", "implemented": false, "summary": "Complete committed-text, dead-key/Compose, and application preedit reconstruction."},
+    {"id": "input.ime-limits", "area": "input", "implemented": true, "summary": "Expose typed committed-text, Compose/dead-key, and application-preedit observability limits; passive capture does not reconstruct text history."},
     {"id": "safety.read-only", "area": "safety", "implemented": true, "summary": "Keep adapters read-only and never execute the investigated action."}
   ]
 }
