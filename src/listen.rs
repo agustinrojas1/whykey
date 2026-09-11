@@ -512,7 +512,10 @@ fn run_native(
     let mut terminal = TerminalSession::open()?;
     let original_termios = terminal.original;
     let tty_fd = terminal.tty.as_raw_fd();
-    let socket_fd = capture_session.socket_fd();
+    let socket_fd = capture_session
+        .transport()
+        .poll_fd()
+        .ok_or_else(|| ListenError::Setup("native capture transport is not pollable".into()))?;
     let _ = flush_input(tty_fd);
 
     if let Err(err) = capture_session.arm_token(options.capture_policy) {
@@ -578,7 +581,7 @@ fn run_native(
 
             if capture_session.is_suppressing() && last_renewed.elapsed() >= Duration::from_secs(2)
             {
-                capture_session.renew_lease().map_err(|e| {
+                capture_session.transport().renew_lease().map_err(|e| {
                     ListenError::Message(format!("failed to renew capture lease: {e}"))
                 })?;
                 last_renewed = Instant::now();
@@ -636,7 +639,7 @@ fn run_native(
                 )));
             }
             if pollfds[0].revents & libc::POLLIN != 0 {
-                if let Err(err) = capture_session.read_incoming() {
+                if let Err(err) = capture_session.transport().read_incoming() {
                     let _ = flush_input(tty_fd);
                     capture_session.close().map_err(ListenError::Io)?;
                     return Err(ListenError::Io(err));

@@ -135,12 +135,22 @@ pub trait CaptureBackend {
 }
 
 /// Transport operations kept separate from the backend's capture contract.
-/// The listen loop uses these to poll an event source without making the
-/// public backend trait know about Unix file descriptors.
-pub trait NativeCaptureIo: CaptureBackend {
-    fn socket_fd(&self) -> RawFd;
+/// A transport may be pollable (for example, a Unix socket) or drive events
+/// through another mechanism. Lease renewal is optional because not every
+/// native backend owns a temporary lease.
+pub trait NativeCaptureTransport {
+    fn poll_fd(&self) -> Option<RawFd>;
     fn read_incoming(&mut self) -> io::Result<usize>;
-    fn renew_lease(&self) -> io::Result<()>;
+    fn renew_lease(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Native backend plus the transport used by the listen loop today. Keeping
+/// this small bridge lets future portal or extension transports omit fd/lease
+/// details without expanding `CaptureBackend` itself.
+pub trait NativeCaptureIo: CaptureBackend {
+    fn transport(&mut self) -> &mut dyn NativeCaptureTransport;
 }
 
 #[cfg(test)]
@@ -166,5 +176,29 @@ mod tests {
         );
         assert_eq!(CaptureBackendId::Terminal.to_string(), "Terminal");
         assert_eq!(CaptureBackendId::Evdev.to_string(), "Evdev");
+    }
+
+    struct FakeTransport {
+        reads: usize,
+    }
+
+    impl NativeCaptureTransport for FakeTransport {
+        fn poll_fd(&self) -> Option<RawFd> {
+            None
+        }
+
+        fn read_incoming(&mut self) -> io::Result<usize> {
+            self.reads += 1;
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn fake_transport_supports_non_pollable_sources_and_optional_lease() {
+        let mut transport = FakeTransport { reads: 0 };
+        assert_eq!(transport.poll_fd(), None);
+        assert_eq!(transport.read_incoming().unwrap(), 1);
+        transport.renew_lease().unwrap();
+        assert_eq!(transport.reads, 1);
     }
 }
