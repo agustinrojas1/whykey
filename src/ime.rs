@@ -110,6 +110,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     let mut details = Vec::new();
     let mut runtime_active = false;
     let mut runtime_inactive = false;
+    let mut runtime_unreachable = false;
     for detection in detections {
         details.push(format!("detected: {}", detection.engine));
         details.extend(
@@ -133,6 +134,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             details.push(format!("runtime state: {state}"));
         }
         if let Some(error) = &detection.query_error {
+            runtime_unreachable = true;
             details.push(format!("runtime query unavailable: {error}"));
         }
     }
@@ -147,6 +149,8 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             "an active input method may transform this input before text is committed".to_owned()
         } else if runtime_inactive {
             "input method was detected but inactive or closed; application-side text transformation remains unobserved".to_owned()
+        } else if runtime_unreachable {
+            "input method was detected but its runtime API is unreachable; transformation state remains unknown".to_owned()
         } else {
             "an input-method context may transform this input before text is committed".to_owned()
         },
@@ -454,6 +458,25 @@ mod tests {
         assert!(result.summary.contains("inactive or closed"));
         assert!(!result.summary.contains("active input method"));
         assert_eq!(result.outcome, Outcome::UncertainContinues);
+    }
+
+    #[test]
+    fn unreachable_runtime_api_is_distinguished_from_inactive_state() {
+        let result = inspect_with_detections(&[Detection {
+            engine: "ibus".into(),
+            sources: vec!["GTK_IM_MODULE=ibus".into()],
+            processes: vec![],
+            active_engine: None,
+            state: None,
+            query_error: Some("session bus unavailable".into()),
+        }]);
+        assert!(result.summary.contains("runtime API is unreachable"));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("session bus"))
+        );
     }
 
     #[test]
