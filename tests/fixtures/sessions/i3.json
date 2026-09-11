@@ -1,0 +1,6 @@
+{
+  "id": "i3",
+  "bindings": [{"command": "exec foot", "symbol": "Return", "input_code": 36}],
+  "focused_tree": {"focused": true, "pid": 4343},
+  "ipc_failure": "i3-msg exited non-zero"
+}

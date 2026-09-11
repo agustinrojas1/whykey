@@ -1,0 +1,9 @@
+{
+  "id": "hyprland",
+  "socket_event": "custom>>whykey-probe,wk-fixture,36,1,4",
+  "restore_submap": "default",
+  "stale_token": "refused",
+  "cleanup_attempts": 3,
+  "pass_through_restores": false,
+  "chord_release_timeout": "no-report"
+}

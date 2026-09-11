@@ -20,5 +20,28 @@
     {"adapter": "qtile", "test": "programmable_x11_adapters_read_literal_bindings", "fixtures": ["qtile-config.py"]},
     {"adapter": "xmonad", "test": "programmable_x11_adapters_read_literal_bindings", "fixtures": ["xmonad.hs"]},
     {"adapter": "generic", "test": "generic_desktop_is_reported_without_a_hyprland_error", "fixtures": ["generic-wayland.env"]}
+  ],
+  "sessions": [
+    {
+      "id": "hyprland",
+      "fixture": "hyprland.json",
+      "positive": "submap and socket2 event are available",
+      "negative": "missing signature is unavailable",
+      "ipc_failure": "socket connection failure is reported"
+    },
+    {
+      "id": "sway",
+      "fixture": "sway.json",
+      "positive": "bindings and focused tree parse",
+      "negative": "empty binding response is unknown",
+      "ipc_failure": "swaymsg failure is reported"
+    },
+    {
+      "id": "i3",
+      "fixture": "i3.json",
+      "positive": "bindings and focused tree parse",
+      "negative": "empty binding response is unknown",
+      "ipc_failure": "i3-msg failure is reported"
+    }
   ]
 }

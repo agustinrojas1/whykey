@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Deterministic swaymsg stand-in for adapter fixture tests."""
+
+import json
+import os
+import sys
+
+if os.environ.get("WHYKEY_FAKE_IPC_FAILURE"):
+    print("fake swaymsg IPC failure", file=sys.stderr)
+    raise SystemExit(1)
+if sys.argv[1:] == ["-t", "get_bindings", "-r"]:
+    print(json.dumps([{"command": "exec foot", "keysym": "Return", "input_code": 36}]))
+elif sys.argv[1:] == ["-t", "get_tree", "-r"]:
+    print(json.dumps({"focused": True, "pid": 4242}))
+else:
+    print("sway version 1.9")

@@ -18,6 +18,8 @@ jobs:
           components: rustfmt, clippy
       - name: Check generated support matrix
         run: python3 tools/generate_support_matrix.py --check
+      - name: Check adapter fixture gate
+        run: tools/check_adapter_gate.sh
       - name: Check dependency provenance
         run: python3 tools/generate_dependency_provenance.py --check
       - name: Check defect register is packaged documentation
@@ -37,6 +39,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run extension tests
         run: python3 extensions/tests/run_all.py
+      - name: Run differential comparison
+        run: tools/differential_compare.sh
       - name: Run tests
         run: cargo test --all-targets --all-features
       - name: Run clippy

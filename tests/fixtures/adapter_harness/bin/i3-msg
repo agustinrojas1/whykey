@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Deterministic i3-msg stand-in for adapter fixture tests."""
+
+import json
+import os
+import sys
+
+if os.environ.get("WHYKEY_FAKE_IPC_FAILURE"):
+    print("fake i3-msg IPC failure", file=sys.stderr)
+    raise SystemExit(1)
+if sys.argv[1:] == ["-t", "get_bindings"]:
+    print(json.dumps([{"command": "exec foot", "symbol": "Return", "input_code": 36}]))
+elif sys.argv[1:] == ["-t", "get_tree"]:
+    print(json.dumps({"focused": True, "pid": 4343}))
+else:
+    print("i3 version 4.23")
