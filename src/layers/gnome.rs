@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MEDIA_KEYS_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys";
 
@@ -39,13 +39,29 @@ pub fn ipc_available() -> bool {
 }
 
 /// Return GNOME bindings as normalized values for the global inventory.
-pub fn binding_inventory() -> Result<Vec<(KeyCombo, String, Option<String>)>, String> {
-    load_bindings().map(|bindings| {
-        bindings
-            .into_iter()
-            .map(|binding| (binding.combo, binding.name, binding.command))
-            .collect()
-    })
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    load_bindings()
+        .map_err(|error| format!("GNOME: {error}"))
+        .map(|bindings| {
+            bindings
+                .into_iter()
+                .map(|binding| {
+                    let GnomeBinding {
+                        combo,
+                        name,
+                        command,
+                        ..
+                    } = binding;
+                    BindingRecord::new(
+                        "GNOME",
+                        combo.compact_display(),
+                        command.map_or(name.clone(), |c| format!("{name}: {c}")),
+                        "configured",
+                    )
+                    .with_context("global media/custom shortcut")
+                })
+                .collect()
+        })
 }
 
 impl Gnome {

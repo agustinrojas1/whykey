@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
@@ -34,7 +34,32 @@ impl Desktop {
     }
 }
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let desktop = detect().ok_or_else(|| {
+        "programmable X11 WM: no AwesomeWM, Qtile, or XMonad configuration was detected".to_owned()
+    })?;
+    let path = config_path(desktop).ok_or_else(|| {
+        format!(
+            "programmable X11 WM: {} configuration was not found; runtime bindings remain unknown",
+            desktop.name()
+        )
+    })?;
+    let content = read_config(&path).map_err(|error| format!("programmable X11 WM: {error}"))?;
+    let source: String =
+        detect().map_or_else(|| "Programmable X11 WM".into(), |wm| wm.name().into());
+    Ok(parse(desktop, &content)
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                source.clone(),
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; executable runtime and precedence conditional",
+            )
+            .with_context(binding.context)
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -59,22 +84,6 @@ pub fn detect() -> Option<Desktop> {
             .into_iter()
             .find(|candidate| config_path(*candidate).is_some())
     })
-}
-
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let desktop = detect()
-        .ok_or_else(|| "no AwesomeWM, Qtile, or XMonad configuration was detected".to_owned())?;
-    let path = config_path(desktop).ok_or_else(|| {
-        format!(
-            "{} configuration was not found; runtime bindings remain unknown",
-            desktop.name()
-        )
-    })?;
-    let content = read_config(&path)?;
-    Ok(parse(desktop, &content)
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.context))
-        .collect())
 }
 
 pub struct Programmable;

@@ -3,12 +3,30 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only Openbox XML keybind adapter.
 pub struct Openbox;
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let path = config_path().ok_or_else(|| {
+        "Openbox: Openbox rc.xml was not found; runtime keybind state remains unknown".to_owned()
+    })?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("Openbox: config: {}: {error}", path.display()))?;
+    Ok(parse_bindings(&content)
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                "Openbox",
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; runtime activation conditional",
+            )
+            .with_context(binding.key_name)
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -28,18 +46,6 @@ pub fn applicable() -> bool {
 
 pub fn ipc_available() -> bool {
     config_path().is_some()
-}
-
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let path = config_path().ok_or_else(|| {
-        "Openbox rc.xml was not found; runtime keybind state remains unknown".to_owned()
-    })?;
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("config: {}: {error}", path.display()))?;
-    Ok(parse_bindings(&content)
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.key_name))
-        .collect())
 }
 
 impl Openbox {

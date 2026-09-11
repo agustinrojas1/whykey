@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only Cinnamon global keyboard-shortcut adapter.
 pub struct Cinnamon;
@@ -34,10 +34,24 @@ pub fn ipc_available() -> bool {
 }
 
 /// Return Cinnamon's live GSettings shortcut values as normalized entries.
-pub fn binding_inventory() -> Result<Vec<(KeyCombo, String, Option<String>)>, String> {
-    Ok(load_bindings()?
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    Ok(load_bindings()
+        .map_err(|error| format!("Cinnamon: {error}"))?
         .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.command))
+        .map(|binding| {
+            let Binding {
+                combo,
+                action,
+                command,
+            } = binding;
+            BindingRecord::new(
+                "Cinnamon",
+                combo.compact_display(),
+                command.map_or(action.clone(), |c| format!("{action}: {c}")),
+                "runtime GSettings value",
+            )
+            .with_context("global GSettings shortcut")
+        })
         .collect())
 }
 

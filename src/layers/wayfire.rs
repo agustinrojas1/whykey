@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -11,7 +11,26 @@ const MAX_BINDINGS: usize = 4096;
 /// Read-only Wayfire INI shortcut adapter.
 pub struct Wayfire;
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let bindings = load_bindings().map_err(|error| format!("Wayfire: {error}"))?;
+    Ok(bindings
+        .into_iter()
+        .map(|binding| {
+            let context: String = if binding.section.is_empty() {
+                "wayfire binding".into()
+            } else {
+                format!("Wayfire [{}]", binding.section)
+            };
+            BindingRecord::new(
+                "Wayfire",
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; runtime activation conditional",
+            )
+            .with_context(context)
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -31,13 +50,6 @@ pub fn applicable() -> bool {
 
 pub fn ipc_available() -> bool {
     config_path().is_some_and(|path| path.is_file())
-}
-
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    Ok(load_bindings()?
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.section))
-        .collect())
 }
 
 impl Wayfire {

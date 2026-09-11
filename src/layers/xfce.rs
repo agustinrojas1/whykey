@@ -3,12 +3,10 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only Xfce keyboard-shortcut adapter.
 pub struct Xfce;
-
-pub type BindingInventoryEntry = (KeyCombo, String, String);
 
 const CHANNEL: &str = "xfce4-keyboard-shortcuts";
 
@@ -32,11 +30,24 @@ pub fn ipc_available() -> bool {
     run_query().is_ok()
 }
 
-/// Return Xfce's current channel values as normalized inventory entries.
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    Ok(load_bindings()?
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    Ok(load_bindings()
+        .map_err(|error| format!("Xfce: {error}"))?
         .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.context))
+        .map(|binding| {
+            let Binding {
+                combo,
+                action,
+                context,
+            } = binding;
+            BindingRecord::new(
+                "Xfce",
+                combo.compact_display(),
+                action,
+                "runtime channel value",
+            )
+            .with_context(context)
+        })
         .collect())
 }
 

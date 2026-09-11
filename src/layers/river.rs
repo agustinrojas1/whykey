@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -11,7 +11,21 @@ const MAX_BINDINGS: usize = 4096;
 /// Read-only River init-script adapter.
 pub struct River;
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let bindings = load_bindings().map_err(|error| format!("River: {error}"))?;
+    Ok(bindings
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                "River",
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; runtime activation conditional",
+            )
+            .with_context(format!("riverctl map mode: {}", binding.mode))
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -31,13 +45,6 @@ pub fn applicable() -> bool {
 
 pub fn ipc_available() -> bool {
     config_path().is_some_and(|path| path.is_file())
-}
-
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    Ok(load_bindings()?
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.mode))
-        .collect())
 }
 
 impl River {

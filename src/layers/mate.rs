@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only MATE global keyboard-shortcut adapter.
 pub struct Mate;
@@ -36,14 +36,27 @@ pub fn ipc_available() -> bool {
 }
 
 /// Return MATE's live GSettings shortcut values as normalized entries.
-pub fn binding_inventory() -> Result<Vec<(KeyCombo, String, Option<String>)>, String> {
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
     let (bindings, errors) = load_bindings();
     if bindings.is_empty() && !errors.is_empty() {
-        return Err(errors.join("; "));
+        return Err(format!("MATE: {}", errors.join("; ")));
     }
     Ok(bindings
         .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.command))
+        .map(|binding| {
+            let Binding {
+                combo,
+                action,
+                command,
+            } = binding;
+            BindingRecord::new(
+                "MATE",
+                combo.compact_display(),
+                command.map_or(action.clone(), |c| format!("{action}: {c}")),
+                "runtime GSettings value",
+            )
+            .with_context("global GSettings shortcut")
+        })
         .collect())
 }
 

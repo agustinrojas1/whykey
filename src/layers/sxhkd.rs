@@ -3,12 +3,30 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only sxhkd binding adapter for bspwm-style sessions.
 pub struct Sxhkd;
 
-pub type BindingInventoryEntry = (KeyCombo, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let path = config_path().ok_or_else(|| {
+        "sxhkd: sxhkdrc was not found; runtime sxhkd state remains unknown".to_owned()
+    })?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("sxhkd: config: {}: {error}", path.display()))?;
+    Ok(parse_bindings(&content)
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                "sxhkd",
+                binding.combo.compact_display(),
+                binding.command,
+                "configured; runtime activation conditional",
+            )
+            .with_context("sxhkdrc static binding")
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -28,17 +46,6 @@ pub fn applicable() -> bool {
 
 pub fn ipc_available() -> bool {
     config_path().is_some()
-}
-
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let path = config_path()
-        .ok_or_else(|| "sxhkdrc was not found; runtime sxhkd state remains unknown".to_owned())?;
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("config: {}: {error}", path.display()))?;
-    Ok(parse_bindings(&content)
-        .into_iter()
-        .map(|binding| (binding.combo, binding.command))
-        .collect())
 }
 
 impl Sxhkd {

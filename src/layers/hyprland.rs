@@ -11,8 +11,8 @@ use serde::Deserialize;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, LayerId, LayerResult, LayerStatus, Outcome, PhysicalInput,
-    Propagation, SourceLocation,
+    BindingEvidence, BindingRecord, BindingScope, LayerId, LayerResult, LayerStatus, Outcome,
+    PhysicalInput, Propagation, SourceLocation,
 };
 use crate::xkb;
 
@@ -158,14 +158,77 @@ pub fn ipc_available() -> bool {
     run_hyprctl(&["binds", "-j"]).is_ok() && run_hyprctl(&["submap", "-j"]).is_ok()
 }
 
-/// Return the effective binding payload for read-only inventory consumers.
-/// The inventory layer deliberately keeps the raw JSON conversion separate
-/// from key-specific matching so malformed entries can be reported there
-/// without changing inspection semantics.
-pub fn binding_inventory_json() -> Result<serde_json::Value, String> {
+/// Return Hyprland bindings as inventory records for the global listing.
+/// The raw JSON conversion stays separate from key-specific matching so
+/// malformed entries can be reported here without changing inspection.
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let value = binding_inventory_json().map_err(|error| format!("Hyprland: {error}"))?;
+    Ok(collect_records(&value))
+}
+
+fn binding_inventory_json() -> Result<serde_json::Value, String> {
     let output = run_hyprctl(&["binds", "-j"])?;
     serde_json::from_str(&output)
         .map_err(|error| format!("hyprctl returned invalid binding data: {error}"))
+}
+
+fn collect_records(value: &serde_json::Value) -> Vec<BindingRecord> {
+    let mut records = Vec::new();
+    let Some(bindings) = value.as_array() else {
+        return records;
+    };
+    for binding in bindings {
+        let Some(key) = binding.get("key").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let mask = binding
+            .get("modmask")
+            .and_then(super::json_u32)
+            .unwrap_or_default();
+        let action = binding
+            .get("dispatcher")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown dispatcher");
+        let mut action = action.to_owned();
+        if let Some(argument) = binding
+            .get("arg")
+            .and_then(serde_json::Value::as_str)
+            .filter(|argument| !argument.is_empty())
+        {
+            action.push(' ');
+            action.push_str(argument);
+        }
+        if let Some(description) = binding
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .filter(|description| !description.is_empty())
+        {
+            action.push_str("; ");
+            action.push_str(description);
+        }
+        let submap = binding
+            .get("submap")
+            .and_then(serde_json::Value::as_str)
+            .filter(|submap| !submap.is_empty() && *submap != "reset")
+            .map_or_else(|| "default".into(), str::to_owned);
+        // Typed filter fields come straight from the payload. `device` stays
+        // absent for structured per-device scopes instead of guessing.
+        let device = binding
+            .get("device")
+            .and_then(serde_json::Value::as_str)
+            .filter(|device| !device.is_empty())
+            .map(str::to_owned);
+        records.push(BindingRecord {
+            device,
+            submap: Some(submap.clone()),
+            source: "Hyprland (hyprctl binds -j)".into(),
+            key: super::combo_display(mask, key),
+            action,
+            context: Some(submap),
+            certainty: "runtime effective binding".into(),
+        });
+    }
+    records
 }
 
 pub fn focused_pid() -> Result<u32, String> {

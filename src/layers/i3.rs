@@ -48,8 +48,13 @@ pub fn ipc_available() -> bool {
     run_i3_version().is_ok()
 }
 
-/// Return i3's effective binding payload for the global inventory command.
-pub fn binding_inventory_json() -> Result<serde_json::Value, String> {
+/// Return i3 bindings as inventory records for the global listing.
+pub fn binding_inventory() -> Result<Vec<super::BindingRecord>, String> {
+    let value = binding_inventory_json().map_err(|error| format!("i3: {error}"))?;
+    Ok(super::collect_ipc_json_bindings(&value, "i3"))
+}
+
+fn binding_inventory_json() -> Result<serde_json::Value, String> {
     let output = run_i3msg()?;
     serde_json::to_value(output)
         .map_err(|error| format!("could not serialize i3 bindings: {error}"))

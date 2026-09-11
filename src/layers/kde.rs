@@ -3,12 +3,38 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
 /// Read-only KDE Plasma global shortcut adapter.
 pub struct Kde;
 
-pub type BindingInventoryEntry = (KeyCombo, String, String, Option<String>);
+/// Return the static KDE inventory while keeping runtime activation separate.
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let path = config_path().ok_or_else(|| {
+        "KDE Plasma: kglobalshortcutsrc was not found; runtime-only shortcuts remain unknown"
+            .to_owned()
+    })?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("KDE Plasma: config: {}: {error}", path.display()))?;
+    Ok(parse_bindings(&content)
+        .into_iter()
+        .map(|binding| {
+            let Binding {
+                combo,
+                group,
+                action,
+                description,
+            } = binding;
+            BindingRecord::new(
+                "KDE Plasma",
+                combo.compact_display(),
+                description.map_or_else(|| action.clone(), |d| format!("{action} ({d})")),
+                "configured; runtime registration conditional",
+            )
+            .with_context(group)
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -29,26 +55,6 @@ pub fn applicable() -> bool {
 
 pub fn ipc_available() -> bool {
     config_path().is_some()
-}
-
-/// Return the static KDE inventory while keeping runtime activation separate.
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let path = config_path().ok_or_else(|| {
-        "kglobalshortcutsrc was not found; runtime-only shortcuts remain unknown".to_owned()
-    })?;
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("config: {}: {error}", path.display()))?;
-    Ok(parse_bindings(&content)
-        .into_iter()
-        .map(|binding| {
-            (
-                binding.combo,
-                binding.group,
-                binding.action,
-                binding.description,
-            )
-        })
-        .collect())
 }
 
 impl Kde {

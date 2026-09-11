@@ -3,13 +3,27 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome, openbox};
+use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome, openbox};
 
 /// Read-only labwc adapter. labwc intentionally keeps an Openbox-compatible
 /// `rc.xml` keybind format, so the shared conservative XML scanner is reused.
 pub struct Labwc;
 
-pub type BindingInventoryEntry = (KeyCombo, String, String);
+pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
+    let (_path, bindings) = load_bindings().map_err(|error| format!("labwc: {error}"))?;
+    Ok(bindings
+        .into_iter()
+        .map(|binding| {
+            BindingRecord::new(
+                "labwc",
+                binding.combo.compact_display(),
+                binding.action,
+                "configured; runtime activation conditional",
+            )
+            .with_context(format!("rc.xml keybind ({})", binding.key_name))
+        })
+        .collect())
+}
 
 pub fn applicable() -> bool {
     if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
@@ -29,15 +43,6 @@ pub fn applicable() -> bool {
 
 pub fn ipc_available() -> bool {
     config_path().is_some_and(|path| path.is_file())
-}
-
-pub fn binding_inventory() -> Result<Vec<BindingInventoryEntry>, String> {
-    let (_path, bindings) = load_bindings()?;
-    Ok(bindings
-        .into_iter()
-        .map(|binding| (binding.combo, binding.action, binding.key_name))
-        .map(|(key, action, key_name)| (key, action, format!("rc.xml keybind ({key_name})")))
-        .collect())
 }
 
 impl Labwc {

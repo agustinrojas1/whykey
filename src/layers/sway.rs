@@ -50,8 +50,13 @@ pub fn ipc_available() -> bool {
     run_sway_version().is_ok()
 }
 
-/// Return Sway's effective binding payload for the global inventory command.
-pub fn binding_inventory_json() -> Result<serde_json::Value, String> {
+/// Return Sway bindings as inventory records for the global listing.
+pub fn binding_inventory() -> Result<Vec<super::BindingRecord>, String> {
+    let value = binding_inventory_json().map_err(|error| format!("Sway: {error}"))?;
+    Ok(super::collect_ipc_json_bindings(&value, "Sway"))
+}
+
+fn binding_inventory_json() -> Result<serde_json::Value, String> {
     let output = run_swaymsg()?;
     serde_json::to_value(output)
         .map_err(|error| format!("could not serialize Sway bindings: {error}"))
