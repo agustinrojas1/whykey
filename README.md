@@ -21,6 +21,12 @@ Result:
 
 ## Install
 
+### Using mise
+
+```sh
+mise use github:agustinrojas1/whykey
+```
+
 ### Build from source
 
 Whykey requires Linux and Rust 1.85 or newer:

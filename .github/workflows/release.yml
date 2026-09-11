@@ -43,7 +43,7 @@ jobs:
           mkdir -p "$root"
           install -m 0755 target/release/whykey "$root/whykey"
           install -m 0644 README.md SPEC.md CHANGELOG.md SUPPORT_MATRIX.md ADAPTER_INVENTORY.md DEPENDENCY_PROVENANCE.md support-matrix.json DEFECT_REGISTER.md LICENSE whykey.1 "$root/"
-          cp -a packaging tools "$root/"
+          cp -a extensions packaging tools "$root/"
           tar -czf "${root}.tar.gz" "$root"
           sha256sum "${root}.tar.gz" > "${root}.tar.gz.sha256"
       - name: Publish GitHub release assets
