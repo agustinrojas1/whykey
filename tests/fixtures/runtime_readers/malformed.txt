@@ -1,0 +1,3 @@
+node /org/gnome/Shell {
+  method without_an_interface;
+};

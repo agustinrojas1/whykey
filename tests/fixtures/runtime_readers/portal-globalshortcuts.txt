@@ -1,0 +1,6 @@
+node /org/freedesktop/portal/desktop {
+  interface org.freedesktop.portal.GlobalShortcuts {
+    method CreateSession();
+    method BindShortcuts();
+  };
+};
