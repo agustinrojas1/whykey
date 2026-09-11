@@ -164,7 +164,7 @@ fn help_text() -> String {
         output.push_str(&format!("  {}\n    {}\n", command.usage, command.summary));
     }
     output.push_str(
-        "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey does not edit configuration or execute shortcuts. Native Hyprland listen temporarily changes the compositor session and restores it when capture ends.",
+        "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen, currently backed by Hyprland, temporarily changes the compositor session and restores it when capture ends.",
     );
     output
 }
