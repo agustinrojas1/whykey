@@ -2368,7 +2368,7 @@ mod tests {
     #[test]
     fn selects_hyprland_instance_for_current_wayland_socket() {
         let instances: Vec<HyprlandInstance> =
-            serde_json::from_str(include_str!("../../tests/fixtures/hyprland/instances.json"))
+            serde_json::from_str(include_str!("../../../tests/fixtures/hyprland/instances.json"))
                 .unwrap();
         assert_eq!(
             select_hyprland_instance(&instances, Some("wayland-1")),
@@ -2395,7 +2395,7 @@ mod tests {
     #[test]
     fn leaves_ambiguous_instances_unselected_without_socket_identity() {
         let instances: Vec<HyprlandInstance> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/hyprland/instances-ambiguous.json"
+            "../../../tests/fixtures/hyprland/instances-ambiguous.json"
         ))
         .unwrap();
         assert_eq!(select_hyprland_instance(&instances, None), None);
@@ -2425,7 +2425,7 @@ mod tests {
 
     #[test]
     fn keeps_valid_instances_when_one_inventory_entry_is_malformed() {
-        let payload = include_bytes!("../../tests/fixtures/hyprland/instances-version-matrix.json");
+        let payload = include_bytes!("../../../tests/fixtures/hyprland/instances-version-matrix.json");
         let instances = parse_hyprland_instances(payload).unwrap();
         assert_eq!(instances.len(), 2);
         assert_eq!(
@@ -2434,7 +2434,7 @@ mod tests {
         );
     }
 
-    const BINDINGS: &str = include_str!("../../tests/fixtures/hyprland/binds-representative.json");
+    const BINDINGS: &str = include_str!("../../../tests/fixtures/hyprland/binds-representative.json");
 
     #[test]
     fn preserves_a_universal_match_when_a_regular_binding_is_primary() {
@@ -2466,7 +2466,7 @@ mod tests {
     #[test]
     fn sanitized_fixture_matrix_covers_legacy_structured_and_malformed_shapes() {
         let matrix: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/hyprland/version-matrix.json"
+            "../../../tests/fixtures/hyprland/version-matrix.json"
         ))
         .unwrap();
         assert_eq!(matrix["schema_version"], 1);
@@ -2478,25 +2478,25 @@ mod tests {
             let devices = entry["devices"].as_str().unwrap();
             let binds_json = match binds {
                 "binds-representative.json" => {
-                    include_str!("../../tests/fixtures/hyprland/binds-representative.json")
+                    include_str!("../../../tests/fixtures/hyprland/binds-representative.json")
                 }
                 "binds-structured-device.json" => {
-                    include_str!("../../tests/fixtures/hyprland/binds-structured-device.json")
+                    include_str!("../../../tests/fixtures/hyprland/binds-structured-device.json")
                 }
                 "binds-malformed-entry.json" => {
-                    include_str!("../../tests/fixtures/hyprland/binds-malformed-entry.json")
+                    include_str!("../../../tests/fixtures/hyprland/binds-malformed-entry.json")
                 }
                 "binds-invalid-object.json" => {
-                    include_str!("../../tests/fixtures/hyprland/binds-invalid-object.json")
+                    include_str!("../../../tests/fixtures/hyprland/binds-invalid-object.json")
                 }
                 other => panic!("unexpected binds fixture {other}"),
             };
             let devices_json = match devices {
                 "devices-keyboards.json" => {
-                    include_str!("../../tests/fixtures/hyprland/devices-keyboards.json")
+                    include_str!("../../../tests/fixtures/hyprland/devices-keyboards.json")
                 }
                 "devices-layout-groups.json" => {
-                    include_str!("../../tests/fixtures/hyprland/devices-layout-groups.json")
+                    include_str!("../../../tests/fixtures/hyprland/devices-layout-groups.json")
                 }
                 other => panic!("unexpected devices fixture {other}"),
             };
@@ -2660,7 +2660,7 @@ mod tests {
     #[test]
     fn accepts_structured_device_scope_from_newer_hyprland_json() {
         let combo: KeyCombo = "ctrl+c".parse().unwrap();
-        let bindings = include_str!("../../tests/fixtures/hyprland/binds-structured-device.json");
+        let bindings = include_str!("../../../tests/fixtures/hyprland/binds-structured-device.json");
 
         let result = inspect_json(&combo, bindings, "default").unwrap();
 
@@ -2894,7 +2894,7 @@ mod tests {
     #[test]
     fn keeps_valid_bindings_when_one_effective_entry_has_an_unexpected_shape() {
         let combo: KeyCombo = "ctrl+c".parse().unwrap();
-        let bindings = include_str!("../../tests/fixtures/hyprland/binds-malformed-entry.json");
+        let bindings = include_str!("../../../tests/fixtures/hyprland/binds-malformed-entry.json");
 
         let result = inspect_json(&combo, bindings, "default").unwrap();
 
@@ -2910,7 +2910,7 @@ mod tests {
 
     #[test]
     fn summarizes_active_keyboard_keymaps() {
-        let devices = include_str!("../../tests/fixtures/hyprland/devices-keyboards.json");
+        let devices = include_str!("../../../tests/fixtures/hyprland/devices-keyboards.json");
         assert_eq!(
             summarize_keyboards(devices).as_deref(),
             Some(
@@ -3147,13 +3147,13 @@ xkb_symbols "pc" {
 
     #[test]
     fn reads_the_main_keyboard_active_layout_group() {
-        let devices = include_str!("../../tests/fixtures/hyprland/devices-layout-groups.json");
+        let devices = include_str!("../../../tests/fixtures/hyprland/devices-layout-groups.json");
         assert_eq!(main_keyboard_active_layout_index(devices), Some(2));
     }
 
     #[test]
     fn does_not_compile_a_guessed_us_layout_when_devices_omit_layout() {
-        let devices = include_str!("../../tests/fixtures/hyprland/devices-keyboards.json");
+        let devices = include_str!("../../../tests/fixtures/hyprland/devices-keyboards.json");
         assert!(compile_main_xkb_keymap(devices).is_none());
     }
 
@@ -3343,7 +3343,7 @@ o.bind("SUPER + E", "Real", "exec")
     #[test]
     fn parses_representative_consecutive_omarchy_bindings() {
         let hints = parse_lua_bind_hints(
-            include_str!("../../tests/fixtures/hyprland/omarchy-bindings.lua"),
+            include_str!("../../../tests/fixtures/hyprland/omarchy-bindings.lua"),
             Path::new("tests/fixtures/hyprland/omarchy-bindings.lua"),
         );
         assert_eq!(hints.len(), 5);
@@ -3432,7 +3432,7 @@ o.bind("SUPER + E", "Real", "exec")
         let combo: KeyCombo = "ctrl+z".parse().unwrap();
         let error = inspect_json(
             &combo,
-            include_str!("../../tests/fixtures/hyprland/binds-invalid-object.json"),
+            include_str!("../../../tests/fixtures/hyprland/binds-invalid-object.json"),
             "default",
         )
         .unwrap_err();
