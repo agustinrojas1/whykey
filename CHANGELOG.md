@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.2] - 2026-09-11
+
+### Changed
+
+- Separate inspection requests, route outcomes, continuation policy, and endpoint selection into typed internal contracts.
+- Build layer results through shared constructors and keep report conclusions independent of display wording.
+- Preserve the existing JSON contracts for unadapted applications while adding typed modifier ambiguity to schema v2 binding evidence.
+
+### Validation
+
+- Add sanitized differential fixtures and compare 49 deterministic CLI, replay, diff, and inspection scenarios against the pre-refactor baseline.
+- Record and verify the baseline identity, reject accidental self-comparison, and fail closed on invalid baseline manifests.
+
 ## [1.0.1] - 2026-09-09
 
 ### Fixes
