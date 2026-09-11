@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Neovim runtime key query extension for whykey (schema v1)."""
+
+import json
+import os
+import subprocess
+import sys
+
+
+def to_nvim_notation(key_obj):
+    mods = key_obj.get("modifiers", 0) if isinstance(key_obj, dict) else 0
+    raw_key = key_obj.get("key", "") if isinstance(key_obj, dict) else str(key_obj)
+    prefix = ""
+    if mods & 4:
+        prefix += "C-"
+    if mods & 8:
+        prefix += "M-"
+    if mods & 1:
+        prefix += "S-"
+    named = {
+        "LEFT": "Left",
+        "RIGHT": "Right",
+        "UP": "Up",
+        "DOWN": "Down",
+        "RETURN": "CR",
+        "ESCAPE": "Esc",
+        "SPACE": "Space",
+        "TAB": "Tab",
+        "BACKSPACE": "BS",
+        "DELETE": "Del",
+    }
+    name = named.get(raw_key.upper(), raw_key)
+    if len(name) == 1 and not (mods & 1):
+        name = name.lower()
+    return f"<{prefix}{name}>" if (prefix or raw_key.upper() in named) else name
+
+
+def find_server():
+    for var in ("NVIM_LISTEN_ADDRESS", "NVIM"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    try:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    cmd = f.read().decode("utf-8", errors="replace").split("\0")
+                if not cmd or not (cmd[0] == "nvim" or cmd[0].endswith("/nvim")):
+                    continue
+                for i, arg in enumerate(cmd):
+                    if arg in ("--listen", "--server") and i + 1 < len(cmd) and cmd[i + 1]:
+                        return cmd[i + 1]
+                    if arg.startswith(("--listen=", "--server=")):
+                        return arg.split("=", 1)[1]
+            except (OSError, PermissionError):
+                continue
+    except OSError:
+        pass
+    return None
+
+
+def query_nvim(server, notation):
+    safe_notation = notation.replace("'", "''")
+    expr = (
+        f"join([mode(), (empty(maparg('{safe_notation}', mode(), 0, 1)) ? '' : "
+        f"join([maparg('{safe_notation}', mode(), 0, 1).rhs, "
+        f"string(maparg('{safe_notation}', mode(), 0, 1).noremap)], '\t'))], '\t')"
+    )
+    cmd = ["nvim", "--headless", "--server", server, "--remote-expr", expr]
+    res = subprocess.run(cmd, capture_output=True, timeout=1.5)
+    if res.returncode != 0:
+        err = res.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err or f"nvim exited with {res.returncode}")
+    parts = res.stdout.decode("utf-8", errors="replace").strip().split("\t")
+    mode = parts[0] if parts else "n"
+    rhs = parts[1] if len(parts) > 1 else ""
+    noremap = parts[2] if len(parts) > 2 else "0"
+    return mode, rhs, noremap
+
+
+def inspect_key(req):
+    notation = to_nvim_notation(req.get("key", {}))
+    server = find_server()
+    if not server:
+        return {
+            "status": "unavailable",
+            "propagation": "indeterminate",
+            "summary": "No running Neovim server found (start nvim with --listen <address>)",
+            "details": ["NVIM_LISTEN_ADDRESS unset and no active nvim --listen process found"],
+        }
+    try:
+        mode, rhs, noremap = query_nvim(server, notation)
+    except Exception as exc:
+        return {
+            "status": "indeterminate",
+            "propagation": "indeterminate",
+            "summary": f"Neovim query failed: {exc}",
+            "details": [str(exc)],
+        }
+
+    if rhs:
+        return {
+            "status": "handled",
+            "propagation": "stops",
+            "summary": f"Neovim mode '{mode}' maps {notation} to {rhs}",
+            "details": [
+                f"mode: {mode}",
+                f"lhs: {notation}",
+                f"rhs: {rhs}",
+                f"noremap: {noremap}",
+                f"server: {server}",
+            ],
+        }
+    return {
+        "status": "not_handled",
+        "propagation": "continues",
+        "summary": f"Neovim has no mapping for {notation} in mode '{mode}'",
+        "details": [f"mode: {mode}", f"server: {server}"],
+    }
+
+
+def self_test():
+    assert to_nvim_notation({"modifiers": 4, "key": "x"}) == "<C-x>"
+    assert to_nvim_notation({"modifiers": 4, "key": "LEFT"}) == "<C-Left>"
+    assert to_nvim_notation({"modifiers": 12, "key": "RETURN"}) == "<C-M-CR>"
+    assert to_nvim_notation({"modifiers": 0, "key": "x"}) == "x"
+    assert to_nvim_notation({"modifiers": 0, "key": "ESCAPE"}) == "<Esc>"
+
+    res = inspect_key({"key": {"modifiers": 4, "key": "x"}})
+    assert res["status"] in ("handled", "not_handled", "unavailable", "indeterminate")
+    assert res["propagation"] in ("stops", "continues", "indeterminate")
+    print("self_test passed")
+
+
+def main():
+    if "--test" in sys.argv:
+        self_test()
+        return
+
+    raw = sys.stdin.read()
+    if not raw:
+        sys.exit(1)
+    req = json.loads(raw)
+    result = inspect_key(req)
+    response = {
+        "schema_version": 1,
+        "capabilities": ["query_mode", "identify_action"],
+        "result": result,
+    }
+    json.dump(response, sys.stdout)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()
