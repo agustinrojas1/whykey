@@ -288,7 +288,7 @@ mod tests {
         request.application_pid = Some(1);
         request.application_source = Some("test");
         let session = crate::environment::Environment::collect();
-        let results = inspect_with_request_and_session(&request, &session);
+        let results = inspect_with_environment(&request, &session);
         let app_result = results.iter().find(|l| l.id == LayerId::Application);
         assert!(app_result.is_some());
         let app = app_result.unwrap();
