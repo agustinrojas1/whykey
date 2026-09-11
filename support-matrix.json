@@ -31,6 +31,7 @@
     {"id": "compositor.cinnamon", "area": "compositor", "implemented": true, "summary": "Inspect Cinnamon global keybinding schemas."},
     {"id": "compositor.mate", "area": "compositor", "implemented": true, "summary": "Inspect MATE Marco and SettingsDaemon keybinding schemas."},
     {"id": "compositor.niri", "area": "compositor", "implemented": true, "summary": "Inspect literal Niri binds configuration."},
+    {"id": "compositor.dwl", "area": "compositor", "implemented": true, "summary": "Inspect literal dwl config.h key mappings conditionally; dwl has no stable capture IPC."},
     {"id": "compositor.river", "area": "compositor", "implemented": true, "summary": "Inspect literal River init mappings."},
     {"id": "compositor.wayfire", "area": "compositor", "implemented": true, "summary": "Inspect literal Wayfire binding settings."},
     {"id": "compositor.labwc", "area": "compositor", "implemented": true, "summary": "Inspect labwc Openbox-compatible keybind configuration."},
