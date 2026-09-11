@@ -38,6 +38,7 @@ contract shared by the capability registry and tests.
 | `compositor.cinnamon` | compositor | Implemented | Inspect Cinnamon global keybinding schemas. |
 | `compositor.mate` | compositor | Implemented | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
 | `compositor.niri` | compositor | Implemented | Inspect literal Niri binds configuration. |
+| `compositor.dwl` | compositor | Implemented | Inspect literal dwl config.h key mappings conditionally; dwl has no stable capture IPC. |
 | `compositor.river` | compositor | Implemented | Inspect literal River init mappings. |
 | `compositor.wayfire` | compositor | Implemented | Inspect literal Wayfire binding settings. |
 | `compositor.labwc` | compositor | Implemented | Inspect labwc Openbox-compatible keybind configuration. |

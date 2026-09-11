@@ -1,6 +1,7 @@
 pub mod application;
 pub mod cinnamon;
 pub mod compositor;
+pub mod dwl;
 pub mod ghostty;
 pub mod gnome;
 pub mod gsettings;

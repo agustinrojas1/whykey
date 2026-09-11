@@ -141,7 +141,7 @@ whykey diff --json before.json after.json
 
 Whykey includes adapters for:
 
-- Hyprland, Sway, i3, GNOME, KDE Plasma, Xfce, Cinnamon, MATE, Niri, River,
+- Hyprland, Sway, i3, GNOME, KDE Plasma, Xfce, Cinnamon, MATE, Niri, dwl, River,
   Wayfire, labwc, bspwm with sxhkd, Openbox, X11 xbindkeys, AwesomeWM, Qtile,
   and XMonad
 - Ghostty, Kitty, Alacritty, Foot, WezTerm, Konsole, and generic terminals
