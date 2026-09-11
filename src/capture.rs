@@ -38,12 +38,14 @@ impl std::fmt::Display for CapturePolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeBackendId {
     Hyprland,
+    Sway,
 }
 
 impl NativeBackendId {
     pub const fn display(self) -> &'static str {
         match self {
             Self::Hyprland => "Hyprland",
+            Self::Sway => "Sway",
         }
     }
 }
@@ -170,6 +172,7 @@ mod tests {
     fn backend_id_display_is_stable() {
         assert_eq!(NativeBackendId::Hyprland.to_string(), "Hyprland");
         assert_eq!(NativeBackendId::Hyprland.display(), "Hyprland");
+        assert_eq!(NativeBackendId::Sway.to_string(), "Sway");
         assert_eq!(
             CaptureBackendId::Native(NativeBackendId::Hyprland).display(),
             "Hyprland"

@@ -15,6 +15,7 @@
     {"id": "cli.extensions-compositor", "area": "cli", "implemented": true, "summary": "Use opt-in compositor manifests for bounded read-only binding and focus queries."},
     {"id": "capture.terminal", "area": "capture", "implemented": true, "summary": "Capture terminal input when a controlling terminal is available."},
     {"id": "capture.native-compositor", "area": "capture", "implemented": true, "summary": "Capture through the native compositor backend when Hyprland socket2 IPC is available."},
+    {"id": "capture.native-sway", "area": "capture", "implemented": true, "summary": "Observe Sway binding events through IPC in pass-through mode; suppression is not exposed by Sway IPC."},
     {"id": "capture.ndjson", "area": "capture", "implemented": true, "summary": "Emit one compact schema-v2 record per captured event."},
     {"id": "capture.export", "area": "capture", "implemented": true, "summary": "Write replayable JSON or NDJSON capture records to an explicit file."},
     {"id": "capture.evdev", "area": "capture", "implemented": true, "summary": "Capture Linux evdev keyboard events when a readable device is available."},

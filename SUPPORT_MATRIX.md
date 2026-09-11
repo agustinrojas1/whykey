@@ -22,6 +22,7 @@ contract shared by the capability registry and tests.
 | `cli.extensions-compositor` | cli | Implemented | Use opt-in compositor manifests for bounded read-only binding and focus queries. |
 | `capture.terminal` | capture | Implemented | Capture terminal input when a controlling terminal is available. |
 | `capture.native-compositor` | capture | Implemented | Capture through the native compositor backend when Hyprland socket2 IPC is available. |
+| `capture.native-sway` | capture | Implemented | Observe Sway binding events through IPC in pass-through mode; suppression is not exposed by Sway IPC. |
 | `capture.ndjson` | capture | Implemented | Emit one compact schema-v2 record per captured event. |
 | `capture.export` | capture | Implemented | Write replayable JSON or NDJSON capture records to an explicit file. |
 | `capture.evdev` | capture | Implemented | Capture Linux evdev keyboard events when a readable device is available. |

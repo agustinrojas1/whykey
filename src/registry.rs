@@ -241,7 +241,7 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             hint: "run inside the Sway session",
             json_key: "sway",
         }),
-        capture: None,
+        capture: Some(crate::sway_capture::capture_connect),
         reload_generation: None,
     },
     AdapterDescriptor {

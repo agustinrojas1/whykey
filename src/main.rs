@@ -1002,7 +1002,13 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     let shell_snapshot = shell_snapshot_available(&shell);
     let evdev = listen::evdev_available();
     let native_compositor = whykey::capabilities::native_capture_available_for_doctor();
-    let native_backend = whykey::capture::NativeBackendId::Hyprland.display();
+    let native_sway = whykey::sway_capture::probe_available();
+    let native_available = native_compositor || native_sway;
+    let native_backend = if native_compositor {
+        whykey::capture::NativeBackendId::Hyprland.display()
+    } else {
+        whykey::capture::NativeBackendId::Sway.display()
+    };
     let native_attempts = environment
         .compositor_candidates
         .iter()
@@ -1013,8 +1019,16 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             entry.capture.map(|_| {
                 serde_json::json!({
                     "backend": entry.display,
-                    "available": native_compositor && candidate.ipc,
-                    "reason": if native_compositor && candidate.ipc {
+                    "available": candidate.ipc && match candidate.id {
+                        "hyprland" => native_compositor,
+                        "sway" => native_sway,
+                        _ => false,
+                    },
+                    "reason": if candidate.ipc && match candidate.id {
+                        "hyprland" => native_compositor,
+                        "sway" => native_sway,
+                        _ => false,
+                    } {
                         "IPC connection accepted"
                     } else {
                         "IPC connection unavailable"
@@ -1126,8 +1140,8 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             "xkb": {"compiler": xkb},
             "evdev": {"available": evdev, "devices": evdev_devices},
             "native-compositor": {
-                "available": native_compositor,
-                "backend": native_compositor.then_some(native_backend),
+                "available": native_available,
+                "backend": native_available.then_some(native_backend),
                 "attempted": native_attempts.clone(),
             },
             "remappers": remappers,
@@ -1171,10 +1185,10 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         print_check("controlling TTY", tty, "run inside a terminal");
         print_check(
             &format!("Native capture ({native_backend})"),
-            native_compositor,
-            "set HYPRLAND_INSTANCE_SIGNATURE and ensure socket2 IPC is reachable",
+            native_available,
+            "run inside a supported compositor session and ensure its IPC is reachable",
         );
-        if !native_compositor && !native_attempts.is_empty() {
+        if !native_available && !native_attempts.is_empty() {
             let attempted = native_attempts
                 .iter()
                 .filter_map(|entry| entry.get("backend").and_then(serde_json::Value::as_str))
