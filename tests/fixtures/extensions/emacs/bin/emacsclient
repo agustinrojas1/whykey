@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Fake emacsclient fixture script for hermetic whykey extension testing."""
+
+import sys
+
+expr = " ".join(sys.argv)
+if "C-x" in expr:
+    print('"fundamental-mode\\tControl-X-prefix\\tglobal"')
+elif "C-<left>" in expr:
+    print('"org-mode\\torg-left-click\\tmajor"')
+elif "C-M-RET" in expr:
+    print('"text-mode\\tmy-custom-minor-cmd\\tminor"')
+elif "C-q" in expr:
+    print('"fundamental-mode\\tnil\\tnone"')
+else:
+    print('"fundamental-mode\\tnil\\tnone"')
