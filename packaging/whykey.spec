@@ -1,5 +1,5 @@
 Name:           whykey
-Version:        1.0.2
+Version:        1.1.0
 Release:        1%{?dist}
 Summary:        Explain where a Linux key combination is handled
 License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3.0
@@ -53,6 +53,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %doc %{_docdir}/%{name}/support-matrix.json
 
 %changelog
+* Fri Sep 11 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 1.1.0-1
+- Add whykey-nvim first-party Neovim extension and read-only doctor check
+
 * Fri Sep 11 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 1.0.2-1
 - Simplify inspection and reporting contracts and add differential validation
 
