@@ -18,6 +18,19 @@ use crate::xkb;
 
 pub struct Hyprland;
 
+#[derive(Debug, Clone)]
+pub(crate) struct Probe {
+    binds: Result<String, String>,
+    submap: Result<String, String>,
+    devices: Option<String>,
+}
+
+impl Probe {
+    pub(crate) fn ipc_available(&self) -> bool {
+        self.binds.is_ok() && self.submap.is_ok()
+    }
+}
+
 thread_local! {
     static INSTANCE_OVERRIDE: RefCell<Option<String>> = const { RefCell::new(None) };
 }
@@ -98,6 +111,15 @@ impl Hyprland {
         key: &KeyCombo,
         physical_input: Option<&PhysicalInput>,
     ) -> LayerResult {
+        self.inspect_with_probe(key, physical_input, None)
+    }
+
+    pub(crate) fn inspect_with_probe(
+        &self,
+        key: &KeyCombo,
+        physical_input: Option<&PhysicalInput>,
+        probe: Option<&Probe>,
+    ) -> LayerResult {
         if remote_session_without_compositor() {
             return LayerResult::new(
                 "Hyprland",
@@ -110,7 +132,11 @@ impl Hyprland {
                 ],
             );
         }
-        match inspect_system(key, physical_input) {
+        let result = match probe {
+            Some(probe) => inspect_system_with_probe(key, physical_input, probe),
+            None => inspect_system(key, physical_input),
+        };
+        match result {
             Ok(result) => result,
             Err(message) => ipc_uncertain_result(message),
         }
@@ -263,12 +289,67 @@ pub fn applicable() -> bool {
     discover_hyprland_instance().is_some()
 }
 
+pub(crate) fn collect_probe() -> Option<Probe> {
+    if !applicable() {
+        return None;
+    }
+    let instance = instance_override().or_else(|| {
+        (!has_hyprland_signature() && !desktop_hint_is_other_desktop())
+            .then(discover_hyprland_instance)
+            .flatten()
+    });
+    let instance = instance.as_deref();
+    let binds = run_hyprctl_with_instance(&["binds", "-j"], instance);
+    let submap = run_hyprctl_with_instance(&["submap", "-j"], instance);
+    let devices = if binds.is_ok() && submap.is_ok() {
+        run_hyprctl_with_instance(&["devices", "-j"], instance).ok()
+    } else {
+        None
+    };
+    Some(Probe {
+        binds,
+        submap,
+        devices,
+    })
+}
+
 fn inspect_system(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
 ) -> Result<LayerResult, String> {
     let bindings_raw = run_hyprctl(&["binds", "-j"])?;
     let active_submap_json = run_hyprctl(&["submap", "-j"])?;
+    let devices_json = run_hyprctl(&["devices", "-j"]).ok();
+    inspect_system_with_values(
+        key,
+        physical_input,
+        bindings_raw,
+        active_submap_json,
+        devices_json,
+    )
+}
+
+fn inspect_system_with_probe(
+    key: &KeyCombo,
+    physical_input: Option<&PhysicalInput>,
+    probe: &Probe,
+) -> Result<LayerResult, String> {
+    inspect_system_with_values(
+        key,
+        physical_input,
+        probe.binds.clone()?,
+        probe.submap.clone()?,
+        probe.devices.clone(),
+    )
+}
+
+fn inspect_system_with_values(
+    key: &KeyCombo,
+    physical_input: Option<&PhysicalInput>,
+    bindings_raw: String,
+    active_submap_json: String,
+    devices_json: Option<String>,
+) -> Result<LayerResult, String> {
     let mut active_submap: String = serde_json::from_str(&active_submap_json)
         .map_err(|error| format!("hyprctl returned an invalid submap: {error}"))?;
 
@@ -278,7 +359,6 @@ fn inspect_system(
     } else {
         bindings_raw
     };
-    let devices_json = run_hyprctl(&["devices", "-j"]).ok();
     let keycodes = devices_json
         .as_deref()
         .map(|devices| xkb_keycodes_for_key(key, devices))
@@ -373,14 +453,18 @@ fn inspect_system(
 }
 
 fn run_hyprctl(arguments: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("hyprctl");
     let instance = instance_override().or_else(|| {
         (!has_hyprland_signature())
             .then(discover_hyprland_instance)
             .flatten()
     });
+    run_hyprctl_with_instance(arguments, instance.as_deref())
+}
+
+fn run_hyprctl_with_instance(arguments: &[&str], instance: Option<&str>) -> Result<String, String> {
+    let mut command = Command::new("hyprctl");
     if let Some(instance) = instance {
-        command.args(["-i", instance.as_str()]);
+        command.args(["-i", instance]);
     }
     command.args(arguments);
     let output = command::output(&mut command).map_err(|error| error.to_string())?;

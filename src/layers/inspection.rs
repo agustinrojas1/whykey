@@ -279,6 +279,13 @@ fn inspect_compositor(
 ) -> LayerResult {
     match session.selected_compositor {
         Some(id) => {
+            if id == "hyprland" {
+                return hyprland::Hyprland.inspect_with_probe(
+                    key,
+                    physical_input,
+                    session.hyprland_probe.as_ref(),
+                );
+            }
             let entry = crate::registry::DESKTOPS
                 .iter()
                 .find(|entry| entry.id == id)

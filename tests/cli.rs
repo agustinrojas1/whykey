@@ -328,8 +328,19 @@ fn inspect_discovers_a_valid_instance_beside_a_malformed_inventory_entry() {
         "inspection output: {output:?}"
     );
     let calls = fs::read_to_string(log).unwrap();
+    assert_eq!(
+        calls.lines().count(),
+        4,
+        "unexpected hyprctl calls: {calls}"
+    );
+    assert_eq!(
+        calls.lines().filter(|call| *call == "instances -j").count(),
+        1,
+        "instance discovery should be reused: {calls}"
+    );
     assert!(calls.lines().any(|call| call == "-i second binds -j"));
     assert!(calls.lines().any(|call| call == "-i second submap -j"));
+    assert!(calls.lines().any(|call| call == "-i second devices -j"));
     let _ = fs::remove_dir_all(base);
 }
 
