@@ -3,7 +3,7 @@ use crate::environment::Environment;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FocusedTarget {
     pub pid: u32,
-    pub source: &'static str,
+    pub source: String,
 }
 
 pub fn resolve() -> Result<FocusedTarget, String> {
@@ -19,7 +19,10 @@ pub fn resolve_with_environment(environment: &Environment) -> Result<FocusedTarg
         {
             if let Some((source, focused_pid)) = entry.focused_pid.or(entry.focus) {
                 if let Ok(pid) = focused_pid() {
-                    return Ok(FocusedTarget { pid, source });
+                    return Ok(FocusedTarget {
+                        pid,
+                        source: source.to_owned(),
+                    });
                 }
             }
         }
@@ -30,7 +33,7 @@ pub fn resolve_with_environment(environment: &Environment) -> Result<FocusedTarg
     }) {
         return crate::extension_adapters::focused_pid(adapter).map(|pid| FocusedTarget {
             pid,
-            source: "compositor extension",
+            source: format!("{} (manifest)", adapter.display),
         });
     }
     if environment.selected_compositor.is_none() {
@@ -49,7 +52,7 @@ mod tests {
     fn focused_target_keeps_the_evidence_source() {
         let target = FocusedTarget {
             pid: 42,
-            source: "fixture",
+            source: "fixture".into(),
         };
         assert_eq!(target.pid, 42);
         assert_eq!(target.source, "fixture");

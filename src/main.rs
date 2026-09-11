@@ -774,7 +774,7 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
                 .as_ref()
                 .map(|target| target.pid)
                 .or(target_pid);
-            let resolved_source = focused_target.as_ref().map(|target| target.source);
+            let resolved_source = focused_target.as_ref().map(|target| target.source.as_str());
             let reports: Vec<_> = sequence
                 .as_slice()
                 .iter()

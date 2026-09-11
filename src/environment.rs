@@ -5,8 +5,8 @@
 
 use crate::layers::{compositor, ghostty, hyprland, terminal_app};
 use crate::{ime, remapper};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 /// Session identity and selected integration points, collected once.
 #[derive(Debug, Clone)]
@@ -45,9 +45,11 @@ pub struct Environment {
     /// Applicable extension adapters scored using the same session hints.
     pub extension_candidates: Vec<ExtensionCandidate>,
     pub selected_extension: Option<String>,
-    /// Per-snapshot inventory cache. Commands run at most once per adapter.
-    pub extension_inventory:
-        Arc<Mutex<HashMap<String, crate::extension_adapters::InventoryResult>>>,
+    /// Per-snapshot, single-threaded inventory cache. Commands run at most
+    /// once per adapter while this Environment is used by a command. The
+    /// snapshot is not shared across worker threads, so RefCell avoids a
+    /// mutex whose poisoning could silently disable the cache.
+    pub extension_inventory: RefCell<HashMap<String, crate::extension_adapters::InventoryResult>>,
     /// Per-desktop (applicable, ipc) flags in registry priority order.
     pub desktops: Vec<DesktopStatus>,
 }
@@ -245,7 +247,7 @@ impl Environment {
             extension_warnings,
             extension_candidates,
             selected_extension,
-            extension_inventory: Arc::new(Mutex::new(HashMap::new())),
+            extension_inventory: RefCell::new(HashMap::new()),
             desktops,
         }
     }
@@ -271,15 +273,13 @@ impl Environment {
         &self,
         adapter: &crate::extension_adapters::ExtensionAdapter,
     ) -> crate::extension_adapters::InventoryResult {
-        if let Ok(cache) = self.extension_inventory.lock() {
-            if let Some(result) = cache.get(&adapter.id) {
-                return result.clone();
-            }
+        if let Some(result) = self.extension_inventory.borrow().get(&adapter.id).cloned() {
+            return result;
         }
         let result = crate::extension_adapters::inventory_report(adapter);
-        if let Ok(mut cache) = self.extension_inventory.lock() {
-            cache.insert(adapter.id.clone(), result.clone());
-        }
+        self.extension_inventory
+            .borrow_mut()
+            .insert(adapter.id.clone(), result.clone());
         result
     }
 }

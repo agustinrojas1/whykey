@@ -48,32 +48,7 @@ pub fn current() -> Inventory {
         }
     }
 
-    for adapter in &environment.extension_adapters {
-        if !crate::extension_adapters::applicable_with_context(
-            adapter,
-            &environment.compositor_context,
-        ) {
-            continue;
-        }
-        let report = environment.extension_inventory(adapter);
-        if let Some(error) = report.error {
-            inventory.unavailable.push(error);
-            continue;
-        }
-        inventory.bindings.extend(report.records);
-        if report.malformed_entries > 0 {
-            inventory.unavailable.push(format!(
-                "{}: {} malformed binding entr{} skipped",
-                adapter.display,
-                report.malformed_entries,
-                if report.malformed_entries == 1 {
-                    "y"
-                } else {
-                    "ies"
-                }
-            ));
-        }
-    }
+    append_extension_inventory(&environment, &mut inventory);
 
     if environment.desktop("compositor").applicable
         && !crate::registry::DESKTOPS.iter().any(|entry| {
@@ -111,6 +86,50 @@ pub fn current() -> Inventory {
         ));
     }
     inventory
+}
+
+fn append_extension_inventory(
+    environment: &crate::environment::Environment,
+    inventory: &mut Inventory,
+) {
+    crate::command::with_deadline(crate::command::configured_diagnostic_timeout(), || {
+        let mut truncated = false;
+        for adapter in &environment.extension_adapters {
+            if !crate::extension_adapters::applicable_with_context(
+                adapter,
+                &environment.compositor_context,
+            ) {
+                continue;
+            }
+            if crate::command::deadline_exceeded() {
+                truncated = true;
+                break;
+            }
+            let report = environment.extension_inventory(adapter);
+            if let Some(error) = report.error {
+                inventory.unavailable.push(error);
+                continue;
+            }
+            inventory.bindings.extend(report.records);
+            if report.malformed_entries > 0 {
+                inventory.unavailable.push(format!(
+                    "{}: {} malformed binding entr{} skipped",
+                    adapter.display,
+                    report.malformed_entries,
+                    if report.malformed_entries == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                ));
+            }
+        }
+        if truncated {
+            inventory
+                .unavailable
+                .push("extension inventory truncated: diagnostic budget exceeded".into());
+        }
+    });
 }
 
 pub fn filter(
@@ -386,5 +405,41 @@ mod tests {
         assert!(!text.contains("exec foot"));
         let value: serde_json::Value = serde_json::from_str(&render_json(&device_only, 1)).unwrap();
         assert_eq!(value["bindings"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn extension_inventory_stops_at_the_shared_diagnostic_budget() {
+        let mut environment = crate::environment::Environment::collect();
+        environment.compositor_context.desktop = Some("budget".into());
+        environment.extension_adapters = (1..=2)
+            .map(|number| crate::extension_adapters::ExtensionAdapter {
+                id: format!("budget-{number}"),
+                display: "budget".into(),
+                tier: "extension".into(),
+                manifest_path: format!("budget-{number}.toml").into(),
+                applicable_env: Vec::new(),
+                applicable_desktop: vec!["budget".into()],
+                bindings_cmd: vec!["sh".into(), "-c".into(), "sleep 1; printf '[]'".into()],
+                focused_cmd: None,
+                reload_gen_cmd: None,
+            })
+            .collect();
+        let mut inventory = Inventory {
+            schema_version: 1,
+            complete: false,
+            bindings: Vec::new(),
+            unavailable: Vec::new(),
+            limitations: Vec::new(),
+        };
+        crate::command::with_deadline(std::time::Duration::ZERO, || {
+            append_extension_inventory(&environment, &mut inventory);
+        });
+
+        assert!(
+            inventory
+                .unavailable
+                .iter()
+                .any(|entry| entry == "extension inventory truncated: diagnostic budget exceeded")
+        );
     }
 }

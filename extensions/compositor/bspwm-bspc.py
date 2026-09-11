@@ -6,9 +6,17 @@ import pathlib
 import sys
 
 
+def parse(text):
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def main():
     if "--test" in sys.argv:
-        assert "super + Return" in pathlib.Path(__file__).read_text()
+        assert parse("super + Return\n# comment\n") == ["super + Return"]
         return 0
     path = os.environ.get("WHYKEY_SXHKD_CONFIG")
     if not path:
