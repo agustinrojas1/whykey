@@ -121,6 +121,11 @@ pub fn current() -> Vec<Capability> {
             "cli",
             "whykey extension runs one explicitly selected executable through the versioned stdin/stdout protocol with bounded execution",
         ),
+        implemented(
+            "cli.extensions-compositor",
+            "cli",
+            "user-owned compositor manifests provide bounded read-only binding and focused-window queries",
+        ),
         available(
             "capture.terminal",
             "capture",
@@ -204,6 +209,7 @@ pub fn current() -> Vec<Capability> {
         ),
     ];
     capabilities.extend(desktop_capability_entries(&environment));
+    capabilities.extend(extension_capability_entries(&environment));
     capabilities.extend(vec![
         available(
             "compositor.generic",
@@ -344,6 +350,33 @@ fn desktop_capability_entries(environment: &crate::environment::Environment) -> 
                 "compositor",
                 is_available,
                 evidence,
+            ))
+        })
+        .collect()
+}
+
+fn extension_capability_entries(environment: &crate::environment::Environment) -> Vec<Capability> {
+    environment
+        .extension_adapters
+        .iter()
+        .filter_map(|adapter| {
+            let applicable = crate::extension_adapters::applicable_with_context(
+                adapter,
+                &environment.compositor_context,
+            );
+            let id = Box::leak(format!("compositor.extension.{}", adapter.id).into_boxed_str());
+            Some(available(
+                id,
+                "compositor",
+                applicable,
+                if applicable {
+                    format!(
+                        "{} manifest is applicable; bindings remain conditional until its command reports them",
+                        adapter.display
+                    )
+                } else {
+                    format!("{} manifest is installed but its environment and desktop hints do not match", adapter.display)
+                },
             ))
         })
         .collect()

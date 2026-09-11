@@ -12,6 +12,7 @@
     {"id": "cli.diff", "area": "cli", "implemented": true, "summary": "Compare saved snapshots or reports without querying the desktop."},
     {"id": "cli.output.schema-v2", "area": "cli", "implemented": true, "summary": "Emit structured context and evidence while preserving schema v1."},
     {"id": "cli.extensions", "area": "cli", "implemented": true, "summary": "Run one explicitly selected adapter through the bounded JSON protocol."},
+    {"id": "cli.extensions-compositor", "area": "cli", "implemented": true, "summary": "Use opt-in compositor manifests for bounded read-only binding and focus queries."},
     {"id": "capture.terminal", "area": "capture", "implemented": true, "summary": "Capture terminal input when a controlling terminal is available."},
     {"id": "capture.native-compositor", "area": "capture", "implemented": true, "summary": "Capture through the native compositor backend when Hyprland socket2 IPC is available."},
     {"id": "capture.ndjson", "area": "capture", "implemented": true, "summary": "Emit one compact schema-v2 record per captured event."},

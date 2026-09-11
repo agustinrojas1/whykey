@@ -19,6 +19,7 @@ contract shared by the capability registry and tests.
 | `cli.diff` | cli | Implemented | Compare saved snapshots or reports without querying the desktop. |
 | `cli.output.schema-v2` | cli | Implemented | Emit structured context and evidence while preserving schema v1. |
 | `cli.extensions` | cli | Implemented | Run one explicitly selected adapter through the bounded JSON protocol. |
+| `cli.extensions-compositor` | cli | Implemented | Use opt-in compositor manifests for bounded read-only binding and focus queries. |
 | `capture.terminal` | capture | Implemented | Capture terminal input when a controlling terminal is available. |
 | `capture.native-compositor` | capture | Implemented | Capture through the native compositor backend when Hyprland socket2 IPC is available. |
 | `capture.ndjson` | capture | Implemented | Emit one compact schema-v2 record per captured event. |

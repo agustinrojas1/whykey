@@ -1092,6 +1092,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
 
     let compositor_context_available = ssh
         || generic_compositor
+        || !environment.extension_candidates.is_empty()
         || whykey::registry::DESKTOPS.iter().any(|entry| {
             entry.doctor.is_some() && {
                 let status = environment.desktop(entry.id);
@@ -1132,6 +1133,32 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             }
             desktop_checks.insert(doctor.json_key.to_owned(), check);
         }
+        let extension_checks = environment
+            .extension_adapters
+            .iter()
+            .map(|adapter| {
+                serde_json::json!({
+                    "id": adapter.id,
+                    "manifest": adapter.manifest_path,
+                    "applicable": whykey::extension_adapters::applicable_with_context(
+                        adapter,
+                        &environment.compositor_context,
+                    ),
+                    "bindings_cmd_reachable": command_program_available(&adapter.bindings_cmd),
+                    "last_error": serde_json::Value::Null,
+                })
+            })
+            .collect::<Vec<_>>();
+        let manifest_warnings = environment
+            .extension_warnings
+            .iter()
+            .map(|warning| {
+                serde_json::json!({
+                    "manifest": warning.path,
+                    "warning": warning.message,
+                })
+            })
+            .collect::<Vec<_>>();
         let mut legacy_value = serde_json::json!({
             "schema_version": 1,
             "tty": {"available": tty},
@@ -1167,6 +1194,8 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                     "server": nvim_server,
                 }
             },
+            "extension-adapters": extension_checks,
+            "extension-adapter-warnings": manifest_warnings,
         });
         legacy_value
             .as_object_mut()
@@ -1202,6 +1231,34 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 .collect::<Vec<_>>()
                 .join(", ");
             println!("  attempted: {attempted} (unavailable: IPC connection unavailable)");
+        }
+        if !environment.extension_adapters.is_empty() {
+            println!("\nCompositor extension adapters:");
+            for adapter in &environment.extension_adapters {
+                let applicable = whykey::extension_adapters::applicable_with_context(
+                    adapter,
+                    &environment.compositor_context,
+                );
+                let reachable = command_program_available(&adapter.bindings_cmd);
+                print_check(
+                    &format!("{} manifest", adapter.display),
+                    applicable && reachable,
+                    if !applicable {
+                        "environment or desktop hints do not match"
+                    } else if !reachable {
+                        "bindings command executable was not found"
+                    } else {
+                        "manifest applies; commands are queried only when needed"
+                    },
+                );
+            }
+        }
+        for warning in &environment.extension_warnings {
+            println!(
+                "! extension manifest: {} ({})",
+                warning.path.display(),
+                warning.message
+            );
         }
         // The registry owns desktop detection, IPC status, check labels,
         // and hints; the first applicable desktop adapter wins.
@@ -1408,6 +1465,19 @@ fn command_succeeds(program: &str, arguments: &[&str]) -> bool {
     command::output(&mut command)
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn command_program_available(argv: &[String]) -> bool {
+    let Some(program) = argv.first() else {
+        return false;
+    };
+    let path = std::path::Path::new(program);
+    if path.components().count() > 1 {
+        return path.is_file();
+    }
+    env::var_os("PATH").is_some_and(|path_value| {
+        env::split_paths(&path_value).any(|directory| directory.join(program).is_file())
+    })
 }
 
 fn detected_terminal_program() -> Option<String> {
