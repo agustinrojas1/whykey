@@ -1,0 +1,28 @@
+// VS Code user keybindings fixture
+[
+    /* exact match */
+    {
+        "key": "ctrl+x",
+        "command": "test.exact"
+    },
+    /* conditional when match */
+    {
+        "key": "ctrl+y",
+        "command": "test.conditional",
+        "when": "editorTextFocus"
+    },
+    /* chord prefix */
+    {
+        "key": "ctrl+k ctrl+c",
+        "command": "test.chord"
+    },
+    /* unbind removal */
+    {
+        "key": "ctrl+z",
+        "command": "test.removed"
+    },
+    {
+        "key": "ctrl+z",
+        "command": "-test.removed"
+    }
+]

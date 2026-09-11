@@ -412,6 +412,98 @@ fn whykey_nvim_extension_returns_valid_schema_v1() {
 
 #[cfg(unix)]
 #[test]
+fn whykey_vscode_extension_returns_valid_schema_v1() {
+    let output = binary()
+        .args(["extension", "extensions/whykey-vscode", "ctrl+x", "--json"])
+        .env("HOME", "/nonexistent")
+        .output()
+        .unwrap();
+
+    // Without a keybindings.json, extension returns Unavailable (exit 1), not CLI error 2.
+    assert_ne!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["key_display"], "CTRL + X");
+    assert_eq!(value["extension"]["schema_version"], 1);
+    assert_eq!(value["extension"]["capabilities"][0], "identify_action");
+    assert_eq!(value["extension"]["layer"]["status"], "Unavailable");
+}
+
+#[cfg(unix)]
+#[test]
+fn whykey_vscode_extension_matches_fixture_keybindings() {
+    let fixture_home = std::fs::canonicalize("tests/fixtures/extensions/vscode/home").unwrap();
+
+    // 1. Exact match: ctrl+x -> test.exact (stops)
+    let output = binary()
+        .args(["extension", "extensions/whykey-vscode", "ctrl+x", "--json"])
+        .env("HOME", &fixture_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    assert!(
+        value["extension"]["layer"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("test.exact")
+    );
+
+    // 2. When match: ctrl+y -> test.conditional when editorTextFocus (indeterminate)
+    let output = binary()
+        .args(["extension", "extensions/whykey-vscode", "ctrl+y", "--json"])
+        .env("HOME", &fixture_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Indeterminate");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("not evaluated"));
+
+    // 3. Chord prefix: ctrl+k -> starts chord ctrl+k ctrl+c (continues)
+    let output = binary()
+        .args(["extension", "extensions/whykey-vscode", "ctrl+k", "--json"])
+        .env("HOME", &fixture_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("chord"));
+
+    // 4. Absent key: ctrl+q -> not_handled / continues
+    let output = binary()
+        .args(["extension", "extensions/whykey-vscode", "ctrl+q", "--json"])
+        .env("HOME", &fixture_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("defaults not evaluated"));
+
+    // 5. Unbound key: ctrl+z -> not_handled / continues
+    let output = binary()
+        .args(["extension", "extensions/whykey-vscode", "ctrl+z", "--json"])
+        .env("HOME", &fixture_home)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
+}
+
+#[cfg(unix)]
+#[test]
 fn extension_command_uses_the_versioned_stdin_stdout_protocol() {
     let base = temp_dir("extension");
     fs::create_dir_all(&base).unwrap();
