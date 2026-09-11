@@ -16,17 +16,21 @@ trait CaptureBackend {
     fn close(&mut self) -> io::Result<()>;
 }
 
-trait NativeCaptureIo: CaptureBackend {
-    fn socket_fd(&self) -> RawFd;
+trait NativeCaptureTransport {
+    fn poll_fd(&self) -> Option<RawFd>;
     fn read_incoming(&mut self) -> io::Result<usize>;
-    fn renew_lease(&self) -> io::Result<()>;
+    fn renew_lease(&self) -> io::Result<()>; // optional; defaults to Ok(())
+}
+
+trait NativeCaptureIo: CaptureBackend {
+    fn transport(&mut self) -> &mut dyn NativeCaptureTransport;
 }
 ```
 
 The listen loop owns terminal setup, polling, inspection, reporting, and
 export. A backend owns its transport and capture-specific lifecycle. Add a
-backend by implementing `CaptureBackend` and `NativeCaptureIo`, then adding one
-arm to `select_native_backend` in `listen.rs`. That selector is currently
+backend by implementing `CaptureBackend`, its transport, and `NativeCaptureIo`,
+then adding one arm to `select_native_backend` in `listen.rs`. That selector is currently
 Native capture selection now walks the scored compositor candidates and the
 registry's optional capture factory. It returns a boxed transport, so adding
 a second native backend does not change the listen loop. The registry entry
@@ -43,10 +47,11 @@ Source wire shapes have one canonical mapping:
 The old externally tagged `{"CompositorNative":{"backend":"..."}}` object
 is accepted as a reader-only compatibility form. New writers do not emit it.
 
-`NativeCaptureIo` is the current Unix polling seam. Its file descriptor and
-lease-renewal methods reflect Hyprland today. A Sway, portal, or extension
-backend without a lease or Unix socket should move those operations into a
-separate transport abstraction before it is registered.
+`NativeCaptureTransport` is the polling/lease seam. A transport may expose no
+file descriptor and may use the default no-op lease renewal; the current
+Hyprland implementation supplies both through its Unix socket. A Sway,
+portal, or extension backend can therefore register a different transport
+without expanding `CaptureBackend`.
 
 `reload_generation` is reserved for adapters whose configuration can change
 while a report is being assembled. A future listener can compare that

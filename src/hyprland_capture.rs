@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::capture::{
     CaptureBackend, CaptureBackendId, CaptureToken, NativeBackendId, NativeCaptureIo,
+    NativeCaptureTransport,
 };
 pub use crate::capture::{CapturePolicy as HyprlandCapturePolicy, ChordReleaseStatus};
 use crate::command;
@@ -1308,9 +1309,9 @@ impl CaptureBackend for HyprlandCaptureSession {
     }
 }
 
-impl NativeCaptureIo for HyprlandCaptureSession {
-    fn socket_fd(&self) -> RawFd {
-        Self::socket_fd(self)
+impl NativeCaptureTransport for HyprlandCaptureSession {
+    fn poll_fd(&self) -> Option<RawFd> {
+        Some(Self::socket_fd(self))
     }
 
     fn read_incoming(&mut self) -> io::Result<usize> {
@@ -1319,6 +1320,12 @@ impl NativeCaptureIo for HyprlandCaptureSession {
 
     fn renew_lease(&self) -> io::Result<()> {
         Self::renew_lease(self)
+    }
+}
+
+impl NativeCaptureIo for HyprlandCaptureSession {
+    fn transport(&mut self) -> &mut dyn NativeCaptureTransport {
+        self
     }
 }
 
