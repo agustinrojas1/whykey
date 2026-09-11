@@ -9,6 +9,37 @@ use crate::layers::{LayerId, LayerResult, Outcome};
 
 /// Read-only input-method context discovered from the current session.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceStatus {
+    Observed,
+    Conditional,
+    Unobserved,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TextReconstruction {
+    /// Text committed by the application cannot be attributed to one key
+    /// from a passive terminal/compositor observation.
+    pub committed_text: EvidenceStatus,
+    /// Compose/dead-key state belongs to the input-method and terminal state
+    /// machines, not to the daemon-level engine query.
+    pub compose_dead_key: EvidenceStatus,
+    /// Application-side preedit is exposed by the client toolkit, not by the
+    /// read-only IBus/Fcitx5 controller methods used here.
+    pub application_preedit: EvidenceStatus,
+}
+
+impl Default for TextReconstruction {
+    fn default() -> Self {
+        Self {
+            committed_text: EvidenceStatus::Conditional,
+            compose_dead_key: EvidenceStatus::Unobserved,
+            application_preedit: EvidenceStatus::Unobserved,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Detection {
     pub engine: String,
     pub sources: Vec<String>,
@@ -25,6 +56,10 @@ pub struct Detection {
     /// that the input method is inactive.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_error: Option<String>,
+    /// Typed limits of what a passive diagnostic can reconstruct. Keeping
+    /// these separate from `query_error` prevents an unreachable daemon from
+    /// being mistaken for an inactive IME or for observed committed text.
+    pub text_reconstruction: TextReconstruction,
 }
 
 /// Detect IBus/Fcitx5 without opening or changing an input-method connection.
@@ -81,6 +116,7 @@ pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Dete
                 active_engine: runtime.active_engine,
                 state: runtime.state,
                 query_error: runtime.error,
+                text_reconstruction: TextReconstruction::default(),
             }
         })
         .collect()
@@ -419,12 +455,25 @@ mod tests {
             active_engine: Some("xkb:us::eng".into()),
             state: None,
             query_error: None,
+            text_reconstruction: TextReconstruction::default(),
         };
         let value = serde_json::to_value(&detection).unwrap();
         assert_eq!(value["engine"], "ibus");
         assert!(value["sources"].is_array());
         assert_eq!(value["active_engine"], "xkb:us::eng");
         assert!(value.get("state").is_none());
+        assert_eq!(
+            value["text_reconstruction"]["committed_text"],
+            "conditional"
+        );
+        assert_eq!(
+            value["text_reconstruction"]["compose_dead_key"],
+            "unobserved"
+        );
+        assert_eq!(
+            value["text_reconstruction"]["application_preedit"],
+            "unobserved"
+        );
     }
 
     #[test]
@@ -453,6 +502,7 @@ mod tests {
             active_engine: Some("keyboard-us".into()),
             state: Some("inactive".into()),
             query_error: None,
+            text_reconstruction: TextReconstruction::default(),
         }]);
 
         assert!(result.summary.contains("inactive or closed"));
@@ -469,6 +519,7 @@ mod tests {
             active_engine: None,
             state: None,
             query_error: Some("session bus unavailable".into()),
+            text_reconstruction: TextReconstruction::default(),
         }]);
         assert!(result.summary.contains("runtime API is unreachable"));
         assert!(
