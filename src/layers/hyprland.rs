@@ -366,7 +366,7 @@ fn inspect_system_with_values(
     let lua_hints = lua_config_bindings();
     let config_ignore_mods = config_has_ignore_mods(key, &lua_hints);
 
-    let mut result = inspect_json_with_keycode(
+    let mut result = super::hyprland_matching::analyze(
         key,
         &bindings_json,
         &active_submap,
@@ -577,7 +577,7 @@ struct ConfigBindHint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LuaBindHint {
+pub(crate) struct LuaBindHint {
     combo: KeyCombo,
     description: Option<String>,
     action: Option<String>,
@@ -1432,7 +1432,7 @@ fn inspect_json(
     inspect_json_with_keycode(key, bindings_json, active_submap, &[], &[], false, None)
 }
 
-fn inspect_json_with_keycode(
+pub(crate) fn inspect_json_with_keycode(
     key: &KeyCombo,
     bindings_json: &str,
     active_submap: &str,

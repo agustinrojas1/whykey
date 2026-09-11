@@ -104,6 +104,11 @@ Listener internals keep terminal protocol decoding (legacy escape sequences
 and Kitty keyboard protocol) behind `listen_protocol`; terminal restoration,
 evdev reads, and report rendering remain separate transport responsibilities.
 
+Hyprland inspection has the same boundary: IPC/instance/config acquisition is
+kept in the Hyprland adapter, while `hyprland_matching` analyzes an already
+collected JSON snapshot. The analysis boundary never invokes `hyprctl`, reads
+config files, or mutates compositor state.
+
 The deterministic desktop-session fixtures and their CLI-test mapping are in
 [`tests/fixtures/sessions/matrix.json`](tests/fixtures/sessions/matrix.json).
 They cover the adapter shapes without claiming live runtime or version state.
