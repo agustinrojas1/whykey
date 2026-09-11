@@ -512,7 +512,6 @@ pub enum SuppressedHandledOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapturePreamble {
     Suppressed { universal_match: bool },
-    HyprlandPassedThrough,
     TerminalObserved,
     HyprlandObserved,
     EvdevObserved,
@@ -569,7 +568,7 @@ pub fn evaluate_conclusion(
                         }
                     };
                     return EvaluatedConclusion {
-                        preamble: None,
+                        preamble: Some(CapturePreamble::Suppressed { universal_match }),
                         conclusion: Conclusion::SuppressedHandled {
                             universal_match,
                             handled,
@@ -580,7 +579,7 @@ pub fn evaluate_conclusion(
                 }
             }
             crate::listen::CaptureDisposition::PassedThrough => {
-                preamble = Some(CapturePreamble::HyprlandPassedThrough);
+                preamble = Some(CapturePreamble::HyprlandObserved);
             }
             crate::listen::CaptureDisposition::ObservedOnly => match &observation.source {
                 crate::listen::CaptureSource::Terminal => {
@@ -738,7 +737,7 @@ fn render_conclusion(
             } => {
                 output.push_str("  Whykey captured and suppressed this event.\n");
             }
-            CapturePreamble::HyprlandPassedThrough => {
+            CapturePreamble::HyprlandObserved => {
                 output.push_str(
                     "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
                 );
@@ -746,11 +745,6 @@ fn render_conclusion(
             CapturePreamble::TerminalObserved => {
                 output.push_str(
                     "  The captured event reached this terminal, so earlier forwarding is confirmed.\n",
-                );
-            }
-            CapturePreamble::HyprlandObserved => {
-                output.push_str(
-                    "  The key event was captured by Hyprland, but forwarding is not confirmed.\n",
                 );
             }
             CapturePreamble::EvdevObserved => {
@@ -762,77 +756,64 @@ fn render_conclusion(
     }
 
     match &evaluated.conclusion {
-        Conclusion::SuppressedHandled {
-            universal_match,
-            handled,
-        } => {
-            if *universal_match {
-                output.push_str(
-                    "  Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute.\n",
-                );
-            } else {
-                output.push_str("  Whykey captured and suppressed this event.\n");
-            }
-            match handled {
-                SuppressedHandledOutcome::IndeterminatePropagation { action } => {
-                    output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
-                    if let Some(action) = action {
-                        output.push_str(&format!(
+        Conclusion::SuppressedHandled { handled, .. } => match handled {
+            SuppressedHandledOutcome::IndeterminatePropagation { action } => {
+                output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
+                if let Some(action) = action {
+                    output.push_str(&format!(
                             "  The configuration describes the action as {action}; Whykey did not execute the dispatcher.\n"
                         ));
-                    }
-                }
-                SuppressedHandledOutcome::Universal {
-                    layer,
-                    action: Some(action),
-                } => {
-                    output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} may execute {action}.\n"
-                    ));
-                }
-                SuppressedHandledOutcome::Universal {
-                    layer,
-                    action: None,
-                } => {
-                    output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} universal binding may handle {key}.\n"
-                    ));
-                }
-                SuppressedHandledOutcome::Opaque {
-                    layer,
-                    action: Some(action),
-                } => {
-                    output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} may execute {action}; Whykey did not execute the dispatcher.\n"
-                    ));
-                }
-                SuppressedHandledOutcome::Opaque {
-                    layer,
-                    action: None,
-                } => {
-                    output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} may handle {key}; Whykey did not execute the dispatcher.\n"
-                    ));
-                }
-                SuppressedHandledOutcome::Standard {
-                    layer,
-                    action: Some(action),
-                } => {
-                    output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} would run {action}.\n"
-                    ));
-                }
-                SuppressedHandledOutcome::Standard {
-                    layer,
-                    action: None,
-                } => {
-                    output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} would handle and consume {key}.\n"
-                    ));
                 }
             }
-            return output;
-        }
+            SuppressedHandledOutcome::Universal {
+                layer,
+                action: Some(action),
+            } => {
+                output.push_str(&format!(
+                    "  The normal configuration indicates that {layer} may execute {action}.\n"
+                ));
+            }
+            SuppressedHandledOutcome::Universal {
+                layer,
+                action: None,
+            } => {
+                output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} universal binding may handle {key}.\n"
+                    ));
+            }
+            SuppressedHandledOutcome::Opaque {
+                layer,
+                action: Some(action),
+            } => {
+                output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} may execute {action}; Whykey did not execute the dispatcher.\n"
+                    ));
+            }
+            SuppressedHandledOutcome::Opaque {
+                layer,
+                action: None,
+            } => {
+                output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} may handle {key}; Whykey did not execute the dispatcher.\n"
+                    ));
+            }
+            SuppressedHandledOutcome::Standard {
+                layer,
+                action: Some(action),
+            } => {
+                output.push_str(&format!(
+                    "  The normal configuration indicates that {layer} would run {action}.\n"
+                ));
+            }
+            SuppressedHandledOutcome::Standard {
+                layer,
+                action: None,
+            } => {
+                output.push_str(&format!(
+                        "  The normal configuration indicates that {layer} would handle and consume {key}.\n"
+                    ));
+            }
+        },
         Conclusion::ConfiguredConsumer {
             layer,
             assumes_earlier_forward,
@@ -845,7 +826,6 @@ fn render_conclusion(
             output.push_str(&format!(
                 "  ✓ Configured handler: {layer}\n  {qualifier}{layer} is configured to consume {key}.\n  It should not reach a later layer under this configuration.\n\n"
             ));
-            return output;
         }
         Conclusion::ConfiguredRedirect {
             layer,
@@ -859,41 +839,36 @@ fn render_conclusion(
             output.push_str(&format!(
                 "  ✓ Configured handler: {layer}\n  {qualifier}{layer} is configured to redirect {key} to another window.\n  It should not reach a later layer in this chain under this configuration.\n\n"
             ));
-            return output;
         }
-        Conclusion::SelectedApplication { layer, status } => {
-            match status {
-                ApplicationStatus::Unavailable => {
-                    output.push_str(&format!("  Could not inspect {layer}.\n\n"));
-                }
-                ApplicationStatus::UnresolvedMode => {
-                    output.push_str(&format!(
+        Conclusion::SelectedApplication { layer, status } => match status {
+            ApplicationStatus::Unavailable => {
+                output.push_str(&format!("  Could not inspect {layer}.\n\n"));
+            }
+            ApplicationStatus::UnresolvedMode => {
+                output.push_str(&format!(
                         "  Selected target: {layer} has a matching keymap for {key}, but mode-dependent execution is uncertain.\n\n"
                     ));
-                }
-                ApplicationStatus::UnverifiedExecution => {
-                    output.push_str(&format!(
-                        "  Selected target: {layer} matches {key}; execution is unverified.\n\n"
-                    ));
-                }
-                ApplicationStatus::InteractiveGeneric(summary) => {
-                    output.push_str(&format!(
-                        "  Selected target: {summary}; application shortcut handling is unverified.\n\n"
-                    ));
-                }
-                ApplicationStatus::NoMatchingKeymap => {
-                    output.push_str(&format!(
-                        "  Selected target: {layer}; no matching keymap was found for {key}.\n\n"
-                    ));
-                }
             }
-            return output;
-        }
+            ApplicationStatus::UnverifiedExecution => {
+                output.push_str(&format!(
+                    "  Selected target: {layer} matches {key}; execution is unverified.\n\n"
+                ));
+            }
+            ApplicationStatus::InteractiveGeneric(summary) => {
+                output.push_str(&format!(
+                    "  Selected target: {summary}; application shortcut handling is unverified.\n\n"
+                ));
+            }
+            ApplicationStatus::NoMatchingKeymap => {
+                output.push_str(&format!(
+                    "  Selected target: {layer}; no matching keymap was found for {key}.\n\n"
+                ));
+            }
+        },
         Conclusion::UnverifiedSession { layer } => {
             output.push_str(&format!(
                 "  {layer} has a candidate binding for {key} in the root table, but terminal byte delivery could not be verified.\n\n"
             ));
-            return output;
         }
         Conclusion::HandledAndForwarded {
             layers,
@@ -914,23 +889,19 @@ fn render_conclusion(
                 output.push_str(&format!("  Note: {unavailable} was not inspected.\n"));
             }
             output.push('\n');
-            return output;
         }
         Conclusion::CouldNotInspect { layer } => {
             output.push_str(&format!("  Could not inspect {layer}.\n\n"));
-            return output;
         }
         Conclusion::ModifierAmbiguity { layer } => {
             output.push_str(&format!(
                 "  No exact binding for {key} was found in {layer}.\n  Some same-key bindings may ignore modifiers, so forwarding cannot be proven.\n\n"
             ));
-            return output;
         }
         Conclusion::IndeterminateForwarding { layer } => {
             output.push_str(&format!(
                 "  Could not determine whether {layer} forwards {key}.\n\n"
             ));
-            return output;
         }
         Conclusion::ConditionalForwarding => {
             output.push_str(&format!(
