@@ -11,6 +11,7 @@ pub mod bindings;
 pub mod capabilities;
 pub mod capture;
 pub mod command;
+pub mod config_resolver;
 pub mod conflicts;
 pub mod diff;
 pub mod doctor;
