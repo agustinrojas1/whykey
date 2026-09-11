@@ -9,7 +9,6 @@ import io
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -19,7 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures/differential"
-VERIFY = ROOT / "tools/verify_expected_diff.py"
 
 
 @dataclass(frozen=True)
@@ -140,8 +138,49 @@ def write_metadata(path: Path, result: Result) -> None:
 
 
 def verify_expected(rule: str, base: Path, cand: Path) -> tuple[bool, str]:
-    process = subprocess.run([sys.executable, str(VERIFY), rule, str(base), str(cand)], text=True, capture_output=True)
-    return process.returncode == 0, (process.stdout + process.stderr).strip()
+    """Approve exactly one typed schema-v2 extension; reject anything else."""
+    if rule != "json_v2_modifier_ambiguity":
+        return False, f"Unknown expected difference rule: {rule!r}"
+    try:
+        base_doc = json.loads(base.read_text(encoding="utf-8"), object_pairs_hook=strict_pairs)
+    except Exception as exc:
+        return False, f"Error parsing baseline JSON '{base}': {exc}"
+    try:
+        cand_doc = json.loads(cand.read_text(encoding="utf-8"), object_pairs_hook=strict_pairs)
+    except Exception as exc:
+        return False, f"Error parsing candidate JSON '{cand}': {exc}"
+    if cand_doc.get("schema_version") != 2 or base_doc.get("schema_version") != 2:
+        return False, (
+            "expected schema_version == 2 in both documents, "
+            f"got base={base_doc.get('schema_version')!r}, cand={cand_doc.get('schema_version')!r}"
+        )
+    try:
+        cand_layers = cand_doc.get("path")
+        base_layers = base_doc.get("path")
+        if not isinstance(cand_layers, list) or not isinstance(base_layers, list) or not cand_layers or not base_layers:
+            return False, "non-empty 'path' array missing in JSON v2 report"
+        if cand_layers[0].get("layer") != "Hyprland" or base_layers[0].get("layer") != "Hyprland":
+            return False, (
+                "expected path[0].layer == 'Hyprland', "
+                f"got base={base_layers[0].get('layer')!r}, cand={cand_layers[0].get('layer')!r}"
+            )
+        cand_binding = cand_layers[0].get("binding")
+        base_binding = base_layers[0].get("binding")
+        if not isinstance(cand_binding, dict) or not isinstance(base_binding, dict):
+            return False, "path[0].binding object missing"
+    except (KeyError, IndexError, TypeError) as exc:
+        return False, f"structure error: {exc}"
+    if cand_binding.get("uncertainty") != "ModifierAmbiguity":
+        return False, (
+            "expected path[0].binding.uncertainty == 'ModifierAmbiguity', "
+            f"got {cand_binding.get('uncertainty')!r}"
+        )
+    if base_binding.get("uncertainty") is not None:
+        return False, f"baseline already has uncertainty: {base_binding.get('uncertainty')!r}"
+    del cand_binding["uncertainty"]
+    if cand_doc != base_doc:
+        return False, "candidate has unexpected differences beyond path[0].binding.uncertainty"
+    return True, ""
 
 
 def make_mock_bin(directory: Path) -> str:
