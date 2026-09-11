@@ -197,9 +197,11 @@ Run an opt-in external diagnostic executable using the schema-v1 stdin/stdout
 protocol. The program is isolated in its own process group with a two-second
 timeout. First-party extensions include
 .B extensions/whykey-nvim
-(live Neovim runtime via RPC) and
+(live Neovim runtime via RPC),
 .B extensions/whykey-vscode
-(user VS Code keybindings).
+(user VS Code keybindings), and
+.B extensions/whykey-emacs
+(live Emacs keymap stack via emacsclient).
 .TP
 .B replay file
 Read and render one or more concatenated schema-v1 or schema-v2 JSON reports
@@ -292,6 +294,7 @@ whykey listen
 whykey --json ctrl+left
 whykey extension extensions/whykey-nvim ctrl+x
 whykey extension extensions/whykey-vscode ctrl+x
+whykey extension extensions/whykey-emacs ctrl+x
 eval "$(whykey shell-init bash)"
 .EE
 .SH SEE ALSO

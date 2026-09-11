@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Emacs runtime key query extension for whykey (schema v1)."""
+
+import json
+import os
+import subprocess
+import sys
+
+KEY_MAP = {
+    "LEFT": "<left>",
+    "RIGHT": "<right>",
+    "UP": "<up>",
+    "DOWN": "<down>",
+    "RETURN": "RET",
+    "ESCAPE": "ESC",
+    "SPACE": "SPC",
+    "TAB": "TAB",
+    "BACKSPACE": "DEL",
+    "DELETE": "<delete>",
+}
+
+
+def to_emacs_notation(key_obj):
+    if not isinstance(key_obj, dict):
+        return None
+    raw_key = str(key_obj.get("key", ""))
+    if raw_key.startswith("code:") or raw_key.isdigit():
+        return None
+
+    mods = key_obj.get("modifiers", 0)
+    prefix = ""
+    if mods & 4:
+        prefix += "C-"
+    if mods & 8:
+        prefix += "M-"
+    if mods & 1:
+        prefix += "S-"
+
+    name = KEY_MAP.get(raw_key.upper(), raw_key.lower())
+    return f"{prefix}{name}"
+
+
+def build_eval_expr(notation):
+    escaped = notation.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        f'(let* ((k (kbd "{escaped}")) '
+        f"(b (key-binding k)) "
+        f"(m (symbol-name major-mode)) "
+        f'(b-str (if b (format "%s" b) "nil")) '
+        f"(src (cond "
+        f'((null b) "none") '
+        f'((and (current-local-map) (equal b (lookup-key (current-local-map) k))) "major") '
+        f'((equal b (lookup-key (current-global-map) k)) "global") '
+        f'((and (boundp \'minor-mode-map-alist) '
+        f"      (cl-some (lambda (map-entry) "
+        f"                 (and (boundp (car map-entry)) "
+        f"                      (symbol-value (car map-entry)) "
+        f"                      (equal b (lookup-key (cdr map-entry) k)))) "
+        f"               minor-mode-map-alist)) "
+        f' "minor") '
+        f'((and (boundp \'overriding-terminal-local-map) overriding-terminal-local-map '
+        f'      (equal b (lookup-key overriding-terminal-local-map k))) "overriding") '
+        f'((and (boundp \'overriding-local-map) overriding-local-map '
+        f'      (equal b (lookup-key overriding-local-map k))) "overriding") '
+        f' (t "active")))) '
+        f'(format "%s\\t%s\\t%s" m b-str src))'
+    )
+
+
+def query_emacs(notation):
+    cmd = ["emacsclient"]
+    if "EMACS_SERVER_FILE" in os.environ:
+        cmd.extend(["--server-file", os.environ["EMACS_SERVER_FILE"]])
+    elif "EMACS_SOCKET_NAME" in os.environ:
+        cmd.extend(["--socket-name", os.environ["EMACS_SOCKET_NAME"]])
+    cmd.extend(["--eval", build_eval_expr(notation)])
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=1.5)
+    except FileNotFoundError:
+        return None, "emacsclient not found on PATH"
+    except subprocess.TimeoutExpired:
+        return None, "emacsclient timed out"
+    except Exception as exc:
+        return None, str(exc)
+
+    if res.returncode != 0:
+        err = res.stderr.decode("utf-8", errors="replace").strip()
+        return None, err or f"emacsclient exited with {res.returncode}"
+
+    out = res.stdout.decode("utf-8", errors="replace").strip()
+    if out.startswith('"') and out.endswith('"') and len(out) >= 2:
+        out = out[1:-1]
+    out = out.replace('\\"', '"').replace("\\t", "\t")
+    parts = out.split("\t")
+    mode = parts[0] if len(parts) > 0 else "fundamental-mode"
+    binding = parts[1] if len(parts) > 1 else "nil"
+    source = parts[2] if len(parts) > 2 else "none"
+    return (mode, binding, source), None
+
+
+def inspect_key(req):
+    key_obj = req.get("key", {})
+    notation = to_emacs_notation(key_obj)
+    if not notation:
+        return {
+            "status": "indeterminate",
+            "propagation": "indeterminate",
+            "summary": "numeric keycodes not mappable to Emacs key notation",
+            "details": [f"key: {key_obj}"],
+        }
+
+    data, err = query_emacs(notation)
+    if err:
+        return {
+            "status": "unavailable",
+            "propagation": "indeterminate",
+            "summary": "No running Emacs daemon found (run `emacs --daemon` or evaluate `(server-start)`)",
+            "details": [
+                f"error: {err}",
+                "remediation: start Emacs daemon with `emacs --daemon` or evaluate `(server-start)`",
+            ],
+        }
+
+    mode, binding, source = data
+    if binding == "nil":
+        return {
+            "status": "not_handled",
+            "propagation": "continues",
+            "summary": f"Emacs has no mapping for {notation} in mode {mode}",
+            "details": [
+                f"major-mode: {mode}",
+                "key-binding: nil",
+            ],
+        }
+
+    return {
+        "status": "handled",
+        "propagation": "stops",
+        "summary": f"Emacs binds {notation} to {binding} ({source} keymap)",
+        "details": [
+            f"action: {binding}",
+            f"winning-map: {source}",
+            f"major-mode: {mode}",
+        ],
+    }
+
+
+def self_test():
+    # Notation vectors mirroring emacs_key_notations in application.rs
+    assert to_emacs_notation({"modifiers": 4, "key": "x"}) == "C-x"
+    assert to_emacs_notation({"modifiers": 4, "key": "LEFT"}) == "C-<left>"
+    assert to_emacs_notation({"modifiers": 12, "key": "RETURN"}) == "C-M-RET"
+    assert to_emacs_notation({"modifiers": 5, "key": "RETURN"}) == "C-S-RET"
+    assert to_emacs_notation({"modifiers": 0, "key": "ESCAPE"}) == "ESC"
+    assert to_emacs_notation({"modifiers": 0, "key": "SPACE"}) == "SPC"
+    assert to_emacs_notation({"modifiers": 0, "key": "TAB"}) == "TAB"
+    assert to_emacs_notation({"modifiers": 0, "key": "code:36"}) is None
+
+    # Unavailable envelope
+    res = inspect_key({"key": {"modifiers": 4, "key": "x"}})
+    assert res["status"] in ("unavailable", "handled", "not_handled")
+    assert "emacs --daemon" in res.get("summary", "") or res["status"] in ("handled", "not_handled")
+    print("whykey-emacs self_test passed")
+
+
+def main():
+    if "--test" in sys.argv:
+        self_test()
+        return
+
+    try:
+        raw = sys.stdin.read()
+        req = json.loads(raw) if raw else {}
+    except Exception:
+        req = {}
+
+    response = {
+        "schema_version": 1,
+        "capabilities": ["query_mode", "identify_action"],
+        "result": inspect_key(req),
+    }
+    json.dump(response, sys.stdout)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

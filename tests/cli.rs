@@ -504,6 +504,107 @@ fn whykey_vscode_extension_matches_fixture_keybindings() {
 
 #[cfg(unix)]
 #[test]
+fn whykey_emacs_extension_returns_valid_schema_v1() {
+    let output = binary()
+        .args(["extension", "extensions/whykey-emacs", "ctrl+x", "--json"])
+        .env("EMACS_SERVER_FILE", "/nonexistent/emacs/server")
+        .output()
+        .unwrap();
+
+    // Without a reachable emacs daemon, extension returns Unavailable (exit 1), not CLI error 2.
+    assert_ne!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["key_display"], "CTRL + X");
+    assert_eq!(value["extension"]["schema_version"], 1);
+    assert!(
+        value["extension"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "query_mode")
+    );
+    assert_eq!(value["extension"]["layer"]["status"], "Unavailable");
+}
+
+#[cfg(unix)]
+#[test]
+fn whykey_emacs_extension_matches_fixture_runtime_queries() {
+    let fixture_bin = std::fs::canonicalize("tests/fixtures/extensions/emacs/bin").unwrap();
+    let path_env = format!(
+        "{}:{}",
+        fixture_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // 1. Global keymap match: ctrl+x -> Control-X-prefix
+    let output = binary()
+        .args(["extension", "extensions/whykey-emacs", "ctrl+x", "--json"])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("Control-X-prefix"));
+    assert!(stdout_str.contains("winning-map: global"));
+
+    // 2. Major keymap match: ctrl+left -> org-left-click
+    let output = binary()
+        .args([
+            "extension",
+            "extensions/whykey-emacs",
+            "ctrl+left",
+            "--json",
+        ])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("org-left-click"));
+    assert!(stdout_str.contains("winning-map: major"));
+
+    // 3. Minor keymap match: ctrl+alt+enter -> my-custom-minor-cmd
+    let output = binary()
+        .args([
+            "extension",
+            "extensions/whykey-emacs",
+            "ctrl+alt+return",
+            "--json",
+        ])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "Handled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("my-custom-minor-cmd"));
+    assert!(stdout_str.contains("winning-map: minor"));
+
+    // 4. Absent key: ctrl+q -> not_handled / continues
+    let output = binary()
+        .args(["extension", "extensions/whykey-emacs", "ctrl+q", "--json"])
+        .env("PATH", &path_env)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
+    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout_str.contains("no mapping"));
+}
+
+#[cfg(unix)]
+#[test]
 fn extension_command_uses_the_versioned_stdin_stdout_protocol() {
     let base = temp_dir("extension");
     fs::create_dir_all(&base).unwrap();
