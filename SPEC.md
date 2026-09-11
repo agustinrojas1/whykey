@@ -124,6 +124,10 @@ The child receives no key event to execute, is isolated in a process group,
 and is subject to the normal two-second/one-megabyte limits. Extensions are
 never discovered or invoked automatically.
 
+### First-party extensions
+
+- `extensions/whykey-nvim`: stdlib Python 3 script querying running Neovim via `--remote-expr`. Declares `query_mode` and `identify_action` capabilities. Connects via `NVIM_LISTEN_ADDRESS` or scans `/proc` for active `nvim --listen` / `--server` instances. Returns `status: "unavailable"` when no running Neovim server is found. Converts `KeyCombo` to Vim notation (`<C-x>`, `<C-Left>`, `<C-M-CR>`), evaluates `mode()` and `maparg()`, and reports handling, target action, and `noremap` status.
+
 Parsing is case-insensitive. The display order is `CTRL`, `ALT`, `SHIFT`, `SUPER`, `CAPS`, `MOD2`, `MOD3`, `MOD5`, then the key. Kitty's Hyper/Meta/Num modifier bits are represented by the existing `MOD3`/`MOD5`/`MOD2` masks when a distinct public name is unavailable.
 
 ## Hyprland inspection

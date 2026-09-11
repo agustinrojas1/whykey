@@ -54,6 +54,7 @@ whykey bindings --submap gaming    # list bindings in one submap
 whykey conflicts --source hyprland  # find matching conflicts
 whykey snapshot ctrl+super+return --output whykey-snapshot.json
 whykey diff before.json after.json
+whykey extension extensions/whykey-nvim ctrl+x # query live Neovim runtime via RPC
 ```
 
 Normal reports fit one screen: key, assessment, one result statement,
