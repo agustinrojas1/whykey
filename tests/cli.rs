@@ -389,6 +389,29 @@ fn invalid_combinations_have_a_cli_error_status() {
 
 #[cfg(unix)]
 #[test]
+fn whykey_nvim_extension_returns_valid_schema_v1() {
+    let output = binary()
+        .args(["extension", "extensions/whykey-nvim", "ctrl+x", "--json"])
+        .output()
+        .unwrap();
+
+    // Without a running nvim server, the extension returns Unavailable or Indeterminate (not CLI error 2).
+    assert_ne!(output.status.code(), Some(2));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["key_display"], "CTRL + X");
+    assert_eq!(value["extension"]["schema_version"], 1);
+    assert!(
+        value["extension"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "query_mode")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn extension_command_uses_the_versioned_stdin_stdout_protocol() {
     let base = temp_dir("extension");
     fs::create_dir_all(&base).unwrap();
