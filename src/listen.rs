@@ -488,7 +488,7 @@ fn run_native<B: NativeCaptureIo>(
     let socket_fd = capture_session.socket_fd();
     let _ = flush_input(tty_fd);
 
-    if let Err(err) = capture_session.arm(options.capture_policy) {
+    if let Err(err) = capture_session.arm_token(options.capture_policy) {
         let _ = flush_input(tty_fd);
         if options.capture_policy == HyprlandCapturePolicy::Suppress {
             eprintln!(
@@ -553,7 +553,7 @@ fn run_native<B: NativeCaptureIo>(
                 last_renewed = Instant::now();
             }
             if let Some(observed) = capture_session
-                .next_observed_event(options.events_all)
+                .next_event(options.events_all)
                 .map_err(ListenError::Message)?
             {
                 if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
@@ -677,7 +677,7 @@ fn run_native<B: NativeCaptureIo>(
         }
         if options.capture_policy == HyprlandCapturePolicy::Suppress {
             capture_session
-                .arm(HyprlandCapturePolicy::Suppress)
+                .arm_token(HyprlandCapturePolicy::Suppress)
                 .map_err(ListenError::Message)?;
         }
         if !options.json {
