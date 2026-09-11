@@ -39,6 +39,7 @@ contract shared by the capability registry and tests.
 | `compositor.mate` | compositor | Implemented | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
 | `compositor.niri` | compositor | Implemented | Inspect literal Niri binds configuration. |
 | `compositor.dwl` | compositor | Implemented | Inspect literal dwl config.h key mappings conditionally; dwl has no stable capture IPC. |
+| `compositor.herbstluftwm` | compositor | Implemented | Inspect effective herbstluftwm key bindings through bounded herbstclient IPC. |
 | `compositor.river` | compositor | Implemented | Inspect literal River init mappings. |
 | `compositor.wayfire` | compositor | Implemented | Inspect literal Wayfire binding settings. |
 | `compositor.labwc` | compositor | Implemented | Inspect labwc Openbox-compatible keybind configuration. |

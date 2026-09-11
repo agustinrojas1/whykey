@@ -1,0 +1,8 @@
+{
+  "id": "herbstluftwm",
+  "bindings": [
+    {"key": "Mod4-Return", "action": "spawn foot"}
+  ],
+  "negative": "HERBSTLUFTWM_SOCKET is absent",
+  "ipc_failure": "herbstclient list_keybinds exits non-zero"
+}

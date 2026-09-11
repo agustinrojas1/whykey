@@ -8,8 +8,9 @@
 use crate::capture::NativeCaptureIo;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingRecord, LayerResult, PhysicalInput, cinnamon, compositor, dwl, gnome, hyprland, i3, kde,
-    labwc, mate, niri, openbox, programmable, river, sway, sxhkd, wayfire, x11, xfce,
+    BindingRecord, LayerResult, PhysicalInput, cinnamon, compositor, dwl, gnome, herbstluftwm,
+    hyprland, i3, kde, labwc, mate, niri, openbox, programmable, river, sway, sxhkd, wayfire, x11,
+    xfce,
 };
 
 /// Read-only focused-window PID lookup with its evidence label.
@@ -123,6 +124,9 @@ fn inspect_cinnamon(key: &KeyCombo, _input: Option<&PhysicalInput>) -> LayerResu
 }
 fn inspect_dwl(key: &KeyCombo, _input: Option<&PhysicalInput>) -> LayerResult {
     dwl::Dwl.inspect(key)
+}
+fn inspect_herbstluftwm(key: &KeyCombo, _input: Option<&PhysicalInput>) -> LayerResult {
+    herbstluftwm::Herbstluftwm.inspect(key)
 }
 fn inspect_mate(key: &KeyCombo, _input: Option<&PhysicalInput>) -> LayerResult {
     mate::Mate.inspect(key)
@@ -425,6 +429,32 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             check: "dwl config.h",
             hint: "set DWL_CONFIG or provide ~/.config/dwl/config.h",
             json_key: "dwl",
+        }),
+        capture: None,
+        reload_generation: None,
+    },
+    AdapterDescriptor {
+        id: "herbstluftwm",
+        display: "herbstluftwm",
+        applicable: herbstluftwm::applicable,
+        ipc: Some(herbstluftwm::ipc_available),
+        probe: None,
+        inspect: inspect_herbstluftwm,
+        inspect_with_context: None,
+        bindings: Some(herbstluftwm::binding_inventory),
+        live_bindings: None,
+        inventory: Some(herbstluftwm::binding_inventory),
+        focus: None,
+        focused_pid: None,
+        capability: Some(CapabilityMeta {
+            id: "compositor.herbstluftwm",
+            name: "herbstluftwm",
+            evidence: None,
+        }),
+        doctor: Some(DoctorMeta {
+            check: "herbstluftwm bindings",
+            hint: "run inside herbstluftwm with herbstclient reachable",
+            json_key: "herbstluftwm",
         }),
         capture: None,
         reload_generation: None,
