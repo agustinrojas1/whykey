@@ -45,12 +45,26 @@ pub fn ipc_available() -> bool {
 
 /// Return GNOME bindings as normalized values for the global inventory.
 pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
-    gsettings::inventory(&META, load_bindings())
+    let mut records = gsettings::inventory(&META, load_bindings())?;
+    for record in &mut records {
+        record.context = Some(format!(
+            "{}; live runtime: org.gnome.Shell introspection",
+            record
+                .context
+                .take()
+                .unwrap_or_else(|| "GNOME global shortcut".into())
+        ));
+    }
+    Ok(records)
 }
 
 impl Gnome {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        gsettings::inspect(&META, load_bindings(), key)
+        let mut result = gsettings::inspect(&META, load_bindings(), key);
+        result
+            .details
+            .push(crate::runtime_readers::evidence_line("gnome-shell-runtime"));
+        result
     }
 }
 

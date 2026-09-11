@@ -222,6 +222,7 @@ pub fn current() -> Vec<Capability> {
         ),
     ];
     capabilities.extend(desktop_capability_entries(&environment));
+    capabilities.extend(runtime_capability_entries());
     capabilities.extend(extension_capability_entries(&environment));
     capabilities.extend(vec![
         available(
@@ -390,6 +391,20 @@ fn extension_capability_entries(environment: &crate::environment::Environment) -
                 } else {
                     format!("{} manifest is installed but its environment and desktop hints do not match", adapter.display)
                 },
+            )
+        })
+        .collect()
+}
+
+fn runtime_capability_entries() -> Vec<Capability> {
+    crate::runtime_readers::current()
+        .into_iter()
+        .map(|reader| {
+            available(
+                format!("compositor.{}", reader.id),
+                "compositor",
+                reader.availability.available(),
+                reader.evidence,
             )
         })
         .collect()
