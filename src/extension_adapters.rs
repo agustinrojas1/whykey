@@ -58,6 +58,7 @@ impl InventoryResult {
 /// Find and validate all user-owned compositor manifests.
 pub fn discover() -> (Vec<ExtensionAdapter>, Vec<ManifestWarning>) {
     let directory = env::var_os("WHYKEY_ADAPTER_DIR")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| util::config_base().map(|base| base.join("whykey/adapters")));
     directory.map_or_else(|| (Vec::new(), Vec::new()), |path| discover_in(&path))
@@ -158,7 +159,7 @@ pub fn applicable_with_context(adapter: &ExtensionAdapter, context: &compositor:
 /// Execute a manifest's bounded inventory command and parse its output.
 pub fn inventory_report(adapter: &ExtensionAdapter) -> InventoryResult {
     let Some(program) = adapter.bindings_cmd.first() else {
-        return InventoryResult::unavailable("bindings_cmd is empty".into());
+        return InventoryResult::unavailable(format!("{}: bindings_cmd is empty", adapter.id));
     };
     let mut command = Command::new(program);
     command.args(&adapter.bindings_cmd[1..]);
@@ -173,8 +174,8 @@ pub fn inventory_report(adapter: &ExtensionAdapter) -> InventoryResult {
         }
         Err(error) => {
             return InventoryResult::unavailable(format!(
-                "{} bindings command unavailable: {error}",
-                adapter.display
+                "{} ({}): bindings command unavailable: {error}",
+                adapter.id, adapter.display
             ));
         }
     };
@@ -261,15 +262,25 @@ pub fn inspect_with_report(
 
 pub fn focused_pid(adapter: &ExtensionAdapter) -> Result<u32, String> {
     let Some(argv) = adapter.focused_cmd.as_ref() else {
-        return Err(format!("{} has no focused_cmd", adapter.display));
+        return Err(format!(
+            "{} ({}): no focused_cmd",
+            adapter.id, adapter.display
+        ));
     };
     let Some(program) = argv.first() else {
-        return Err(format!("{} focused_cmd is empty", adapter.display));
+        return Err(format!(
+            "{} ({}): focused_cmd is empty",
+            adapter.id, adapter.display
+        ));
     };
     let mut command = Command::new(program);
     command.args(&argv[1..]);
-    let output = command::output(&mut command)
-        .map_err(|error| format!("{} focused command unavailable: {error}", adapter.display))?;
+    let output = command::output(&mut command).map_err(|error| {
+        format!(
+            "{} ({}): focused command unavailable: {error}",
+            adapter.id, adapter.display
+        )
+    })?;
     if !output.status.success() {
         return Err(format_command_failure(
             adapter,
@@ -283,8 +294,8 @@ pub fn focused_pid(adapter: &ExtensionAdapter) -> Result<u32, String> {
     }
     let value: serde_json::Value = serde_json::from_str(text.trim()).map_err(|error| {
         format!(
-            "{} focused command returned invalid PID: {error}",
-            adapter.display
+            "{} ({}): focused command returned invalid PID: {error}",
+            adapter.id, adapter.display
         )
     })?;
     value
@@ -293,8 +304,8 @@ pub fn focused_pid(adapter: &ExtensionAdapter) -> Result<u32, String> {
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| {
             format!(
-                "{} focused command did not return a valid PID",
-                adapter.display
+                "{} ({}): focused command did not return a valid PID",
+                adapter.id, adapter.display
             )
         })
 }
@@ -391,11 +402,14 @@ fn format_command_failure(adapter: &ExtensionAdapter, status: String, stderr: &[
         stderr
     };
     if tail.is_empty() {
-        format!("{} bindings command exited with {status}", adapter.display)
+        format!(
+            "{} ({}): bindings command exited with {status}",
+            adapter.id, adapter.display
+        )
     } else {
         format!(
-            "{} bindings command exited with {status}: {tail}",
-            adapter.display
+            "{} ({}): bindings command exited with {status}: {tail}",
+            adapter.id, adapter.display
         )
     }
 }
