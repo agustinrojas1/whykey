@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "operation": "listen",
+  "input": {"kind": "key", "key": {"key": "Z", "modifiers": 4}, "key_display": "CTRL + Z"},
+  "assessment": {"confidence": "high", "terminal_reached": true},
+  "observation": {
+    "disposition": "observed_only",
+    "combo": {"key": "Z", "modifiers": 4},
+    "raw": [26],
+    "raw_display": "0x1a",
+    "modifier_state": null,
+    "associated_text": null,
+    "physical_keycode": null,
+    "encoding": "legacy",
+    "protocol_flags": null,
+    "event_type": "Press",
+    "alternate_keys": null,
+    "alternate_key": null,
+    "source": "Terminal"
+  },
+  "path": []
+}

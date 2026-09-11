@@ -282,7 +282,7 @@ fn main() -> ExitCode {
                 "--evdev" | "-e" => evdev = true,
                 "-h" | "--help" => {
                     println!(
-                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, captures and temporarily suppresses Hyprland shortcuts when available, falling back to the terminal. --pass-through captures via Hyprland without suppression; --terminal forces terminal capture; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with Hyprland or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
+                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, uses native compositor capture (today: Hyprland) when available, temporarily suppressing shortcuts and falling back to the terminal otherwise. --pass-through captures through Hyprland without suppression; --terminal forces terminal capture; --evdev reads Linux keyboard events before the compositor without grabbing devices.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -1032,6 +1032,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
         .unwrap_or_default();
     let shell_snapshot = shell_snapshot_available(&shell);
     let evdev = listen::evdev_available();
+    let native_compositor = whykey::capabilities::native_capture_available_for_doctor();
     let evdev_devices = listen::evdev_devices();
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
@@ -1107,6 +1108,10 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             },
             "xkb": {"compiler": xkb},
             "evdev": {"available": evdev, "devices": evdev_devices},
+            "native-compositor": {
+                "available": native_compositor,
+                "backend": "Hyprland"
+            },
             "remappers": remappers,
             "ime": ime,
             "terminal_program": terminal_program,
@@ -1144,6 +1149,11 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     } else {
         println!("whykey doctor\n");
         print_check("controlling TTY", tty, "run inside a terminal");
+        print_check(
+            "Native capture (Hyprland)",
+            native_compositor,
+            "set HYPRLAND_INSTANCE_SIGNATURE and ensure socket2 IPC is reachable",
+        );
         // The registry owns desktop detection, IPC status, check labels,
         // and hints; the first applicable desktop adapter wins.
         let selected = whykey::registry::DESKTOPS

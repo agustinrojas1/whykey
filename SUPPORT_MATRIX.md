@@ -20,6 +20,7 @@ contract shared by the capability registry and tests.
 | `cli.output.schema-v2` | cli | Implemented | Emit structured context and evidence while preserving schema v1. |
 | `cli.extensions` | cli | Implemented | Run one explicitly selected adapter through the bounded JSON protocol. |
 | `capture.terminal` | capture | Implemented | Capture terminal input when a controlling terminal is available. |
+| `capture.native-compositor` | capture | Implemented | Capture through the native compositor backend when Hyprland socket2 IPC is available. |
 | `capture.ndjson` | capture | Implemented | Emit one compact schema-v2 record per captured event. |
 | `capture.export` | capture | Implemented | Write replayable JSON or NDJSON capture records to an explicit file. |
 | `capture.evdev` | capture | Implemented | Capture Linux evdev keyboard events when a readable device is available. |

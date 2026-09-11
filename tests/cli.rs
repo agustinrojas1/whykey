@@ -2902,7 +2902,7 @@ fn default_source_selection_falls_back_to_terminal_without_hyprland() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(combined.contains("Global Hyprland capture is unavailable:"));
+    assert!(combined.contains("Native compositor capture (Hyprland) is unavailable:"));
     assert!(
         combined.contains(
             "Using terminal capture; shortcuts consumed by the compositor will not appear."
@@ -2921,7 +2921,7 @@ fn terminal_flag_suppresses_fallback_warning() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!combined.contains("Global Hyprland capture is unavailable"));
+    assert!(!combined.contains("Native compositor capture (Hyprland) is unavailable"));
 }
 
 #[test]
@@ -2932,7 +2932,7 @@ fn listen_events_all_fails_when_hyprland_unavailable() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--events all requires Hyprland or evdev capture"));
+    assert!(stderr.contains("--events all requires native compositor or evdev capture"));
     assert!(stderr.contains("HYPRLAND_INSTANCE_SIGNATURE is not set"));
 }
 
@@ -2943,7 +2943,7 @@ fn listen_json_fallback_warns_on_stderr_without_polluting_stdout() {
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Global Hyprland capture is unavailable"));
+    assert!(stderr.contains("Native compositor capture (Hyprland) is unavailable"));
     assert!(
         stderr.contains(
             "Using terminal capture; shortcuts consumed by the compositor will not appear."
@@ -2960,7 +2960,7 @@ fn hyprland_suppression_failure_fails_closed() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("could not suppress Hyprland shortcuts"));
+    assert!(stderr.contains("could not suppress native compositor shortcuts (Hyprland)"));
     assert!(stderr.contains("No key was captured and no shortcut was executed."));
     assert!(stderr.contains("Use --pass-through to capture without suppression."));
 }
@@ -2977,7 +2977,7 @@ fn pass_through_flag_allows_fallback_when_hyprland_fails() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(combined.contains("Global Hyprland capture is unavailable"));
+    assert!(combined.contains("Native compositor capture (Hyprland) is unavailable"));
     assert!(combined.contains("Using terminal capture"));
 }
 

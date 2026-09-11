@@ -41,7 +41,7 @@ struct NdjsonReport<'a> {
     context: serde_json::Value,
     input: NdjsonInput<'a>,
     assessment: NdjsonAssessment,
-    observation: Option<&'a ObservedKey>,
+    observation: Option<serde_json::Value>,
     path: Vec<NdjsonPathEntry<'a>>,
 }
 
@@ -154,7 +154,7 @@ pub fn render_ndjson(
             terminal_reached: observed
                 .is_some_and(|observation| observation.source.confirms_terminal()),
         },
-        observation: observed,
+        observation: observed.and_then(observation_value_v2),
         path: layers
             .iter()
             .map(|layer| NdjsonPathEntry {
@@ -199,11 +199,30 @@ fn render_json_v2(
             ),
             "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
         },
-        "observation": observed,
+        "observation": observed.and_then(observation_value_v2),
         "path": schema::path(layers),
     }))
     .expect("whykey v2 report types are serializable")
         + "\n"
+}
+
+/// Schema v2 names native capture backends explicitly while keeping the v1
+/// `"Hyprland"` source string intact. Readers accept both forms.
+fn observation_value_v2(observed: &ObservedKey) -> Option<serde_json::Value> {
+    let mut value = serde_json::to_value(observed).ok()?;
+    if let crate::listen::CaptureSource::CompositorNative { backend } = &observed.source {
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "source".into(),
+                serde_json::json!({ "kind": "compositor-native", "backend": backend }),
+            );
+            object.insert(
+                "source_label".into(),
+                serde_json::json!(observed.source.label()),
+            );
+        }
+    }
+    Some(value)
 }
 
 pub fn render(key: &KeyCombo, layers: &[LayerResult], verbose: bool) -> String {
@@ -334,9 +353,11 @@ fn render_inner(
                                 .to_owned(),
                         }
                     }
-                    crate::listen::CaptureSource::Hyprland => {
-                        "  compositor capture proves the key reached Hyprland, but does not prove forwarding".to_owned()
-                    }
+                    crate::listen::CaptureSource::Hyprland
+                    | crate::listen::CaptureSource::CompositorNative { .. } => format!(
+                        "  compositor capture proves the key reached {}, but does not prove forwarding",
+                        observation.source.backend_name().unwrap_or("the compositor")
+                    ),
                     crate::listen::CaptureSource::Evdev { .. } => {
                         "  physical capture does not prove compositor or terminal forwarding".to_owned()
                     }
@@ -379,7 +400,8 @@ fn render_inner(
                 if state.latched.is_none() {
                     let from = match &observation.source {
                         crate::listen::CaptureSource::Terminal => "terminal",
-                        crate::listen::CaptureSource::Hyprland => "compositor",
+                        crate::listen::CaptureSource::Hyprland
+                        | crate::listen::CaptureSource::CompositorNative { .. } => "compositor",
                         crate::listen::CaptureSource::Evdev { .. } => "evdev",
                     };
                     output.push_str(&format!("  modifiers latched: unavailable from {from}\n"));
@@ -582,6 +604,9 @@ pub fn evaluate_conclusion(
                     preamble = Some(CapturePreamble::TerminalObserved);
                 }
                 crate::listen::CaptureSource::Hyprland => {
+                    preamble = Some(CapturePreamble::HyprlandObserved);
+                }
+                crate::listen::CaptureSource::CompositorNative { .. } => {
                     preamble = Some(CapturePreamble::HyprlandObserved);
                 }
                 crate::listen::CaptureSource::Evdev { .. } => {

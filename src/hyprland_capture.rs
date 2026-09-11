@@ -9,22 +9,11 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use crate::capture::{CaptureBackend, NativeBackendId, NativeCaptureIo};
+pub use crate::capture::{CapturePolicy as HyprlandCapturePolicy, ChordReleaseStatus};
 use crate::command;
 use crate::key::KeyCombo;
 use crate::listen::{CaptureDisposition, CaptureSource, KeyEventType, ModifierState, ObservedKey};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HyprlandCapturePolicy {
-    #[default]
-    Suppress,
-    PassThrough,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChordReleaseStatus {
-    Released,
-    TimedOut,
-}
 pub fn hyprland_instance_signature() -> Option<String> {
     env::var_os("HYPRLAND_INSTANCE_SIGNATURE")
         .filter(|sig| !sig.is_empty())
@@ -712,6 +701,14 @@ pub struct HyprlandCaptureSession {
 }
 
 impl HyprlandCaptureSession {
+    /// Check whether a Hyprland capture socket is advertised without opening
+    /// it or querying compositor state.
+    pub fn probe_available() -> bool {
+        hyprland_instance_signature()
+            .and_then(|signature| socket2_path(&signature))
+            .is_some()
+    }
+
     pub fn connect() -> Result<Self, String> {
         let signature =
             hyprland_instance_signature().ok_or("HYPRLAND_INSTANCE_SIGNATURE is not set")?;
@@ -1233,9 +1230,59 @@ impl HyprlandCaptureSession {
             event_type: event.event_type,
             alternate_keys: None,
             alternate_key,
-            source: CaptureSource::Hyprland,
+            source: CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
             disposition,
         }
+    }
+}
+
+impl CaptureBackend for HyprlandCaptureSession {
+    fn id(&self) -> NativeBackendId {
+        NativeBackendId::Hyprland
+    }
+
+    fn display(&self) -> &'static str {
+        NativeBackendId::Hyprland.display()
+    }
+
+    fn arm(&mut self, policy: crate::capture::CapturePolicy) -> Result<(), String> {
+        Self::arm(self, policy)
+    }
+
+    fn next_observed_event(&mut self, events_all: bool) -> Result<Option<ObservedKey>, String> {
+        Self::next_observed_event(self, events_all)
+    }
+
+    fn wait_for_chord_release(
+        &mut self,
+        main: crate::xkb::XkbKeycode,
+        timeout: Duration,
+    ) -> Result<ChordReleaseStatus, String> {
+        Self::wait_for_chord_release(self, main, timeout)
+    }
+
+    fn is_suppressing(&self) -> bool {
+        Self::is_suppressing(self)
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        Self::close(self)
+    }
+}
+
+impl NativeCaptureIo for HyprlandCaptureSession {
+    fn socket_fd(&self) -> RawFd {
+        Self::socket_fd(self)
+    }
+
+    fn read_incoming(&mut self) -> io::Result<usize> {
+        Self::read_incoming(self)
+    }
+
+    fn renew_lease(&self) -> io::Result<()> {
+        Self::renew_lease(self)
     }
 }
 
@@ -1301,6 +1348,12 @@ pub(crate) fn decode_test_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fake_session_satisfies_capture_backend_trait() {
+        fn assert_backend<T: crate::capture::CaptureBackend>() {}
+        assert_backend::<HyprlandCaptureSession>();
+    }
 
     #[test]
     fn parse_complete_fragmented_and_combined_socket_records() {
@@ -1412,7 +1465,12 @@ mod tests {
         );
         assert_eq!(observed.combo.key(), "RETURN");
         assert_eq!(observed.combo.modmask(), 0);
-        assert_eq!(observed.source, CaptureSource::Hyprland);
+        assert_eq!(
+            observed.source,
+            CaptureSource::CompositorNative {
+                backend: "Hyprland".into()
+            }
+        );
         assert_eq!(observed.encoding, "Hyprland XKB key event");
         assert_eq!(observed.disposition, CaptureDisposition::Suppressed);
     }

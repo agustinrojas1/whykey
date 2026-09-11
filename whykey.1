@@ -114,9 +114,9 @@ running. The selection is scoped to this inspection and does not change the
 user's environment.
 .TP
 .B listen
-Capture the next key reaching the terminal or, when available, through a
-temporary Hyprland hook. Native Hyprland capture changes the compositor
-session state temporarily and restores the previous submap before reporting;
+Capture the next key reaching the terminal or, when available, through native
+compositor capture (currently a Hyprland hook). The Hyprland backend changes
+the compositor session state temporarily and restores the previous submap before reporting;
 it does not edit configuration files. Press Escape twice within 300
 milliseconds to exit. Use
 .B --repeat

@@ -7,7 +7,7 @@ continues to the next layer.
 
 It inspects the active compositor, terminal, TTY, multiplexer, application,
 and shell. It never executes the shortcut or changes your configuration.
-Native Hyprland listening temporarily changes the compositor session to capture
+Native compositor listening, currently backed by Hyprland, temporarily changes the compositor session to capture
 the event, then restores the previous submap before reporting it.
 
 ```console
@@ -94,18 +94,18 @@ configuration. Missing tools and dynamic configuration are reported as
 uncertain evidence instead of guessed answers.
 
 `whykey listen` captures the next deliberate shortcut to explain its path.
-When running inside a compatible Hyprland session, it defaults to capturing
-and temporarily suppressing ordinary Hyprland bindings via a private submap
-and runtime Lua event hook. Pass `--pass-through` to observe shortcuts while
-allowing their normal actions to run. Because Hyprland's key event does not
+When native compositor capture is available (today: Hyprland), it defaults to
+capturing and temporarily suppressing ordinary compositor bindings via a
+private submap and runtime event hook. Pass `--pass-through` to observe
+shortcuts while allowing their normal actions to run. Because Hyprland's key event does not
 identify the originating keyboard, device identity is reported as unavailable.
 
-If native Hyprland capture is unavailable, Whykey falls back to terminal capture,
+If native compositor capture is unavailable, Whykey falls back to terminal capture,
 observing keys that reach the terminal. Pass `--terminal` to explicitly force
 terminal-only capture. Pass `--evdev` to read Linux input events before the
 compositor (may require permission to access `/dev/input/event*`). Whykey
-never grabs an evdev input device and cleans up temporary Hyprland hooks
-on exit. Press Escape or Ctrl+C to exit. If native Hyprland capture is used,
+never grabs an evdev input device and cleans up temporary native capture hooks
+on exit. Press Escape or Ctrl+C to exit. If the Hyprland backend is used,
 the compositor session is temporarily changed; configuration files are not.
 
 Replay a snapshot without querying the current desktop:

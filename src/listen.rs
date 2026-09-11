@@ -1,10 +1,10 @@
-//! Capture one key event from Hyprland compositor, Linux evdev, or the
+//! Capture one key event from a native compositor, Linux evdev, or the
 //! controlling terminal, and explain it.
 //!
-//! When running inside a compatible Hyprland session, the default listener
-//! uses a temporary runtime Lua hook and capture submap to suppress bound
-//! compositor actions during inspection (or pass them through when configured).
-//! If Hyprland capture is unavailable, it falls back to terminal capture
+//! When native compositor capture is available (today, Hyprland), the default
+//! listener uses a temporary runtime hook to suppress bound compositor actions
+//! during inspection (or pass them through when configured). If native capture
+//! is unavailable, it falls back to terminal capture
 //! (`--terminal` explicitly forces terminal capture). The optional evdev backend
 //! observes physical input events before compositor processing.
 
@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capture::{NativeBackendId, NativeCaptureIo};
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome};
 use crate::report;
@@ -260,24 +261,130 @@ pub struct DeviceModifierState {
     pub locked: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CaptureSource {
     Terminal,
     Hyprland,
+    CompositorNative { backend: String },
     Evdev { device: String, path: String },
+}
+
+impl Serialize for CaptureSource {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Terminal => serializer.serialize_str("Terminal"),
+            Self::Hyprland => serializer.serialize_str("Hyprland"),
+            Self::CompositorNative { backend } if backend == "Hyprland" => {
+                serializer.serialize_str("Hyprland")
+            }
+            Self::CompositorNative { backend } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry(
+                    "CompositorNative",
+                    &serde_json::json!({ "backend": backend }),
+                )?;
+                map.end()
+            }
+            Self::Evdev { device, path } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry(
+                    "Evdev",
+                    &serde_json::json!({ "device": device, "path": path }),
+                )?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CaptureSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(source) => match source.as_str() {
+                "Terminal" => Ok(Self::Terminal),
+                "Hyprland" => Ok(Self::Hyprland),
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown capture source {other}"
+                ))),
+            },
+            serde_json::Value::Object(mut object) => {
+                if let Some(native) = object.remove("CompositorNative") {
+                    let backend = native
+                        .get("backend")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| serde::de::Error::custom("native source lacks backend"))?;
+                    return Ok(Self::CompositorNative {
+                        backend: backend.to_owned(),
+                    });
+                }
+                if object.get("kind").and_then(serde_json::Value::as_str)
+                    == Some("compositor-native")
+                {
+                    let backend = object
+                        .get("backend")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| serde::de::Error::custom("native source lacks backend"))?;
+                    return Ok(Self::CompositorNative {
+                        backend: backend.to_owned(),
+                    });
+                }
+                if let Some(evdev) = object.remove("Evdev") {
+                    return serde_json::from_value::<EvdevSource>(evdev)
+                        .map(|value| Self::Evdev {
+                            device: value.device,
+                            path: value.path,
+                        })
+                        .map_err(serde::de::Error::custom);
+                }
+                Err(serde::de::Error::custom("unknown capture source object"))
+            }
+            _ => Err(serde::de::Error::custom(
+                "capture source must be a string or object",
+            )),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct EvdevSource {
+    device: String,
+    path: String,
 }
 
 impl CaptureSource {
     pub fn label(&self) -> String {
         match self {
             Self::Terminal => "terminal".into(),
-            Self::Hyprland => "Hyprland".into(),
+            Self::Hyprland | Self::CompositorNative { backend: _ } => {
+                self.backend_name().unwrap_or("compositor").to_owned()
+            }
             Self::Evdev { device, path } => format!("evdev ({device}; {path})"),
+        }
+    }
+
+    pub fn backend_name(&self) -> Option<&str> {
+        match self {
+            Self::Hyprland => Some("Hyprland"),
+            Self::CompositorNative { backend } => Some(backend),
+            Self::Terminal | Self::Evdev { .. } => None,
         }
     }
 
     pub fn confirms_terminal(&self) -> bool {
         matches!(self, Self::Terminal)
+    }
+
+    pub fn proves_compositor_receipt(&self) -> bool {
+        matches!(self, Self::Hyprland | Self::CompositorNative { .. })
     }
 }
 
@@ -305,25 +412,27 @@ pub fn run(options: Options) -> Result<(), ListenError> {
         return run_terminal(options);
     }
     #[cfg(target_os = "linux")]
-    match crate::hyprland_capture::HyprlandCaptureSession::connect() {
-        Ok(session) => run_hyprland(options, session),
+    match select_native_backend() {
+        Ok(session) => run_native(options, session),
         Err(error) => {
             if options.events_all {
                 return Err(ListenError::Message(format!(
-                    "Hyprland capture unavailable: {error}; --events all requires Hyprland or evdev capture"
+                    "Native compositor capture (Hyprland) unavailable: {error}; --events all requires native compositor or evdev capture"
                 )));
             }
             if options.capture_policy == HyprlandCapturePolicy::Suppress
                 && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
             {
-                eprintln!("whykey listen: could not suppress Hyprland shortcuts");
+                eprintln!(
+                    "whykey listen: could not suppress native compositor shortcuts (Hyprland)"
+                );
                 eprintln!("No key was captured and no shortcut was executed.");
                 eprintln!("Use --pass-through to capture without suppression.");
                 return Err(ListenError::Setup(format!(
-                    "Hyprland capture unavailable: {error}"
+                    "native compositor capture (Hyprland) unavailable: {error}"
                 )));
             }
-            eprintln!("Global Hyprland capture is unavailable: {error}");
+            eprintln!("Native compositor capture (Hyprland) is unavailable: {error}");
             eprintln!(
                 "Using terminal capture; shortcuts consumed by the compositor will not appear."
             );
@@ -337,22 +446,30 @@ pub fn run(options: Options) -> Result<(), ListenError> {
                 "--events all requires evdev capture on non-Linux platforms".into(),
             ));
         }
-        eprintln!("Global Hyprland capture is unavailable: only supported on Linux");
+        eprintln!("Native compositor capture (Hyprland) is unavailable: only supported on Linux");
         eprintln!("Using terminal capture; shortcuts consumed by the compositor will not appear.");
         run_terminal(options)
     }
 }
 
 #[cfg(target_os = "linux")]
-fn run_hyprland(
+fn select_native_backend() -> Result<crate::hyprland_capture::HyprlandCaptureSession, String> {
+    // Future native backends add one registry arm here without changing the
+    // listener loop.
+    crate::hyprland_capture::HyprlandCaptureSession::connect()
+}
+
+#[cfg(target_os = "linux")]
+fn run_native<B: NativeCaptureIo>(
     options: Options,
-    mut capture_session: crate::hyprland_capture::HyprlandCaptureSession,
+    mut capture_session: B,
 ) -> Result<(), ListenError> {
     let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
     let snapshot = ListenSession::capture();
 
-    if options.capture_policy == HyprlandCapturePolicy::Suppress
+    if capture_session.id() == NativeBackendId::Hyprland
+        && options.capture_policy == HyprlandCapturePolicy::Suppress
         && crate::hyprland_capture::has_universal_bindings()
     {
         eprintln!("warning: universal Hyprland bindings remain active during capture");
@@ -372,7 +489,10 @@ fn run_hyprland(
     if let Err(err) = capture_session.arm(options.capture_policy) {
         let _ = flush_input(tty_fd);
         if options.capture_policy == HyprlandCapturePolicy::Suppress {
-            eprintln!("whykey listen: could not suppress Hyprland shortcuts");
+            eprintln!(
+                "whykey listen: could not suppress native compositor shortcuts ({})",
+                capture_session.display()
+            );
             eprintln!("No key was captured and no shortcut was executed.");
             eprintln!("Use --pass-through to capture without suppression.");
             return Err(ListenError::Setup(
@@ -380,7 +500,8 @@ fn run_hyprland(
             ));
         } else {
             return Err(ListenError::Setup(format!(
-                "Hyprland capture failed to arm: {err}"
+                "{} capture failed to arm: {err}",
+                capture_session.display()
             )));
         }
     }
@@ -476,9 +597,10 @@ fn run_hyprland(
             if pollfds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
                 let _ = flush_input(tty_fd);
                 capture_session.close().map_err(ListenError::Io)?;
-                return Err(ListenError::Message(
-                    "Hyprland socket disconnected while listening".into(),
-                ));
+                return Err(ListenError::Message(format!(
+                    "{} socket disconnected while listening",
+                    capture_session.display()
+                )));
             }
             if pollfds[0].revents & libc::POLLIN != 0 {
                 if let Err(err) = capture_session.read_incoming() {
@@ -493,9 +615,10 @@ fn run_hyprland(
             let Some(main_code) = observed.physical_keycode.and_then(|code| code.to_xkb()) else {
                 let _ = flush_input(tty_fd);
                 let _ = capture_session.close();
-                return Err(ListenError::Message(
-                    "captured Hyprland event has no convertible physical keycode".into(),
-                ));
+                return Err(ListenError::Message(format!(
+                    "captured {} event has no convertible physical keycode",
+                    capture_session.display()
+                )));
             };
             match capture_session.wait_for_chord_release(main_code, Duration::from_millis(1000)) {
                 Ok(crate::hyprland_capture::ChordReleaseStatus::Released) => {}
@@ -518,7 +641,8 @@ fn run_hyprland(
             // events from running while the capture submap is still active.
             if let Err(error) = capture_session.close() {
                 return Err(ListenError::Message(format!(
-                    "could not restore Hyprland submap before reporting: {error}"
+                    "could not restore {} state before reporting: {error}",
+                    capture_session.display()
                 )));
             }
         }
@@ -565,9 +689,9 @@ fn run_hyprland(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_hyprland(_options: Options) -> Result<(), ListenError> {
+fn run_native(_options: Options) -> Result<(), ListenError> {
     Err(ListenError::Setup(
-        "Hyprland capture is only available on Linux".into(),
+        "native compositor capture is only available on Linux".into(),
     ))
 }
 
@@ -725,7 +849,7 @@ fn inspect_with_session(
                 &session.environment,
             )
         }
-        (CaptureSource::Hyprland, Some(keycode)) => {
+        (CaptureSource::Hyprland | CaptureSource::CompositorNative { .. }, Some(keycode)) => {
             crate::layers::inspect_default_chain_hyprland_with_session(
                 &observed.combo,
                 keycode,
@@ -3169,6 +3293,33 @@ xkb_symbols "pc" {
         );
         assert!(!CaptureSource::Hyprland.confirms_terminal());
         assert_eq!(CaptureSource::Hyprland.label(), "Hyprland");
+        let native = CaptureSource::CompositorNative {
+            backend: "Hyprland".into(),
+        };
+        assert_eq!(native.label(), "Hyprland");
+        assert_eq!(native.backend_name(), Some("Hyprland"));
+        assert!(native.proves_compositor_receipt());
+        let encoded = serde_json::to_value(&native).unwrap();
+        assert_eq!(encoded, serde_json::json!("Hyprland"));
+        assert_eq!(
+            serde_json::from_value::<CaptureSource>(encoded).unwrap(),
+            CaptureSource::Hyprland
+        );
+    }
+
+    #[test]
+    fn native_source_reader_accepts_structured_shape() {
+        let source = serde_json::from_value::<CaptureSource>(serde_json::json!({
+            "kind": "compositor-native",
+            "backend": "Sway"
+        }))
+        .unwrap();
+        assert_eq!(
+            source,
+            CaptureSource::CompositorNative {
+                backend: "Sway".into()
+            }
+        );
     }
 
     #[test]

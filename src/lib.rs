@@ -1,5 +1,6 @@
 pub mod bindings;
 pub mod capabilities;
+pub mod capture;
 pub mod command;
 pub mod conflicts;
 pub mod diff;
