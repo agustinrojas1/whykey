@@ -490,19 +490,29 @@ fn render_inner(
 
 fn compositor_candidates_note() -> Option<String> {
     let environment = crate::environment::Environment::collect();
-    if environment.compositor_candidates.len() < 2 {
-        return None;
-    }
-    let candidates = environment
+    let mut candidates = environment
         .compositor_candidates
         .iter()
         .map(|candidate| format!("{}[{}]", candidate.id, candidate.score))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let selected = environment.selected_compositor.unwrap_or("none");
+        .collect::<Vec<_>>();
+    candidates.extend(
+        environment
+            .extension_candidates
+            .iter()
+            .map(|candidate| format!("{}[{}]", candidate.id, candidate.score)),
+    );
+    if candidates.len() < 2 {
+        return None;
+    }
+    let selected = environment
+        .selected_compositor
+        .map(str::to_owned)
+        .or_else(|| environment.selected_extension.clone())
+        .unwrap_or_else(|| "none".into());
     Some(format!(
-        "Note: {} compositors applicable ({candidates}); selected {selected}. Use --instance/--terminal to choose explicitly.\n\n",
-        environment.compositor_candidates.len()
+        "Note: {} compositor candidates applicable ({}); selected {selected}. Use --instance/--terminal to choose explicitly.\n\n",
+        candidates.len(),
+        candidates.join(", ")
     ))
 }
 

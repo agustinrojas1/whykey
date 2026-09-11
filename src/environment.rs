@@ -5,6 +5,8 @@
 
 use crate::layers::{compositor, ghostty, hyprland, terminal_app};
 use crate::{ime, remapper};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Session identity and selected integration points, collected once.
 #[derive(Debug, Clone)]
@@ -36,6 +38,18 @@ pub struct Environment {
     pub selected_compositor: Option<&'static str>,
     /// Every applicable compositor candidate, scored from the same snapshot.
     pub compositor_candidates: Vec<CompositorCandidate>,
+    /// Validated user-owned compositor extension manifests.
+    pub extension_adapters: Vec<crate::extension_adapters::ExtensionAdapter>,
+    /// Non-fatal manifest discovery warnings shared by report surfaces.
+    pub extension_warnings: Vec<crate::extension_adapters::ManifestWarning>,
+    /// Applicable extension adapters scored using the same session hints.
+    pub extension_candidates: Vec<ExtensionCandidate>,
+    pub selected_extension: Option<String>,
+    /// Per-snapshot, single-threaded inventory cache. Commands run at most
+    /// once per adapter while this Environment is used by a command. The
+    /// snapshot is not shared across worker threads, so RefCell avoids a
+    /// mutex whose poisoning could silently disable the cache.
+    pub extension_inventory: RefCell<HashMap<String, crate::extension_adapters::InventoryResult>>,
     /// Per-desktop (applicable, ipc) flags in registry priority order.
     pub desktops: Vec<DesktopStatus>,
 }
@@ -52,6 +66,15 @@ pub struct DesktopStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompositorCandidate {
     pub id: &'static str,
+    pub applicable: bool,
+    pub ipc: bool,
+    pub score: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionCandidate {
+    pub id: String,
+    pub display: String,
     pub applicable: bool,
     pub ipc: bool,
     pub score: u8,
@@ -102,6 +125,7 @@ impl Environment {
         let snapshot = crate::util::ProcessSnapshot::collect();
         let hyprland_probe = hyprland::collect_probe();
         let compositor_context = compositor::current_context();
+        let (extension_adapters, extension_warnings) = crate::extension_adapters::discover();
         let desktops = crate::registry::DESKTOPS
             .iter()
             .map(|descriptor| {
@@ -136,6 +160,34 @@ impl Environment {
             .collect::<Vec<_>>();
         compositor_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
         let selected_compositor = compositor_candidates.first().map(|candidate| candidate.id);
+        let mut extension_candidates =
+            extension_adapters
+                .iter()
+                .filter_map(|adapter| {
+                    let applicable = crate::extension_adapters::applicable_with_context(
+                        adapter,
+                        &compositor_context,
+                    );
+                    applicable.then(|| ExtensionCandidate {
+                        id: adapter.id.clone(),
+                        display: adapter.display.clone(),
+                        applicable,
+                        ipc: false,
+                        score: u8::from(adapter.applicable_env.iter().any(|name| {
+                            std::env::var_os(name).is_some_and(|value| !value.is_empty())
+                        })) * 2
+                            + u8::from(desktop_hint(
+                                &adapter.id,
+                                &adapter.display,
+                                &compositor_context,
+                            )),
+                    })
+                })
+                .collect::<Vec<_>>();
+        extension_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
+        let selected_extension = extension_candidates
+            .first()
+            .map(|candidate| candidate.id.clone());
 
         let shell = std::env::var("SHELL").unwrap_or_default();
         let shell_name = shell
@@ -191,6 +243,11 @@ impl Environment {
             ime: ime::detect_with_snapshot(&snapshot),
             selected_compositor,
             compositor_candidates,
+            extension_adapters,
+            extension_warnings,
+            extension_candidates,
+            selected_extension,
+            extension_inventory: RefCell::new(HashMap::new()),
             desktops,
         }
     }
@@ -210,6 +267,20 @@ impl Environment {
     /// Compositor detail for schema context, reusing the snapshot.
     pub fn compositor_context(&self) -> compositor::Context {
         self.compositor_context.clone()
+    }
+
+    pub fn extension_inventory(
+        &self,
+        adapter: &crate::extension_adapters::ExtensionAdapter,
+    ) -> crate::extension_adapters::InventoryResult {
+        if let Some(result) = self.extension_inventory.borrow().get(&adapter.id).cloned() {
+            return result;
+        }
+        let result = crate::extension_adapters::inventory_report(adapter);
+        self.extension_inventory
+            .borrow_mut()
+            .insert(adapter.id.clone(), result.clone());
+        result
     }
 }
 
@@ -233,6 +304,9 @@ mod tests {
         assert_eq!(first.compositor_context, second.compositor_context);
         assert_eq!(first.remappers, second.remappers);
         assert_eq!(first.ime, second.ime);
+        assert_eq!(first.extension_adapters, second.extension_adapters);
+        assert_eq!(first.extension_warnings, second.extension_warnings);
+        assert_eq!(first.extension_candidates, second.extension_candidates);
     }
 
     #[test]

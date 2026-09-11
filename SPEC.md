@@ -21,6 +21,24 @@ Capture mode is available with `whykey listen [--repeat] [--timeout SECONDS] [--
 
 When more than one compositor adapter is applicable, candidates are scored from the one environment snapshot: reachable read-only IPC contributes 3 points, an explicit compositor environment signature contributes 2, and a matching desktop/session hint contributes 1. Configuration-only evidence contributes 0. Candidates are sorted by descending score with registry order breaking ties; the selected compositor remains the first candidate for compatibility.
 
+### Compositor extension manifests
+
+Users can add a Tier 4 adapter by placing a validated manifest in
+`~/.config/whykey/adapters/`, or by setting `WHYKEY_ADAPTER_DIR`. The manifest
+contains a slug `id`, display name, `tier = "extension"`, environment and
+desktop hints, and an argv-only `bindings_cmd`. `focused_cmd` is optional.
+Unknown keys and malformed entries become doctor warnings. Manifest commands
+run only when the adapter is applicable, through the bounded two-second,
+one-megabyte command runner. The command returns either a JSON array of
+`key`/`action` records or literal `key action` lines. Invalid records are
+skipped and counted. Actions are display data; whykey never executes them.
+
+Extension candidates use the same score weights as compiled-in adapters. A
+manifest environment hint contributes 2 and a desktop hint contributes 1.
+No IPC score is claimed before a command has run. A compiled-in adapter wins
+ties. Tier 4 adapters provide static inspection, inventory, and optional
+focused-PID evidence only; `listen` does not capture through a manifest.
+
 JSON reports have a top-level `schema_version` field. Version 1 remains the
 default for compatibility. `--json --schema-version 2` (or `--json-v2`) opts
 into the version-2 shape, which adds an operation name, session context,
@@ -50,7 +68,9 @@ Sway, or i3 tree API and uses that process for application and shell evidence;
 other desktops report the missing focused-window API. The current
 implementation does not infer temporal prefixes or mode changes between
 steps; those remain explicit limits even though `whykey conflicts` is
-available for enumerated bindings. Sequences are bounded to 64 steps so malformed or
+available for enumerated bindings. A matching compositor manifest can supply
+conditional focused-PID evidence when no compiled-in focus API is available.
+Sequences are bounded to 64 steps so malformed or
 unbounded command-line input cannot grow the report without limit.
 
 `--instance <id>` explicitly selects a Hyprland instance for the inspection

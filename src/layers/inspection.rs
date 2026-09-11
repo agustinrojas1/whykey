@@ -277,7 +277,36 @@ fn inspect_compositor(
     physical_input: Option<&PhysicalInput>,
     session: &crate::environment::Environment,
 ) -> LayerResult {
+    let extension = || {
+        session
+            .extension_adapters
+            .iter()
+            .find(|adapter| {
+                crate::extension_adapters::applicable_with_context(
+                    adapter,
+                    &session.compositor_context,
+                )
+            })
+            .map(|adapter| {
+                crate::extension_adapters::inspect_with_report(
+                    adapter,
+                    key,
+                    session.extension_inventory(adapter),
+                )
+            })
+    };
     match session.selected_compositor {
+        Some("compositor") | None => extension().unwrap_or_else(|| {
+            if session.selected_compositor.is_none()
+                && hyprland::remote_session_without_compositor()
+            {
+                // Keep the explicit SSH explanation for remote terminals while
+                // avoiding a fabricated Hyprland failure for ordinary consoles.
+                hyprland::Hyprland.inspect_with_input(key, physical_input)
+            } else {
+                compositor::inspect()
+            }
+        }),
         Some(id) => {
             let entry = crate::registry::DESKTOPS
                 .iter()
@@ -289,12 +318,6 @@ fn inspect_compositor(
                 (entry.inspect)(key, physical_input)
             }
         }
-        _ if hyprland::remote_session_without_compositor() => {
-            // Keep the explicit SSH explanation for remote terminals while
-            // avoiding a fabricated Hyprland failure for ordinary consoles.
-            hyprland::Hyprland.inspect_with_input(key, physical_input)
-        }
-        _ => compositor::not_detected(),
     }
 }
 

@@ -5,6 +5,7 @@ pub mod command;
 pub mod conflicts;
 pub mod diff;
 pub mod environment;
+pub mod extension_adapters;
 pub mod extensions;
 pub mod focus;
 pub mod hyprland_capture;

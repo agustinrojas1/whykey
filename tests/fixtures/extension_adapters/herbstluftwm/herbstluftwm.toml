@@ -1,0 +1,7 @@
+id = "herbstluftwm"
+display = "fixture herbstluftwm"
+tier = "extension"
+applicable_env = ["WHYKEY_FIXTURE_HERBST"]
+applicable_desktop = ["herbstluftwm"]
+bindings_cmd = ["herbstclient", "list_keybinds"]
+focused_cmd = ["herbstclient", "focused"]

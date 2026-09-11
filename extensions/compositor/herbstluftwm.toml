@@ -1,0 +1,9 @@
+# EXAMPLE ONLY: copy this manifest to ~/.config/whykey/adapters/ and replace
+# the absolute script path before installing it. Do not use this file as-is.
+id = "herbstluftwm"
+display = "herbstluftwm"
+tier = "extension"
+applicable_env = ["HERBSTLUFTWM_SOCKET"]
+applicable_desktop = ["herbstluftwm"]
+bindings_cmd = ["python3", "/absolute/path/to/whykey/extensions/compositor/herbstluftwm.py"]
+focused_cmd = ["herbstclient", "attr", "clients.focus.winid"]

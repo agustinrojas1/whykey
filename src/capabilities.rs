@@ -7,7 +7,9 @@ use crate::schema;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Capability {
-    pub id: &'static str,
+    /// Owned so dynamically discovered extension capabilities do not require
+    /// leaking a string into the process-wide static lifetime.
+    pub id: String,
     pub area: &'static str,
     pub implemented: bool,
     pub availability: &'static str,
@@ -121,6 +123,11 @@ pub fn current() -> Vec<Capability> {
             "cli",
             "whykey extension runs one explicitly selected executable through the versioned stdin/stdout protocol with bounded execution",
         ),
+        implemented(
+            "cli.extensions-compositor",
+            "cli",
+            "user-owned compositor manifests provide bounded read-only binding and focused-window queries",
+        ),
         available(
             "capture.terminal",
             "capture",
@@ -204,6 +211,7 @@ pub fn current() -> Vec<Capability> {
         ),
     ];
     capabilities.extend(desktop_capability_entries(&environment));
+    capabilities.extend(extension_capability_entries(&environment));
     capabilities.extend(vec![
         available(
             "compositor.generic",
@@ -349,9 +357,40 @@ fn desktop_capability_entries(environment: &crate::environment::Environment) -> 
         .collect()
 }
 
-fn implemented(id: &'static str, area: &'static str, evidence: impl Into<String>) -> Capability {
+fn extension_capability_entries(environment: &crate::environment::Environment) -> Vec<Capability> {
+    environment
+        .extension_adapters
+        .iter()
+        .map(|adapter| {
+            let applicable = crate::extension_adapters::applicable_with_context(
+                adapter,
+                &environment.compositor_context,
+            );
+            let id = format!("compositor.extension.{}", adapter.id);
+            available(
+                id,
+                "compositor",
+                applicable,
+                if applicable {
+                    format!(
+                        "{} manifest is applicable; bindings remain conditional until its command reports them",
+                        adapter.display
+                    )
+                } else {
+                    format!("{} manifest is installed but its environment and desktop hints do not match", adapter.display)
+                },
+            )
+        })
+        .collect()
+}
+
+fn implemented(
+    id: impl Into<String>,
+    area: &'static str,
+    evidence: impl Into<String>,
+) -> Capability {
     Capability {
-        id,
+        id: id.into(),
         area,
         implemented: true,
         availability: "available",
@@ -359,9 +398,9 @@ fn implemented(id: &'static str, area: &'static str, evidence: impl Into<String>
     }
 }
 
-fn planned(id: &'static str, area: &'static str, evidence: impl Into<String>) -> Capability {
+fn planned(id: impl Into<String>, area: &'static str, evidence: impl Into<String>) -> Capability {
     Capability {
-        id,
+        id: id.into(),
         area,
         implemented: false,
         availability: "planned",
@@ -370,13 +409,13 @@ fn planned(id: &'static str, area: &'static str, evidence: impl Into<String>) ->
 }
 
 fn available(
-    id: &'static str,
+    id: impl Into<String>,
     area: &'static str,
     is_available: bool,
     evidence: impl Into<String>,
 ) -> Capability {
     Capability {
-        id,
+        id: id.into(),
         area,
         implemented: true,
         availability: if is_available {
@@ -445,6 +484,21 @@ mod tests {
 
         assert_eq!(value["schema_version"], 1);
         assert!(value["capabilities"].is_array());
+    }
+
+    #[test]
+    fn capability_ids_are_owned_and_stable_across_calls() {
+        let first = current()
+            .into_iter()
+            .map(|capability| capability.id)
+            .collect::<Vec<_>>();
+        let second = current()
+            .into_iter()
+            .map(|capability| capability.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(first, second);
+        assert!(first.iter().all(|id| !id.is_empty()));
     }
 
     #[test]

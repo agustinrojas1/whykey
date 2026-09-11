@@ -13,6 +13,11 @@ recorded submap before reporting, and exposes `capture.native-compositor` in
 capabilities and doctor. Other desktops keep their static inspection adapters;
 they fall back to terminal or evdev capture until a native backend is added.
 
+Support tiers are T1 live IPC, T2 live query, T3 literal configuration, and
+T4 manifest extension. T4 manifests are opt-in, bounded, and conditional. They
+add static inspection, binding inventory, and optional focus lookup; they do
+not add a capture backend.
+
 | Adapter | Detection | Source/API | Version evidence | Parsed or reported | Explicit unknown boundary |
 | --- | --- | --- | --- | --- | --- |
 | Hyprland | `HYPRLAND_INSTANCE_SIGNATURE`, instance discovery, or Hyprland IPC; skipped for remote SSH | `hyprctl binds/submap/devices/activewindow`, literal config and Lua files | IPC availability; version is not persisted | bindings, submaps, device scopes, keymaps, focused PID, Lua/config hints | dynamic Lua, inhibitors, generated config, and runtime-vs-disk divergence |
@@ -32,6 +37,7 @@ they fall back to terminal or evdev capture until a native backend is added.
 | X11 xbindkeys | X11 session (`DISPLAY` without Wayland) or config path | `XBINDKEYSRC`/`.xbindkeysrc` | no version claim | literal command/key pairs | daemon activation, WM precedence, and other X11 grabs |
 | Programmable X11 | AwesomeWM, Qtile, or XMonad identity/config detection | literal `rc.lua`, `config.py`, or `xmonad.hs` declarations | no version claim; executable config is never evaluated | literal Awesome `awful.key`, Qtile `Key`, and XMonad `xK_*` mappings | helpers, variables, modes, reload state, and evaluated runtime tables |
 | Generic compositor | desktop/session/display-server context without a dedicated adapter | environment identity only | not applicable | session context and an opaque compositor layer | global bindings and focused PID are unavailable unless another adapter provides them |
+| Manifest extension (T4) | `WHYKEY_ADAPTER_DIR` or `~/.config/whykey/adapters` plus env/desktop hint | bounded `bindings_cmd`, optional `focused_cmd` | command reachability only; generation is optional | script-reported bindings and optional focused PID | runtime activation, reload state, and command output outside the bounded snapshot |
 
 ## Terminal adapters
 
