@@ -68,6 +68,8 @@ pub struct AdapterDescriptor {
     /// Enumerate configured bindings into the inventory, when supported.
     pub bindings: Option<BindingInventory>,
     /// Optional live-binding source; `None` means the adapter is static-only.
+    /// Every current adapter is static-only: its inventory reads configuration
+    /// or read-only IPC snapshots rather than a live event stream.
     pub live_bindings: Option<BindingInventory>,
     /// Canonical inventory field; `bindings` remains as a compatibility alias.
     pub inventory: Option<BindingInventory>,
@@ -639,6 +641,31 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for entry in DESKTOPS {
             assert!(seen.insert(entry.id), "duplicate registry id {}", entry.id);
+            assert_eq!(
+                entry.bindings.is_some(),
+                entry.inventory.is_some(),
+                "legacy bindings and canonical inventory must be paired for {}",
+                entry.id
+            );
+            assert_eq!(
+                entry.focus.is_some(),
+                entry.focused_pid.is_some(),
+                "legacy focus and canonical focused_pid must be paired for {}",
+                entry.id
+            );
+            if let (Some(legacy), Some(canonical)) = (entry.bindings, entry.inventory) {
+                assert_eq!(
+                    legacy as usize, canonical as usize,
+                    "bindings and inventory must point to the same collector for {}",
+                    entry.id
+                );
+            }
+            if let (Some((legacy_label, legacy)), Some((canonical_label, canonical))) =
+                (entry.focus, entry.focused_pid)
+            {
+                assert_eq!(legacy_label, canonical_label);
+                assert_eq!(legacy as usize, canonical as usize);
+            }
         }
     }
 

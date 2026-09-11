@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::listen::ObservedKey;
 use crate::xkb::XkbKeycode;
 
-/// Whether a native backend should consume the captured shortcut.
+/// Whether a capture backend should consume the captured shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CapturePolicy {
     #[default]

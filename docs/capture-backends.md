@@ -48,6 +48,11 @@ lease-renewal methods reflect Hyprland today. A Sway, portal, or extension
 backend without a lease or Unix socket should move those operations into a
 separate transport abstraction before it is registered.
 
+`reload_generation` is reserved for adapters whose configuration can change
+while a report is being assembled. A future listener can compare that
+generation before and after inspection to mark stale binding evidence instead
+of presenting a mixed-configuration report; current adapters leave it unknown.
+
 Backends must preserve the D-016 lifecycle:
 
 ```text
