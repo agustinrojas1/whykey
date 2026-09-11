@@ -6,7 +6,6 @@ pub mod ghostty;
 pub mod gnome;
 pub mod gsettings;
 pub mod hyprland;
-pub(crate) mod hyprland_matching;
 pub mod i3;
 pub mod inspection;
 pub mod kde;
