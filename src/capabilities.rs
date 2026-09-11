@@ -42,17 +42,19 @@ pub fn current() -> Vec<Capability> {
     // focused-window PID operation, evaluated on the same Environment
     // snapshot as every other capability entry.
     let focused_available = crate::registry::DESKTOPS.iter().any(|entry| {
-        entry.focus.is_some() && {
+        entry.focused_pid.or(entry.focus).is_some() && {
             let status = environment.desktop(entry.id);
             status.applicable && status.ipc
         }
     });
     let focus_ipc_unavailable = crate::registry::DESKTOPS.iter().any(|entry| {
-        entry.focus.is_some() && environment.desktop(entry.id).applicable && !focused_available
+        entry.focused_pid.or(entry.focus).is_some()
+            && environment.desktop(entry.id).applicable
+            && !focused_available
     });
-    let focus_without_pid_api = crate::registry::DESKTOPS
-        .iter()
-        .any(|entry| entry.focus.is_none() && environment.desktop(entry.id).applicable);
+    let focus_without_pid_api = crate::registry::DESKTOPS.iter().any(|entry| {
+        entry.focused_pid.or(entry.focus).is_none() && environment.desktop(entry.id).applicable
+    });
 
     let mut capabilities = vec![
         implemented(

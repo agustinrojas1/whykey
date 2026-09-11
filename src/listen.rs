@@ -505,9 +505,9 @@ fn select_native_backend(
 }
 
 #[cfg(target_os = "linux")]
-fn run_native<B: NativeCaptureIo + ?Sized>(
+fn run_native(
     options: Options,
-    mut capture_session: Box<B>,
+    mut capture_session: Box<dyn NativeCaptureIo>,
     snapshot: ListenSession,
 ) -> Result<(), ListenError> {
     let signals = SignalGuard::install()?;

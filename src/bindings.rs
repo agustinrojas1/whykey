@@ -36,7 +36,7 @@ pub fn current() -> Inventory {
     };
 
     for entry in crate::registry::DESKTOPS {
-        let Some(collect) = entry.bindings else {
+        let Some(collect) = entry.inventory.or(entry.bindings) else {
             continue;
         };
         if !inventory_adapter_applies(&environment, entry) {
@@ -49,9 +49,10 @@ pub fn current() -> Inventory {
     }
 
     if environment.desktop("compositor").applicable
-        && !crate::registry::DESKTOPS
-            .iter()
-            .any(|entry| entry.bindings.is_some() && inventory_adapter_applies(&environment, entry))
+        && !crate::registry::DESKTOPS.iter().any(|entry| {
+            entry.inventory.or(entry.bindings).is_some()
+                && inventory_adapter_applies(&environment, entry)
+        })
     {
         inventory
             .limitations

@@ -25,7 +25,7 @@ pub fn resolve_with_environment(environment: &Environment) -> Result<FocusedTarg
             "no supported compositor session was detected for focused-window discovery".into(),
         );
     };
-    if let Some((source, focused_pid)) = entry.focus {
+    if let Some((source, focused_pid)) = entry.focused_pid.or(entry.focus) {
         focused_pid()
             .map(|pid| FocusedTarget { pid, source })
             .map_err(|error| {

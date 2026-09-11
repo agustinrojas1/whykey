@@ -44,6 +44,15 @@ pub type BindingInventory = fn() -> Result<Vec<BindingRecord>, String>;
 /// static-only and has no live capture transport.
 pub type CaptureFactory = fn() -> Result<Box<dyn NativeCaptureIo>, String>;
 
+/// Optional inspection hook that reuses the command's already-collected
+/// probe context instead of rediscovering compositor state.
+pub type ContextualInspect =
+    fn(&KeyCombo, Option<&PhysicalInput>, &crate::environment::Environment) -> LayerResult;
+
+/// Optional discovery hook for adapters whose applicability and IPC checks
+/// must share one read-only probe snapshot.
+pub(crate) type DiscoveryProbe = fn(Option<&hyprland::Probe>) -> (bool, bool);
+
 /// Static adapter descriptor: one registry entry plus its adapter module.
 pub struct AdapterDescriptor {
     /// Stable ID used by selection and tests.
@@ -52,24 +61,48 @@ pub struct AdapterDescriptor {
     pub display: &'static str,
     pub applicable: fn() -> bool,
     pub ipc: Option<fn() -> bool>,
+    pub(crate) probe: Option<DiscoveryProbe>,
     /// Inspect one key combination through this adapter.
     pub inspect: fn(&KeyCombo, Option<&PhysicalInput>) -> LayerResult,
+    pub inspect_with_context: Option<ContextualInspect>,
     /// Enumerate configured bindings into the inventory, when supported.
     pub bindings: Option<BindingInventory>,
+    /// Optional live-binding source; `None` means the adapter is static-only.
+    pub live_bindings: Option<BindingInventory>,
+    /// Canonical inventory field; `bindings` remains as a compatibility alias.
+    pub inventory: Option<BindingInventory>,
     /// Read-only focused-window PID lookup, when supported.
     pub focus: Option<FocusLookup>,
+    /// Canonical focused PID field; `focus` remains as a compatibility alias.
+    pub focused_pid: Option<FocusLookup>,
     /// Capability entry metadata, when the adapter has its own entry.
     pub capability: Option<CapabilityMeta>,
     /// Doctor check metadata, when the adapter has its own check.
     pub doctor: Option<DoctorMeta>,
     /// Live native capture transport, when the adapter provides one.
     pub capture: Option<CaptureFactory>,
+    /// Optional generation identifier for reloadable adapter state.
+    pub reload_generation: Option<fn() -> Option<String>>,
 }
 
 // Inspect wrappers: one uniform signature per adapter. Only Hyprland needs
 // the physical input context; the others ignore it.
 fn inspect_hyprland(key: &KeyCombo, input: Option<&PhysicalInput>) -> LayerResult {
     hyprland::Hyprland.inspect_with_input(key, input)
+}
+fn inspect_hyprland_with_context(
+    key: &KeyCombo,
+    input: Option<&PhysicalInput>,
+    environment: &crate::environment::Environment,
+) -> LayerResult {
+    hyprland::Hyprland.inspect_with_probe(key, input, environment.hyprland_probe.as_ref())
+}
+
+fn probe_hyprland(probe: Option<&hyprland::Probe>) -> (bool, bool) {
+    (
+        probe.is_some(),
+        probe.is_some_and(hyprland::Probe::ipc_available),
+    )
 }
 fn inspect_sway(key: &KeyCombo, _input: Option<&PhysicalInput>) -> LayerResult {
     sway::Sway.inspect(key)
@@ -162,9 +195,14 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
         display: "Hyprland",
         applicable: hyprland::applicable,
         ipc: Some(hyprland::ipc_available),
+        probe: Some(probe_hyprland),
         inspect: inspect_hyprland,
+        inspect_with_context: Some(inspect_hyprland_with_context),
         bindings: Some(hyprland::binding_inventory),
+        live_bindings: None,
+        inventory: Some(hyprland::binding_inventory),
         focus: Some(("Hyprland activewindow", hyprland::focused_pid)),
+        focused_pid: Some(("Hyprland activewindow", hyprland::focused_pid)),
         capability: Some(CapabilityMeta {
             id: "compositor.hyprland",
             name: "Hyprland",
@@ -176,15 +214,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "hyprland",
         }),
         capture: Some(crate::hyprland_capture::capture_connect),
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "sway",
         display: "Sway",
         applicable: sway::applicable,
         ipc: Some(sway::ipc_available),
+        probe: None,
         inspect: inspect_sway,
+        inspect_with_context: None,
         bindings: Some(sway::binding_inventory),
+        live_bindings: None,
+        inventory: Some(sway::binding_inventory),
         focus: Some(("Sway get_tree", sway::focused_pid)),
+        focused_pid: Some(("Sway get_tree", sway::focused_pid)),
         capability: Some(CapabilityMeta {
             id: "compositor.sway",
             name: "Sway",
@@ -196,15 +240,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "sway",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "i3",
         display: "i3",
         applicable: i3::applicable,
         ipc: Some(i3::ipc_available),
+        probe: None,
         inspect: inspect_i3,
+        inspect_with_context: None,
         bindings: Some(i3::binding_inventory),
+        live_bindings: None,
+        inventory: Some(i3::binding_inventory),
         focus: Some(("i3 get_tree", i3::focused_pid)),
+        focused_pid: Some(("i3 get_tree", i3::focused_pid)),
         capability: Some(CapabilityMeta {
             id: "compositor.i3",
             name: "i3",
@@ -216,15 +266,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "i3",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "kde",
         display: "KDE",
         applicable: kde::applicable,
         ipc: Some(kde::ipc_available),
+        probe: None,
         inspect: inspect_kde,
+        inspect_with_context: None,
         bindings: Some(kde::binding_inventory),
+        live_bindings: None,
+        inventory: Some(kde::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.kde",
             name: "KDE Plasma",
@@ -236,15 +292,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "kde",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "xfce",
         display: "XFCE",
         applicable: xfce::applicable,
         ipc: Some(xfce::ipc_available),
+        probe: None,
         inspect: inspect_xfce,
+        inspect_with_context: None,
         bindings: Some(xfce::binding_inventory),
+        live_bindings: None,
+        inventory: Some(xfce::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.xfce",
             name: "Xfce",
@@ -256,15 +318,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "xfce",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "cinnamon",
         display: "Cinnamon",
         applicable: cinnamon::applicable,
         ipc: Some(cinnamon::ipc_available),
+        probe: None,
         inspect: inspect_cinnamon,
+        inspect_with_context: None,
         bindings: Some(cinnamon::binding_inventory),
+        live_bindings: None,
+        inventory: Some(cinnamon::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.cinnamon",
             name: "Cinnamon",
@@ -276,15 +344,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "cinnamon",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "mate",
         display: "MATE",
         applicable: mate::applicable,
         ipc: Some(mate::ipc_available),
+        probe: None,
         inspect: inspect_mate,
+        inspect_with_context: None,
         bindings: Some(mate::binding_inventory),
+        live_bindings: None,
+        inventory: Some(mate::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.mate",
             name: "MATE",
@@ -296,15 +370,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "mate",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "niri",
         display: "Niri",
         applicable: niri::applicable,
         ipc: Some(niri::ipc_available),
+        probe: None,
         inspect: inspect_niri,
+        inspect_with_context: None,
         bindings: Some(niri::binding_inventory),
+        live_bindings: None,
+        inventory: Some(niri::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.niri",
             name: "Niri",
@@ -316,15 +396,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "niri",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "river",
         display: "River",
         applicable: river::applicable,
         ipc: Some(river::ipc_available),
+        probe: None,
         inspect: inspect_river,
+        inspect_with_context: None,
         bindings: Some(river::binding_inventory),
+        live_bindings: None,
+        inventory: Some(river::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.river",
             name: "River",
@@ -336,15 +422,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "river",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "wayfire",
         display: "Wayfire",
         applicable: wayfire::applicable,
         ipc: Some(wayfire::ipc_available),
+        probe: None,
         inspect: inspect_wayfire,
+        inspect_with_context: None,
         bindings: Some(wayfire::binding_inventory),
+        live_bindings: None,
+        inventory: Some(wayfire::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.wayfire",
             name: "Wayfire",
@@ -356,15 +448,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "wayfire",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "labwc",
         display: "Labwc",
         applicable: labwc::applicable,
         ipc: Some(labwc::ipc_available),
+        probe: None,
         inspect: inspect_labwc,
+        inspect_with_context: None,
         bindings: Some(labwc::binding_inventory),
+        live_bindings: None,
+        inventory: Some(labwc::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.labwc",
             name: "labwc",
@@ -376,15 +474,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "labwc",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "sxhkd",
         display: "Sxhkd",
         applicable: sxhkd::applicable,
         ipc: Some(sxhkd::ipc_available),
+        probe: None,
         inspect: inspect_sxhkd,
+        inspect_with_context: None,
         bindings: Some(sxhkd::binding_inventory),
+        live_bindings: None,
+        inventory: Some(sxhkd::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.bspwm-sxhkd",
             name: "bspwm/sxhkd",
@@ -396,15 +500,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "bspwm_sxhkd",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "openbox",
         display: "Openbox",
         applicable: openbox::applicable,
         ipc: Some(openbox::ipc_available),
+        probe: None,
         inspect: inspect_openbox,
+        inspect_with_context: None,
         bindings: Some(openbox::binding_inventory),
+        live_bindings: None,
+        inventory: Some(openbox::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.openbox",
             name: "Openbox",
@@ -416,15 +526,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "openbox",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "gnome",
         display: "GNOME",
         applicable: gnome::applicable,
         ipc: Some(gnome::ipc_available),
+        probe: None,
         inspect: inspect_gnome,
+        inspect_with_context: None,
         bindings: Some(gnome::binding_inventory),
+        live_bindings: None,
+        inventory: Some(gnome::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.gnome",
             name: "GNOME",
@@ -436,15 +552,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "gnome",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "programmable",
         display: "Programmable",
         applicable: programmable::applicable,
         ipc: Some(programmable::ipc_available),
+        probe: None,
         inspect: inspect_programmable,
+        inspect_with_context: None,
         bindings: Some(programmable::binding_inventory),
+        live_bindings: None,
+        inventory: Some(programmable::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.programmable-x11",
             name: "programmable X11 WM",
@@ -456,15 +578,21 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "programmable_x11",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "x11",
         display: "X11",
         applicable: x11::applicable,
         ipc: Some(x11::ipc_available),
+        probe: None,
         inspect: inspect_x11,
+        inspect_with_context: None,
         bindings: Some(x11::binding_inventory),
+        live_bindings: None,
+        inventory: Some(x11::binding_inventory),
         focus: None,
+        focused_pid: None,
         capability: Some(CapabilityMeta {
             id: "compositor.x11.xbindkeys",
             name: "X11 xbindkeys",
@@ -476,18 +604,25 @@ pub static DESKTOPS: &[AdapterDescriptor] = &[
             json_key: "x11_xbindkeys",
         }),
         capture: None,
+        reload_generation: None,
     },
     AdapterDescriptor {
         id: "compositor",
         display: "Compositor",
         applicable: compositor::applicable,
         ipc: None,
+        probe: None,
         inspect: inspect_generic_compositor,
+        inspect_with_context: None,
         bindings: None,
+        live_bindings: None,
+        inventory: None,
         focus: None,
+        focused_pid: None,
         capability: None,
         doctor: None,
         capture: None,
+        reload_generation: None,
     },
 ];
 

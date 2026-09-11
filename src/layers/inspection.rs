@@ -279,20 +279,15 @@ fn inspect_compositor(
 ) -> LayerResult {
     match session.selected_compositor {
         Some(id) => {
-            // TODO(backend-trait): move probe-aware compositor adapters behind
-            // the native backend registry once those probes share one context.
-            if id == "hyprland" {
-                return hyprland::Hyprland.inspect_with_probe(
-                    key,
-                    physical_input,
-                    session.hyprland_probe.as_ref(),
-                );
-            }
             let entry = crate::registry::DESKTOPS
                 .iter()
                 .find(|entry| entry.id == id)
                 .unwrap_or_else(|| panic!("selected compositor '{id}' has no adapter descriptor"));
-            (entry.inspect)(key, physical_input)
+            if let Some(inspect) = entry.inspect_with_context {
+                inspect(key, physical_input, session)
+            } else {
+                (entry.inspect)(key, physical_input)
+            }
         }
         _ if hyprland::remote_session_without_compositor() => {
             // Keep the explicit SSH explanation for remote terminals while

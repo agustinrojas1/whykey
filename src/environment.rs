@@ -105,13 +105,12 @@ impl Environment {
         let desktops = crate::registry::DESKTOPS
             .iter()
             .map(|descriptor| {
-                if descriptor.id == "hyprland" {
+                if let Some(probe) = descriptor.probe {
+                    let (applicable, ipc) = probe(hyprland_probe.as_ref());
                     DesktopStatus {
                         id: descriptor.id,
-                        applicable: hyprland_probe.is_some(),
-                        ipc: hyprland_probe
-                            .as_ref()
-                            .is_some_and(hyprland::Probe::ipc_available),
+                        applicable,
+                        ipc,
                     }
                 } else {
                     DesktopStatus::evaluate(descriptor.id, descriptor.applicable, descriptor.ipc)
@@ -135,7 +134,7 @@ impl Environment {
                     )),
             })
             .collect::<Vec<_>>();
-        compositor_candidates.sort_by(|left, right| right.score.cmp(&left.score));
+        compositor_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
         let selected_compositor = compositor_candidates.first().map(|candidate| candidate.id);
 
         let shell = std::env::var("SHELL").unwrap_or_default();
