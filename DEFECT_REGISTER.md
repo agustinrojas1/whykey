@@ -13,12 +13,20 @@ contradicts a documented guarantee.
 | --- | --- | --- | --- | --- |
 
 
-## Post-1.0 issues (future protocol coverage and adapters)
+## Post-1.0 coverage and roadmap pointers
 
-The following areas are deferred to post-1.0 issue tracking and do not block 1.0:
+The previously deferred items now have completed implementation work or an
+explicit follow-up boundary. The issue tracker remains the source of truth for
+future expansion; these pointers keep the capability register from promising
+more than the current evidence supports.
 
-- **Protocol coverage**: Complete Kitty keyboard protocol negotiation matrix, compositor-independent libxkbcommon evdev state evaluation, and application-level IME preedit/dead-key history reconstruction (`input.ime`).
-- **Additional adapters**: Additional Wayland/X11 compositors beyond the 17 built-in desktop adapters (`compositor.additional-desktops`), and dynamic configuration resolvers for bespoke desktop setups.
+| Area | Current evidence | Roadmap pointer |
+| --- | --- | --- |
+| Kitty protocol | Negotiation response matrix is covered; no behavior change is promised. | #30 / PR #46 |
+| XKB state | Typed `XkbState` is integrated with the Hyprland path; `xkbcli` remains the low-dependency fallback and coverage is still conditional for compositor-independent state. | #29 / PRs #56 and #64 |
+| IME | Typed committed-text, Compose, and preedit observability limits are explicit; passive capture does not reconstruct application IME history. | #27 / PRs #55, #66, and #67 |
+| Additional desktops | Desktop promotion remains a per-adapter process with fixtures and failure evidence, not a blanket promise. | #28 / PRs #57 and #65 |
+| Dynamic configuration | Bounded include resolution is covered for sxhkd; broader resolver work is tracked separately. | #33 / PR #54 |
 
 ## Known limitations (accepted boundaries, not defects)
 
@@ -30,14 +38,14 @@ behavior, and none should block a release on its own.
 | --- | --- | --- | --- |
 | L-001 | Hyprland | The complete multi-instance ambiguity and package-version matrix is not exercised live. | `tests/fixtures/hyprland/version-matrix.json`, `instances-version-matrix.json`, `hyprctl-stale.stderr`, `instances-ambiguous.json`, and `leaves_duplicate_socket_matches_unselected` cover legacy/structured/malformed wire shapes and ambiguous selection. |
 | L-002 | Hyprland Lua | Literal-only scanning cannot prove that every executable Lua declaration was loaded or evaluate dynamic helpers. | `src/layers/hyprland.rs` skips quoted text and Lua long-bracket comments/strings; tests cover balanced literals and preserve conditional evidence. |
-| L-003 | Keyboard layout | Evdev-to-XKB translation remains conditional without compositor-independent libxkbcommon state and complete XKB type, latch, and lock evaluation. | Shared `src/xkb.rs` parses real `symbols[N]` layout groups, preserves `NoSymbol` level positions, and keeps symbol levels ordered; physical capture tests cover code namespaces, offsets, explicit multi-group maps, and common level selection. |
-| L-004 | Terminal protocol | Kitty negotiation and associated-text handling do not cover every capability and malformed response combination. | `src/listen.rs` preserves all valid alternate-key codes in wire order, keeps the compatibility first entry, and rejects invalid alternate codes. |
+| L-003 | Keyboard layout | Evdev-to-XKB translation remains conditional without compositor-independent libxkbcommon state and complete XKB type, latch, and lock evaluation. | Shared `src/xkb.rs` parses real `symbols[N]` layout groups; `layers/hyprland/keyboard.rs` supplies typed runtime state; `XkbState::level()` preserves `NoSymbol` positions and keeps selection conditional when evidence is missing. |
+| L-004 | Terminal protocol | Kitty negotiation and associated-text handling do not cover every capability and malformed response combination. | `src/listen/protocol.rs` preserves all valid alternate-key codes in wire order, keeps the compatibility first entry, and rejects invalid alternate codes. |
 | L-005 | Continuous capture | Whykey is an interactive diagnostic, not a high-throughput terminal event recorder. | Repeat captures one deliberate key at a time and restores the terminal before reporting; bulk latency benchmarks are intentionally non-release experiments. |
 | L-006 | Focus and targets | Process ancestry and focused-window APIs cannot prove that the selected process is the user's intended target across focus-change races. | Focus adapters and PID selection are covered by `tests/cli.rs`. |
 | L-007 | Configuration | Generated files, conditional includes, and all syntax/version variants are not uniformly resolved across adapters. | Adapter unit tests cover common TOML, YAML, JSON, XML, and KDL forms. |
 | L-008 | Distribution | Clean-environment installation is verified for the locked source path and the Arch recipe only. | `DEPENDENCY_PROVENANCE.md`, the Cargo clean-install smoke gate, and `tools/arch_package_smoke.sh`; Debian/RPM/Nix builders are unavailable. |
 | L-009 | Offline snapshots | Snapshots preserve a redacted diagnostic conclusion for replay and comparison, not the raw IPC/configuration inputs required to re-run every adapter offline. | `snapshot::create` redacts shell identity, private paths, and secret-bearing assignments; README documents the boundary. |
-| L-010 | Architecture | Core production code sits at ~21k SLOC. The residual gap from speculative line targets is accepted: remaining lines protect capture lifecycle, platform configuration stubs, and strict diagnostic typing; further compaction without proven duplication carries disproportionate regression risk. | Simplification phases 0–7 (PR #2) unified results, adapters, environment, and CLI without regressing behavior. |
+| L-010 | Architecture | Core production code measures 34,499 Rust source lines. The residual gap from speculative line targets is accepted: remaining lines protect capture lifecycle, platform configuration stubs, and strict diagnostic typing; further compaction without proven duplication carries disproportionate regression risk. The remaining `main.rs` and `listen/mod.rs` size is tracked as the D3-remainder follow-up rather than a correctness defect. | Simplification phases 0–7 plus the post-split measurements unified results, adapters, environment, and CLI without regressing behavior. See #71 for the remaining move-only CLI split. |
 
 ## Closed items
 
