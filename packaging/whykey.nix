@@ -10,6 +10,9 @@ rustPlatform.buildRustPackage {
   nativeCheckInputs = [ util-linux ];
 
   postInstall = ''
+    install -Dm755 extensions/whykey-nvim $out/bin/whykey-nvim
+    install -Dm755 extensions/whykey-vscode $out/bin/whykey-vscode
+    install -Dm755 extensions/whykey-emacs $out/bin/whykey-emacs
     install -Dm644 whykey.1 $out/share/man/man1/whykey.1
     install -Dm644 README.md $out/share/doc/whykey/README.md
     install -Dm644 SPEC.md $out/share/doc/whykey/SPEC.md

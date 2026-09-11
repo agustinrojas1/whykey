@@ -27,6 +27,9 @@ read-only and never executes the shortcut under investigation.
 
 %install
 install -Dpm0755 target/release/whykey %{buildroot}%{_bindir}/whykey
+install -Dpm0755 extensions/whykey-nvim %{buildroot}%{_bindir}/whykey-nvim
+install -Dpm0755 extensions/whykey-vscode %{buildroot}%{_bindir}/whykey-vscode
+install -Dpm0755 extensions/whykey-emacs %{buildroot}%{_bindir}/whykey-emacs
 install -Dpm0644 whykey.1 %{buildroot}%{_mandir}/man1/whykey.1
 install -Dpm0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 install -Dpm0644 README.md %{buildroot}%{_docdir}/%{name}/README.md
@@ -40,6 +43,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 
 %files
 %{_bindir}/whykey
+%{_bindir}/whykey-nvim
+%{_bindir}/whykey-vscode
+%{_bindir}/whykey-emacs
 %{_mandir}/man1/whykey.1*
 %license %{_licensedir}/%{name}/LICENSE
 %license cargo-vendor.txt
