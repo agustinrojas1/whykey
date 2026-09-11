@@ -14,6 +14,11 @@ use crate::layers::LayerResult;
 pub const DEFAULT_VERSION: u8 = 1;
 
 pub fn context() -> Value {
+    let environment = crate::environment::Environment::collect();
+    context_for_environment(&environment)
+}
+
+pub fn context_for_environment(environment: &crate::environment::Environment) -> Value {
     json!({
         "desktop": env::var("XDG_CURRENT_DESKTOP").ok(),
         "session_desktop": env::var("XDG_SESSION_DESKTOP").ok(),
@@ -28,6 +33,13 @@ pub fn context() -> Value {
         "terminal": crate::layers::terminal_identity(),
         "shell": env::var("SHELL").ok(),
         "ssh": env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some(),
+        "compositor_candidates": environment.compositor_candidates.iter().map(|candidate| json!({
+            "id": candidate.id,
+            "applicable": candidate.applicable,
+            "ipc": candidate.ipc,
+            "score": candidate.score,
+            "selected": environment.selected_compositor == Some(candidate.id),
+        })).collect::<Vec<_>>(),
     })
 }
 
@@ -65,6 +77,22 @@ mod tests {
     #[test]
     fn defaults_to_legacy_schema() {
         assert_eq!(DEFAULT_VERSION, 1);
+    }
+
+    #[test]
+    fn v2_context_exposes_scored_compositor_candidates() {
+        let environment = crate::environment::Environment::collect();
+        let value = context_for_environment(&environment);
+        assert!(value["compositor_candidates"].is_array());
+        if let Some(selected) = environment.selected_compositor {
+            assert!(
+                value["compositor_candidates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|candidate| candidate["id"] == selected && candidate["selected"] == true)
+            );
+        }
     }
 
     #[test]

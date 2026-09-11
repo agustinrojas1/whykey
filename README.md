@@ -108,6 +108,8 @@ compositor (may require permission to access `/dev/input/event*`). Whykey
 never grabs an evdev input device and cleans up temporary native capture hooks
 on exit. Press Escape or Ctrl+C to exit. If the Hyprland backend is used,
 the compositor session is temporarily changed; configuration files are not.
+When multiple compositor adapters are applicable, Whykey reports their scores
+in verbose output and schema-v2 context before selecting the highest-scoring one.
 
 Replay a snapshot without querying the current desktop:
 

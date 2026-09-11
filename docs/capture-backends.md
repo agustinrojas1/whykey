@@ -27,9 +27,10 @@ The listen loop owns terminal setup, polling, inspection, reporting, and
 export. A backend owns its transport and capture-specific lifecycle. Add a
 backend by implementing `CaptureBackend` and `NativeCaptureIo`, then adding one
 arm to `select_native_backend` in `listen.rs`. That selector is currently
-Hyprland-concrete; it must become enum or trait-object dispatch when a second
-transport is added. The registry entry should expose
-the same stable display name to capabilities and doctor.
+Native capture selection now walks the scored compositor candidates and the
+registry's optional capture factory. It returns a boxed transport, so adding
+a second native backend does not change the listen loop. The registry entry
+should expose the same stable display name to capabilities and doctor.
 
 Source wire shapes have one canonical mapping:
 

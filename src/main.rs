@@ -1053,6 +1053,26 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
     let evdev = listen::evdev_available();
     let native_compositor = whykey::capabilities::native_capture_available_for_doctor();
     let native_backend = whykey::capture::NativeBackendId::Hyprland.display();
+    let native_attempts = environment
+        .compositor_candidates
+        .iter()
+        .filter_map(|candidate| {
+            let entry = whykey::registry::DESKTOPS
+                .iter()
+                .find(|entry| entry.id == candidate.id)?;
+            entry.capture.map(|_| {
+                serde_json::json!({
+                    "backend": entry.display,
+                    "available": native_compositor && candidate.ipc,
+                    "reason": if native_compositor && candidate.ipc {
+                        "IPC connection accepted"
+                    } else {
+                        "IPC connection unavailable"
+                    },
+                })
+            })
+        })
+        .collect::<Vec<_>>();
     let evdev_devices = listen::evdev_devices();
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
@@ -1130,7 +1150,8 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             "evdev": {"available": evdev, "devices": evdev_devices},
             "native-compositor": {
                 "available": native_compositor,
-                "backend": native_compositor.then_some(native_backend)
+                "backend": native_compositor.then_some(native_backend),
+                "attempted": native_attempts.clone(),
             },
             "remappers": remappers,
             "ime": ime,
@@ -1155,7 +1176,7 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             serde_json::json!({
                 "schema_version": 2,
                 "operation": "doctor",
-                "context": schema::context(),
+                "context": schema::context_for_environment(&environment),
                 "checks": legacy_value,
                 "next_steps": next_steps.clone(),
             })
@@ -1174,6 +1195,14 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             native_compositor,
             "set HYPRLAND_INSTANCE_SIGNATURE and ensure socket2 IPC is reachable",
         );
+        if !native_compositor && !native_attempts.is_empty() {
+            let attempted = native_attempts
+                .iter()
+                .filter_map(|entry| entry.get("backend").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("  attempted: {attempted} (unavailable: IPC connection unavailable)");
+        }
         // The registry owns desktop detection, IPC status, check labels,
         // and hints; the first applicable desktop adapter wins.
         let selected = whykey::registry::DESKTOPS

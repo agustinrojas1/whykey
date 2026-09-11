@@ -265,18 +265,10 @@ pub struct DeviceModifierState {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CaptureSource {
     Terminal,
-    #[deprecated(note = "use CompositorNative { backend } instead")]
-    Hyprland,
-    CompositorNative {
-        backend: String,
-    },
-    Evdev {
-        device: String,
-        path: String,
-    },
+    CompositorNative { backend: String },
+    Evdev { device: String, path: String },
 }
 
-#[allow(deprecated)]
 impl Serialize for CaptureSource {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -284,7 +276,6 @@ impl Serialize for CaptureSource {
     {
         match self {
             Self::Terminal => serializer.serialize_str("Terminal"),
-            Self::Hyprland => serializer.serialize_str("Hyprland"),
             Self::CompositorNative { backend } => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
@@ -365,12 +356,11 @@ struct EvdevSource {
     path: String,
 }
 
-#[allow(deprecated)]
 impl CaptureSource {
     pub fn label(&self) -> String {
         match self {
             Self::Terminal => "terminal".into(),
-            Self::Hyprland | Self::CompositorNative { backend: _ } => {
+            Self::CompositorNative { backend: _ } => {
                 self.backend_name().unwrap_or("compositor").to_owned()
             }
             Self::Evdev { device, path } => format!("evdev ({device}; {path})"),
@@ -379,7 +369,6 @@ impl CaptureSource {
 
     pub fn backend_name(&self) -> Option<&str> {
         match self {
-            Self::Hyprland => Some("Hyprland"),
             Self::CompositorNative { backend } => Some(backend),
             Self::Terminal | Self::Evdev { .. } => None,
         }
@@ -390,7 +379,7 @@ impl CaptureSource {
     }
 
     pub fn proves_compositor_receipt(&self) -> bool {
-        matches!(self, Self::Hyprland | Self::CompositorNative { .. })
+        matches!(self, Self::CompositorNative { .. })
     }
 }
 

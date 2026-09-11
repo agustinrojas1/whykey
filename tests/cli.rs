@@ -2938,7 +2938,7 @@ fn listen_events_all_fails_when_hyprland_unavailable() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--events all requires native compositor or evdev capture"));
-    assert!(stderr.contains("HYPRLAND_INSTANCE_SIGNATURE is not set"));
+    assert!(stderr.contains("no registered native compositor backend"));
 }
 
 #[test]

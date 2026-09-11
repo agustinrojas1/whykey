@@ -122,6 +122,12 @@ it does not edit configuration files. Press Escape twice within 300
 milliseconds to exit. Use
 .B --repeat
 to capture more than one event.
+.B --suppress
+is the safe default and can be stated explicitly;
+.B --no-suppress
+allows the normal compositor action, with
+.B --pass-through
+retained as a compatibility alias.
 .B --timeout seconds
 sets a wall-clock deadline for the capture.
 .B --count n

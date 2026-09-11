@@ -338,6 +338,11 @@ fn render_inner(
         observation,
         terminal_observed,
     ));
+    if verbose {
+        if let Some(note) = compositor_candidates_note() {
+            output.push_str(&note);
+        }
+    }
     if let Some(observation) = observation {
         // Normal reports name the capture source, key, and event. Raw bytes,
         // encoding internals, full modifier state, and alternate keys stay
@@ -481,6 +486,24 @@ fn render_inner(
     }
 
     output
+}
+
+fn compositor_candidates_note() -> Option<String> {
+    let environment = crate::environment::Environment::collect();
+    if environment.compositor_candidates.len() < 2 {
+        return None;
+    }
+    let candidates = environment
+        .compositor_candidates
+        .iter()
+        .map(|candidate| format!("{}[{}]", candidate.id, candidate.score))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let selected = environment.selected_compositor.unwrap_or("none");
+    Some(format!(
+        "Note: {} compositors applicable ({candidates}); selected {selected}. Use --instance/--terminal to choose explicitly.\n\n",
+        environment.compositor_candidates.len()
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
