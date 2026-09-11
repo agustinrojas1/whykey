@@ -71,6 +71,16 @@ impl fmt::Display for SelectError {
             .join(", ");
         write!(formatter, "tried {details}")
     }
+
+}
+
+#[cfg(target_os = "linux")]
+impl SelectError {
+    fn backend_display(&self) -> &str {
+        self.attempted
+            .first()
+            .map_or("native compositor", |(backend, _)| backend.as_str())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -129,7 +139,7 @@ fn run_native(
 
     if let Err(err) = capture_session.arm_token(options.capture_policy) {
         let _ = flush_input(tty_fd);
-        if options.capture_policy == HyprlandCapturePolicy::Suppress {
+        if options.capture_policy == CapturePolicy::Suppress {
             eprintln!(
                 "whykey listen: could not suppress native compositor shortcuts ({})",
                 capture_session.display()
@@ -152,7 +162,7 @@ fn run_native(
         eprintln!("whykey listen: press a key combination (Esc or Ctrl+C exits)");
     } else {
         println!("whykey listen");
-        if options.capture_policy == HyprlandCapturePolicy::Suppress {
+        if options.capture_policy == CapturePolicy::Suppress {
             println!(
                 "{} shortcuts are temporarily suppressed.",
                 capture_session.display()
@@ -318,9 +328,9 @@ fn run_native(
         if !keep_listening || count_reached {
             break;
         }
-        if options.capture_policy == HyprlandCapturePolicy::Suppress {
+        if options.capture_policy == CapturePolicy::Suppress {
             capture_session
-                .arm_token(HyprlandCapturePolicy::Suppress)
+                .arm_token(CapturePolicy::Suppress)
                 .map_err(ListenError::Message)?;
         }
         if !options.json {

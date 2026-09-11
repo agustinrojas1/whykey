@@ -728,25 +728,6 @@ fn boolish_value(value: &serde_json::Value) -> Option<bool> {
     }
 }
 
-fn query_previous_submap_from_lua() -> Option<String> {
-    let output = run_hyprctl(&[
-        "repl",
-        "return (_G.__whykey_capture and _G.__whykey_capture.previous_submap ~= \"\" and _G.__whykey_capture.previous_submap) or \"default\"",
-    ])
-    .ok()?;
-    let trimmed = output.trim().to_string();
-    if trimmed.is_empty()
-        || trimmed == "default"
-        || trimmed == "unknown request"
-        || trimmed == "none"
-        || trimmed == "\"default\""
-    {
-        Some("default".into())
-    } else {
-        Some(trimmed)
-    }
-}
-
 fn filter_whykey_capture_bindings(bindings_json: &str) -> String {
     if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(bindings_json) {
         if let Some(arr) = val.as_array_mut() {
@@ -912,6 +893,15 @@ mod matching_tests {
         )
         .unwrap();
         assert!(result.summary.contains("active binding found"));
+    }
+
+    #[test]
+    fn matching_source_has_no_ipc_runner() {
+        let source = include_str!("matching.rs");
+        let ipc_call = ["run_", "hyprctl("].concat();
+        assert!(!source.contains(&ipc_call));
+        let command_constructor = ["Command", "::new"].concat();
+        assert!(!source.contains(&command_constructor));
     }
 }
 

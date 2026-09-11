@@ -1,10 +1,11 @@
 //! Capture one key event from a native compositor, Linux evdev, or the
 //! controlling terminal, and explain it.
 //!
-//! When native compositor capture is available (today, Hyprland), the default
-//! listener uses a temporary runtime hook to suppress bound compositor actions
-//! during inspection (or pass them through when configured). If native capture
-//! is unavailable, it falls back to terminal capture
+//! When native compositor capture is available, the default listener uses a
+//! temporary runtime hook to suppress bound compositor actions during
+//! inspection (or passes them through when configured). Pass-through-only
+//! native backends do not change compositor state. If native capture is
+//! unavailable, it falls back to terminal capture
 //! (`--terminal` explicitly forces terminal capture). The optional evdev backend
 //! observes physical input events before compositor processing.
 
@@ -37,7 +38,6 @@ const KITTY_CAPTURE_FLAGS: u32 = 1 | 2 | 4 | 8 | 16;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 pub use crate::capture::CapturePolicy;
-pub use crate::hyprland_capture::HyprlandCapturePolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -428,11 +428,12 @@ pub fn run(options: Options) -> Result<(), ListenError> {
                     "Native compositor capture unavailable: {error}; --events all requires native compositor or evdev capture"
                 )));
             }
-            if options.capture_policy == HyprlandCapturePolicy::Suppress
+            if options.capture_policy == CapturePolicy::Suppress
                 && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
             {
+                let backend = error.backend_display();
                 eprintln!(
-                    "whykey listen: could not suppress native compositor shortcuts (Hyprland)"
+                    "whykey listen: could not suppress native compositor shortcuts ({backend})"
                 );
                 eprintln!("No key was captured and no shortcut was executed.");
                 eprintln!("Use --pass-through to capture without suppression.");
