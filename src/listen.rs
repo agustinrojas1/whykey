@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::capture::NativeCaptureIo;
+use crate::capture::{CaptureBackend, CaptureBackendId, CapturePolicy, NativeCaptureIo};
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome};
 use crate::report;
@@ -1755,6 +1755,139 @@ struct TerminalSession {
     protocol_flags: Option<u32>,
 }
 
+/// Terminal transport adapter. The established terminal capture loop remains
+/// the compatibility path, while this type exposes the same backend contract
+/// for callers that want to select transports uniformly.
+pub struct TerminalBackend {
+    session: Option<TerminalSession>,
+    pending: VecDeque<u8>,
+}
+
+impl TerminalBackend {
+    pub fn open() -> io::Result<Self> {
+        Ok(Self {
+            session: Some(TerminalSession::open()?),
+            pending: VecDeque::new(),
+        })
+    }
+
+    pub fn original_termios(&self) -> Option<libc::termios> {
+        self.session.as_ref().map(|session| session.original)
+    }
+
+    fn read_one(&mut self) -> Result<Option<ObservedKey>, String> {
+        let Some(session) = self.session.as_mut() else {
+            return Err("terminal capture is closed".into());
+        };
+        let mut reader =
+            InputReader::with_pending(&mut session.tty, self.pending.drain(..).collect());
+        let result = read_event(&mut reader, None).map_err(|error| error.to_string());
+        self.pending = reader.pending;
+        let protocol_flags = session.protocol_flags;
+        match result? {
+            ReadEvent::Idle => Ok(None),
+            ReadEvent::Key(mut observed) => {
+                observed.protocol_flags = protocol_flags;
+                Ok(Some(*observed))
+            }
+        }
+    }
+}
+
+impl CaptureBackend for TerminalBackend {
+    fn id(&self) -> CaptureBackendId {
+        CaptureBackendId::Terminal
+    }
+
+    fn display(&self) -> &'static str {
+        CaptureBackendId::Terminal.display()
+    }
+
+    fn arm(&mut self, _policy: CapturePolicy) -> Result<(), String> {
+        if self.session.is_none() {
+            self.session = Some(TerminalSession::open().map_err(|error| error.to_string())?);
+        }
+        Ok(())
+    }
+
+    fn next_observed_event(&mut self, _events_all: bool) -> Result<Option<ObservedKey>, String> {
+        self.read_one()
+    }
+
+    fn wait_for_chord_release(
+        &mut self,
+        _main: crate::xkb::XkbKeycode,
+        _timeout: Duration,
+    ) -> Result<crate::capture::ChordReleaseStatus, String> {
+        Ok(crate::capture::ChordReleaseStatus::Released)
+    }
+
+    fn is_suppressing(&self) -> bool {
+        false
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        self.session
+            .as_mut()
+            .map_or(Ok(()), TerminalSession::restore)
+    }
+}
+
+#[cfg(target_os = "linux")]
+/// Read-only Linux input transport adapter.
+pub struct EvdevBackend {
+    session: Option<EvdevSession>,
+}
+
+#[cfg(target_os = "linux")]
+impl EvdevBackend {
+    pub fn open(device: Option<&Path>) -> Result<Self, ListenError> {
+        Ok(Self {
+            session: Some(EvdevSession::open(device)?),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl CaptureBackend for EvdevBackend {
+    fn id(&self) -> CaptureBackendId {
+        CaptureBackendId::Evdev
+    }
+
+    fn display(&self) -> &'static str {
+        CaptureBackendId::Evdev.display()
+    }
+
+    fn arm(&mut self, _policy: CapturePolicy) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn next_observed_event(&mut self, _events_all: bool) -> Result<Option<ObservedKey>, String> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| "evdev capture is closed".to_owned())?
+            .read_key_event(100)
+            .map_err(|error| error.to_string())
+    }
+
+    fn wait_for_chord_release(
+        &mut self,
+        _main: crate::xkb::XkbKeycode,
+        _timeout: Duration,
+    ) -> Result<crate::capture::ChordReleaseStatus, String> {
+        Ok(crate::capture::ChordReleaseStatus::Released)
+    }
+
+    fn is_suppressing(&self) -> bool {
+        false
+    }
+
+    fn close(&mut self) -> io::Result<()> {
+        self.session = None;
+        Ok(())
+    }
+}
+
 struct SignalGuard {
     previous: Vec<(libc::c_int, libc::sigaction)>,
 }
@@ -3310,6 +3443,24 @@ xkb_symbols "pc" {
                 backend: "Hyprland".into()
             }
         );
+    }
+
+    #[test]
+    fn terminal_backend_is_never_suppressing() {
+        let backend = TerminalBackend {
+            session: None,
+            pending: VecDeque::new(),
+        };
+        assert_eq!(backend.id(), CaptureBackendId::Terminal);
+        assert!(!backend.is_suppressing());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn evdev_backend_reports_physical_backend_identity() {
+        let backend = EvdevBackend { session: None };
+        assert_eq!(backend.id(), CaptureBackendId::Evdev);
+        assert!(!backend.is_suppressing());
     }
 
     #[test]
