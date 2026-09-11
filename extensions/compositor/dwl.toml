@@ -1,0 +1,7 @@
+# dwl has no generic IPC. Maintain a literal dump generated from config.h.
+id = "dwl"
+display = "dwl"
+tier = "extension"
+applicable_env = ["DWL_SOCKET"]
+applicable_desktop = ["dwl"]
+bindings_cmd = ["python3", "/path/to/whykey/extensions/compositor/dwl.py"]

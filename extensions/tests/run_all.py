@@ -12,6 +12,9 @@ def main():
         os.path.join(repo_root, "extensions", "whykey-nvim"),
         os.path.join(repo_root, "extensions", "whykey-vscode"),
         os.path.join(repo_root, "extensions", "whykey-emacs"),
+        os.path.join(repo_root, "extensions", "compositor", "herbstluftwm.py"),
+        os.path.join(repo_root, "extensions", "compositor", "bspwm-bspc.py"),
+        os.path.join(repo_root, "extensions", "compositor", "dwl.py"),
     ]
 
     failed = []

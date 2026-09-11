@@ -219,6 +219,17 @@ timeout. First-party extensions include
 .B extensions/whykey-emacs
 (live Emacs keymap stack via emacsclient).
 .TP
+.B compositor extension manifests
+Place a validated manifest in
+.B ~/.config/whykey/adapters/
+or set
+.B WHYKEY_ADAPTER_DIR
+to add conditional static bindings and optional focused-window PID evidence
+for an otherwise unsupported compositor. Commands are argv arrays, bounded to
+two seconds and one MiB. Tier 4 manifests never provide
+.B listen
+capture; native Hyprland, terminal, and evdev remain the capture transports.
+.TP
 .B replay file
 Read and render one or more concatenated schema-v1 or schema-v2 JSON reports
 saved from a previous inspection or capture. Replay is read-only: it does not open input

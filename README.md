@@ -140,6 +140,24 @@ Support is best effort where a program does not expose its live keymap.
 Generated configuration, plugins, firmware mappings, browser shortcuts, and
 focus changes during inspection can remain uncertain.
 
+### Compositor extension adapters
+
+User-owned manifests in `~/.config/whykey/adapters/*.toml` add static
+inspection and binding inventory for a compositor without compiling a new
+adapter. `WHYKEY_ADAPTER_DIR` selects another directory. Whykey only runs a
+command named by a validated manifest, with the normal two-second and one-MiB
+limits. It never scans `PATH` for adapters or evaluates a configuration file.
+
+| Tier | Source | What it can prove |
+| --- | --- | --- |
+| T1 | live IPC | runtime state exposed by a compiled-in adapter |
+| T2 | live query | a bounded read-only query with a known response |
+| T3 | literal config | static mappings without runtime activation |
+| T4 | manifest extension | user-selected scripts with conditional evidence |
+
+T4 adapters do not capture input. `listen` still uses native Hyprland,
+terminal, or evdev capture. See [the compositor manifest reference](docs/compositor-extensions.md).
+
 See the [support matrix](SUPPORT_MATRIX.md) and
 [adapter inventory](ADAPTER_INVENTORY.md) for exact coverage.
 

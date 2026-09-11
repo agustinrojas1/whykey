@@ -1,0 +1,7 @@
+# bspwm delegates keyboard bindings to sxhkd. Point this at the sxhkdrc file.
+id = "bspwm-bspc"
+display = "bspwm + sxhkd"
+tier = "extension"
+applicable_env = ["BSPWM_SOCKET"]
+applicable_desktop = ["bspwm"]
+bindings_cmd = ["python3", "/path/to/whykey/extensions/compositor/bspwm-bspc.py"]

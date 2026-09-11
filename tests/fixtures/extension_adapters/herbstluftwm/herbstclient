@@ -1,0 +1,13 @@
+#!/bin/sh
+case "$1" in
+  list_keybinds)
+    printf '%s\n' '[{"key":"super+return","action":"spawn foot","context":"default"},{"key":"super+ctrl","action":"bad"}]'
+    ;;
+  focused)
+    printf '%s\n' '{"pid":1234}'
+    ;;
+  *)
+    printf '%s\n' 'unknown command' >&2
+    exit 1
+    ;;
+esac

@@ -379,7 +379,14 @@ fn parse_literal_entries(adapter: &ExtensionAdapter, output: &str) -> InventoryR
 fn format_command_failure(adapter: &ExtensionAdapter, status: String, stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr).trim().to_owned();
     let tail = if stderr.chars().count() > 500 {
-        stderr.chars().rev().take(500).collect::<String>().chars().rev().collect()
+        stderr
+            .chars()
+            .rev()
+            .take(500)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect()
     } else {
         stderr
     };

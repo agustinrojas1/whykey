@@ -1,0 +1,8 @@
+# Copy this manifest to ~/.config/whykey/adapters/ and adjust the script path.
+id = "herbstluftwm"
+display = "herbstluftwm"
+tier = "extension"
+applicable_env = ["HERBSTLUFTWM_SOCKET"]
+applicable_desktop = ["herbstluftwm"]
+bindings_cmd = ["python3", "/path/to/whykey/extensions/compositor/herbstluftwm.py"]
+focused_cmd = ["sh", "-c", "herbstclient attr clients.focus.winid"]
