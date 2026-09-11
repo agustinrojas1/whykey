@@ -1,6 +1,10 @@
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{collections::HashSet, env, fs, path::PathBuf};
+use std::{
+    collections::HashSet,
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 #[cfg(unix)]
 use std::io::Write;
@@ -42,6 +46,22 @@ fn temp_dir(label: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("whykey-{label}-{}-{id}", std::process::id()))
+}
+
+fn write_mock_bin(base: &Path, name: &str, content: &str) -> PathBuf {
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let script = bin.join(name);
+    fs::write(&script, content).unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    bin
+}
+
+fn bin_path(bin: &Path) -> String {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    format!("{}:{}", bin.display(), current.to_string_lossy())
 }
 
 #[test]
@@ -147,17 +167,11 @@ fn inspect_reports_when_focused_window_is_unavailable() {
 #[test]
 fn inspect_focused_uses_a_sway_tree_pid() {
     let base = temp_dir("focused-sway");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let swaymsg = bin.join("swaymsg");
-    fs::write(
-        &swaymsg,
+    let bin = write_mock_bin(
+        &base,
+        "swaymsg",
         "#!/bin/sh\ncase \"$*\" in *get_tree*) printf '%s\\n' '{\"nodes\":[{\"focused\":true,\"pid\":1}]}' ;; *) exit 1 ;; esac\n",
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&swaymsg).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&swaymsg, permissions).unwrap();
+    );
 
     let output = binary()
         .args(["inspect", "ctrl+x", "--focused", "--verbose"])
@@ -165,9 +179,6 @@ fn inspect_focused_uses_a_sway_tree_pid() {
         .env("SWAYSOCK", "/tmp/whykey-sway.sock")
         .env("XDG_CURRENT_DESKTOP", "sway")
         .env("XDG_SESSION_TYPE", "wayland")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
         .output()
         .unwrap();
 
@@ -183,27 +194,17 @@ fn inspect_focused_uses_a_sway_tree_pid() {
 #[test]
 fn inspect_focused_uses_an_i3_tree_pid() {
     let base = temp_dir("focused-i3");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let i3msg = bin.join("i3-msg");
-    fs::write(
-        &i3msg,
+    let bin = write_mock_bin(
+        &base,
+        "i3-msg",
         "#!/bin/sh\ncase \"$*\" in *get_tree*) printf '%s\\n' '{\"nodes\":[{\"focused\":true,\"pid\":1}]}' ;; *) exit 1 ;; esac\n",
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&i3msg).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&i3msg, permissions).unwrap();
+    );
 
     let output = binary()
         .args(["inspect", "ctrl+x", "--focused", "--verbose"])
         .env("PATH", bin.to_string_lossy().into_owned())
         .env("I3SOCK", "/tmp/whykey-i3.sock")
         .env("XDG_CURRENT_DESKTOP", "i3")
-        .env_remove("SWAYSOCK")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
         .output()
         .unwrap();
 
@@ -219,21 +220,12 @@ fn inspect_focused_uses_an_i3_tree_pid() {
 #[test]
 fn inspect_focused_uses_a_hyprland_activewindow_pid() {
     let base = temp_dir("focused-hyprland");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let hyprctl = bin.join("hyprctl");
-    fs::write(
-        &hyprctl,
+    let bin = write_mock_bin(
+        &base,
+        "hyprctl",
         "#!/bin/sh\ncase \"$*\" in *activewindow*) printf '%s\\n' '{\"pid\":1}' ;; *binds*) printf '%s\\n' '[]' ;; *submap*) printf '%s\\n' '\"default\"' ;; *devices*) printf '%s\\n' '{\"keyboards\":[]}' ;; *) exit 2 ;; esac\n",
-    )
-    .unwrap();
-    let ghostty = bin.join("ghostty");
-    fs::write(&ghostty, "#!/bin/sh\nexit 0\n").unwrap();
-    for command in [&hyprctl, &ghostty] {
-        let mut permissions = fs::metadata(command).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(command, permissions).unwrap();
-    }
+    );
+    write_mock_bin(&base, "ghostty", "#!/bin/sh\nexit 0\n");
 
     let output = binary()
         .args(["inspect", "ctrl+x", "--focused", "--verbose"])
@@ -241,10 +233,6 @@ fn inspect_focused_uses_a_hyprland_activewindow_pid() {
         .env("HYPRLAND_INSTANCE_SIGNATURE", "test")
         .env("XDG_CURRENT_DESKTOP", "Hyprland")
         .env("XDG_SESSION_TYPE", "wayland")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
         .output()
         .unwrap();
 
@@ -420,47 +408,27 @@ fn whykey_nvim_extension_matches_fixture_runtime_queries() {
         std::env::var("PATH").unwrap_or_default()
     );
 
-    // 1. Exact mapping: ctrl+x -> :echo 1<CR> (stops)
-    let output = binary()
-        .args(["extension", "extensions/whykey-nvim", "ctrl+x", "--json"])
-        .env("PATH", &path_env)
-        .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains(":echo 1<CR>"));
-
-    // 2. Insert-mode mapping: ctrl+left -> copilot#Accept()
-    let output = binary()
-        .args(["extension", "extensions/whykey-nvim", "ctrl+left", "--json"])
-        .env("PATH", &path_env)
-        .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("copilot#Accept()"));
-
-    // 3. Absent key: ctrl+q -> not_handled / continues
-    let output = binary()
-        .args(["extension", "extensions/whykey-nvim", "ctrl+q", "--json"])
-        .env("PATH", &path_env)
-        .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("no mapping"));
+    for (key, status, prop, needle) in [
+        ("ctrl+x", "Handled", "Stops", ":echo 1<CR>"),
+        ("ctrl+left", "Handled", "Stops", "copilot#Accept()"),
+        ("ctrl+q", "NotHandled", "Continues", "no mapping"),
+    ] {
+        let output = binary()
+            .args(["extension", "extensions/whykey-nvim", key, "--json"])
+            .env("PATH", &path_env)
+            .env("NVIM_LISTEN_ADDRESS", "/tmp/fake-nvim.sock")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "case: {key}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["extension"]["layer"]["status"], status, "case: {key}");
+        assert_eq!(
+            value["extension"]["layer"]["propagation"], prop,
+            "case: {key}"
+        );
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout_str.contains(needle), "case: {key}");
+    }
 }
 
 #[cfg(unix)]
@@ -487,72 +455,38 @@ fn whykey_vscode_extension_returns_valid_schema_v1() {
 fn whykey_vscode_extension_matches_fixture_keybindings() {
     let fixture_home = std::fs::canonicalize("tests/fixtures/extensions/vscode/home").unwrap();
 
-    // 1. Exact match: ctrl+x -> test.exact (stops)
-    let output = binary()
-        .args(["extension", "extensions/whykey-vscode", "ctrl+x", "--json"])
-        .env("HOME", &fixture_home)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
-    assert!(
-        value["extension"]["layer"]["summary"]
-            .as_str()
-            .unwrap()
-            .contains("test.exact")
-    );
-
-    // 2. When match: ctrl+y -> test.conditional when editorTextFocus (indeterminate)
-    let output = binary()
-        .args(["extension", "extensions/whykey-vscode", "ctrl+y", "--json"])
-        .env("HOME", &fixture_home)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Indeterminate");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("not evaluated"));
-
-    // 3. Chord prefix: ctrl+k -> starts chord ctrl+k ctrl+c (continues)
-    let output = binary()
-        .args(["extension", "extensions/whykey-vscode", "ctrl+k", "--json"])
-        .env("HOME", &fixture_home)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("chord"));
-
-    // 4. Absent key: ctrl+q -> not_handled / continues
-    let output = binary()
-        .args(["extension", "extensions/whykey-vscode", "ctrl+q", "--json"])
-        .env("HOME", &fixture_home)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("defaults not evaluated"));
-
-    // 5. Unbound key: ctrl+z -> not_handled / continues
-    let output = binary()
-        .args(["extension", "extensions/whykey-vscode", "ctrl+z", "--json"])
-        .env("HOME", &fixture_home)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
+    for (key, status, prop, needle) in [
+        ("ctrl+x", "Handled", "Stops", "test.exact"),
+        ("ctrl+y", "Handled", "Indeterminate", "not evaluated"),
+        ("ctrl+k", "Handled", "Continues", "chord"),
+        (
+            "ctrl+q",
+            "NotHandled",
+            "Continues",
+            "defaults not evaluated",
+        ),
+        (
+            "ctrl+z",
+            "NotHandled",
+            "Continues",
+            "defaults not evaluated",
+        ),
+    ] {
+        let output = binary()
+            .args(["extension", "extensions/whykey-vscode", key, "--json"])
+            .env("HOME", &fixture_home)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "case: {key}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["extension"]["layer"]["status"], status, "case: {key}");
+        assert_eq!(
+            value["extension"]["layer"]["propagation"], prop,
+            "case: {key}"
+        );
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout_str.contains(needle), "case: {key}");
+    }
 }
 
 #[cfg(unix)]
@@ -590,70 +524,51 @@ fn whykey_emacs_extension_matches_fixture_runtime_queries() {
         std::env::var("PATH").unwrap_or_default()
     );
 
-    // 1. Global keymap match: ctrl+x -> Control-X-prefix
-    let output = binary()
-        .args(["extension", "extensions/whykey-emacs", "ctrl+x", "--json"])
-        .env("PATH", &path_env)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("Control-X-prefix"));
-    assert!(stdout_str.contains("winning-map: global"));
-
-    // 2. Major keymap match: ctrl+left -> org-left-click
-    let output = binary()
-        .args([
-            "extension",
-            "extensions/whykey-emacs",
+    for (key, status, prop, needle, winning_map) in [
+        (
+            "ctrl+x",
+            "Handled",
+            "Stops",
+            "Control-X-prefix",
+            Some("global"),
+        ),
+        (
             "ctrl+left",
-            "--json",
-        ])
-        .env("PATH", &path_env)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("org-left-click"));
-    assert!(stdout_str.contains("winning-map: major"));
-
-    // 3. Minor keymap match: ctrl+alt+enter -> my-custom-minor-cmd
-    let output = binary()
-        .args([
-            "extension",
-            "extensions/whykey-emacs",
+            "Handled",
+            "Stops",
+            "org-left-click",
+            Some("major"),
+        ),
+        (
             "ctrl+alt+return",
-            "--json",
-        ])
-        .env("PATH", &path_env)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "Handled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Stops");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("my-custom-minor-cmd"));
-    assert!(stdout_str.contains("winning-map: minor"));
-
-    // 4. Absent key: ctrl+q -> not_handled / continues
-    let output = binary()
-        .args(["extension", "extensions/whykey-emacs", "ctrl+q", "--json"])
-        .env("PATH", &path_env)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["extension"]["layer"]["status"], "NotHandled");
-    assert_eq!(value["extension"]["layer"]["propagation"], "Continues");
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout_str.contains("no mapping"));
+            "Handled",
+            "Stops",
+            "my-custom-minor-cmd",
+            Some("minor"),
+        ),
+        ("ctrl+q", "NotHandled", "Continues", "no mapping", None),
+    ] {
+        let output = binary()
+            .args(["extension", "extensions/whykey-emacs", key, "--json"])
+            .env("PATH", &path_env)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "case: {key}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["extension"]["layer"]["status"], status, "case: {key}");
+        assert_eq!(
+            value["extension"]["layer"]["propagation"], prop,
+            "case: {key}"
+        );
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout_str.contains(needle), "case: {key}");
+        if let Some(map) = winning_map {
+            assert!(
+                stdout_str.contains(&format!("winning-map: {map}")),
+                "case: {key}"
+            );
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -2591,29 +2506,17 @@ fn labwc_adapter_reads_openbox_compatible_keybinds() {
 #[test]
 fn xfce_bindings_inventory_is_versioned() {
     let base = temp_dir("bindings-xfce-cli");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let xfconf = bin.join("xfconf-query");
-    fs::write(
-        &xfconf,
+    let bin = write_mock_bin(
+        &base,
+        "xfconf-query",
         include_str!("fixtures/sessions/xfconf-query-inventory.sh"),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&xfconf).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&xfconf, permissions).unwrap();
+    );
 
     let output = binary()
         .args(["--json", "bindings"])
         .env("XDG_CURRENT_DESKTOP", "XFCE")
         .env("XDG_SESSION_TYPE", "wayland")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env_remove("GNOME_DESKTOP_SESSION_ID")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
-        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("PATH", bin_path(&bin))
         .env("HOME", &base)
         .output()
         .unwrap();
@@ -2631,26 +2534,17 @@ fn xfce_bindings_inventory_is_versioned() {
 #[test]
 fn gnome_adapter_reads_media_key_bindings() {
     let base = temp_dir("gnome-cli");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let gsettings = bin.join("gsettings");
-    fs::write(
-        &gsettings,
+    let bin = write_mock_bin(
+        &base,
+        "gsettings",
         include_str!("fixtures/sessions/gsettings-gnome.sh"),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&gsettings).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&gsettings, permissions).unwrap();
+    );
 
     let output = binary()
         .args(["super+l"])
         .env("XDG_CURRENT_DESKTOP", "GNOME")
         .env("XDG_SESSION_TYPE", "wayland")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("PATH", bin_path(&bin))
         .env("HOME", &base)
         .output()
         .unwrap();
@@ -2666,28 +2560,17 @@ fn gnome_adapter_reads_media_key_bindings() {
 #[test]
 fn cinnamon_adapter_reads_gsettings_bindings() {
     let base = temp_dir("cinnamon-cli");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let gsettings = bin.join("gsettings");
-    fs::write(
-        &gsettings,
+    let bin = write_mock_bin(
+        &base,
+        "gsettings",
         include_str!("fixtures/sessions/gsettings-cinnamon.sh"),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&gsettings).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&gsettings, permissions).unwrap();
+    );
 
     let output = binary()
         .args(["super+1"])
         .env("XDG_CURRENT_DESKTOP", "Cinnamon")
         .env("XDG_SESSION_TYPE", "wayland")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
-        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("PATH", bin_path(&bin))
         .env("HOME", &base)
         .output()
         .unwrap();
@@ -2703,28 +2586,17 @@ fn cinnamon_adapter_reads_gsettings_bindings() {
 #[test]
 fn mate_adapter_reads_marco_global_keybindings() {
     let base = temp_dir("mate-cli");
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let gsettings = bin.join("gsettings");
-    fs::write(
-        &gsettings,
+    let bin = write_mock_bin(
+        &base,
+        "gsettings",
         include_str!("fixtures/sessions/gsettings-mate.sh"),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&gsettings).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&gsettings, permissions).unwrap();
+    );
 
     let output = binary()
         .args(["alt+f2"])
         .env("XDG_CURRENT_DESKTOP", "MATE")
         .env("XDG_SESSION_TYPE", "x11")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
-        .env("PATH", bin.to_string_lossy().into_owned())
+        .env("PATH", bin_path(&bin))
         .env("HOME", &base)
         .output()
         .unwrap();
@@ -2816,11 +2688,6 @@ fn kde_adapter_reads_global_shortcut_configuration() {
         .env("XDG_SESSION_TYPE", "wayland")
         .env("XDG_CONFIG_HOME", &base)
         .env("PATH", "/nonexistent")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
         .output()
         .unwrap();
 
@@ -2848,12 +2715,6 @@ fn x11_adapter_reads_literal_xbindkeys_configuration() {
         .env("XDG_SESSION_DESKTOP", "generic")
         .env("XDG_SESSION_TYPE", "x11")
         .env("DISPLAY", ":0")
-        .env_remove("WAYLAND_DISPLAY")
-        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
-        .env_remove("SWAYSOCK")
-        .env_remove("I3SOCK")
-        .env_remove("SSH_CONNECTION")
-        .env_remove("SSH_TTY")
         .output()
         .unwrap();
 
