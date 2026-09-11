@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""VS Code user keybindings query extension for whykey (schema v1)."""
+
+import json
+import os
+import re
+import sys
+
+MODIFIER_MAP = {
+    "ctrl": "ctrl", "control": "ctrl", "ctl": "ctrl",
+    "alt": "alt", "option": "alt",
+    "shift": "shift",
+    "super": "win", "win": "win", "meta": "win", "cmd": "win", "command": "win",
+}
+
+KEY_MAP = {
+    "return": "enter", "enter": "enter", "cr": "enter",
+    "escape": "escape", "esc": "escape",
+    "left": "left", "right": "right", "up": "up", "down": "down",
+    "space": "space", "tab": "tab",
+    "backspace": "backspace", "bs": "backspace",
+    "delete": "delete", "del": "delete",
+}
+
+
+def parse_combo_str(combo_str):
+    raw_tokens = combo_str.strip().lower().split("+")
+    tokens = [t for t in raw_tokens[:-2] if t] + ["+"] if combo_str.strip().endswith("++") else [t for t in raw_tokens if t]
+    mods = set()
+    key = None
+    for token in tokens:
+        if token in MODIFIER_MAP:
+            mods.add(MODIFIER_MAP[token])
+        else:
+            key = KEY_MAP.get(token, token)
+    return frozenset(mods), key
+
+
+def format_combo(mods, key):
+    parts = [m for m in ("ctrl", "shift", "alt", "win") if m in mods]
+    if key:
+        parts.append(key)
+    return "+".join(parts)
+
+
+def key_obj_to_combo(key_obj):
+    if not isinstance(key_obj, dict):
+        return None, None, "invalid key object"
+    raw_key = str(key_obj.get("key", ""))
+    if raw_key.startswith("code:") or raw_key.isdigit():
+        return None, None, "numeric keycodes not mappable to VS Code key labels"
+
+    bits = key_obj.get("modifiers", 0)
+    mods = set()
+    if bits & 4: mods.add("ctrl")
+    if bits & 1: mods.add("shift")
+    if bits & 8: mods.add("alt")
+    if bits & 64: mods.add("win")
+
+    k = KEY_MAP.get(raw_key.lower(), raw_key.lower())
+    return (frozenset(mods), k), format_combo(mods, k), None
+
+
+def get_config_paths():
+    paths = []
+    if "VSCODE_KEYBINDINGS" in os.environ:
+        paths.append(os.environ["VSCODE_KEYBINDINGS"])
+    home = os.environ.get("HOME")
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    config_base = os.path.join(home, ".config") if home else xdg
+    if config_base:
+        for app in ("Code", "Code - OSS", "VSCodium"):
+            paths.append(os.path.join(config_base, app, "User", "keybindings.json"))
+    return paths
+
+
+def strip_json_comments(text):
+    pattern = r"\"(?:\\.|[^\"\\])*\"|(\/\/[^\n]*|\/\*[\s\S]*?\*\/)"
+    cleaned = re.sub(pattern, lambda m: m.group(0) if m.group(0).startswith('"') else "", text)
+    return re.sub(r",\s*([\]}])", r"\1", cleaned)
+
+
+def inspect_key(req):
+    combo_tuple, display_key, err = key_obj_to_combo(req.get("key", {}))
+    if err:
+        return {
+            "status": "indeterminate",
+            "propagation": "indeterminate",
+            "summary": err,
+            "details": [f"key: {req.get('key')}"],
+        }
+
+    searched = get_config_paths()
+    config_path = next((p for p in searched if os.path.isfile(p)), None)
+    if not config_path:
+        return {
+            "status": "unavailable",
+            "propagation": "indeterminate",
+            "summary": "No VS Code keybindings.json found",
+            "details": [f"searched: {p}" for p in searched],
+        }
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            raw_content = f.read()
+        data = json.loads(strip_json_comments(raw_content))
+    except Exception as exc:
+        return {
+            "status": "indeterminate",
+            "propagation": "indeterminate",
+            "summary": f"keybindings.json is not valid JSON: {exc}",
+            "details": [f"file: {config_path}", f"error: {exc}"],
+        }
+
+    if not isinstance(data, list):
+        return {
+            "status": "indeterminate",
+            "propagation": "indeterminate",
+            "summary": "keybindings.json must contain a JSON array",
+            "details": [f"file: {config_path}"],
+        }
+
+    removed_pairs = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        cmd = entry.get("command", "")
+        key_str = entry.get("key", "")
+        if cmd.startswith("-") and key_str:
+            chords = key_str.strip().split()
+            if len(chords) == 1:
+                removed_pairs.add((parse_combo_str(chords[0]), cmd[1:].strip()))
+
+    chord_match = None
+    for entry in reversed(data):
+        if not isinstance(entry, dict):
+            continue
+        cmd = entry.get("command", "")
+        if not cmd or cmd.startswith("-"):
+            continue
+        key_str = entry.get("key", "")
+        if not key_str:
+            continue
+        when = entry.get("when", "")
+        if when and when.strip() == "false":
+            continue
+
+        chords = key_str.strip().split()
+        if len(chords) == 1:
+            entry_combo = parse_combo_str(chords[0])
+            if entry_combo == combo_tuple:
+                if (entry_combo, cmd) in removed_pairs:
+                    continue
+                if when:
+                    return {
+                        "status": "handled",
+                        "propagation": "indeterminate",
+                        "summary": f"VS Code binds {display_key} to {cmd} when {when}",
+                        "details": [
+                            f"command: {cmd}",
+                            f"source: {config_path}",
+                            f"when: {when} (not evaluated — assuming focused editor, no debug session)",
+                        ],
+                    }
+                return {
+                    "status": "handled",
+                    "propagation": "stops",
+                    "summary": f"VS Code binds {display_key} to {cmd}",
+                    "details": [f"command: {cmd}", f"source: {config_path}"],
+                }
+        elif len(chords) > 1 and chord_match is None:
+            if parse_combo_str(chords[0]) == combo_tuple:
+                chord_match = (key_str, cmd, when)
+
+    if chord_match:
+        full_chord, cmd, when = chord_match
+        details = [f"chord: {full_chord}", f"command: {cmd}", f"source: {config_path}"]
+        if when:
+            details.append(f"when: {when} (not evaluated — assuming focused editor, no debug session)")
+        return {
+            "status": "handled",
+            "propagation": "continues",
+            "summary": f"VS Code prefix {display_key} starts chord {full_chord}",
+            "details": details,
+        }
+
+    return {
+        "status": "not_handled",
+        "propagation": "continues",
+        "summary": f"No mapping for {display_key} in user keybindings.json (product defaults not evaluated)",
+        "details": [f"source: {config_path}"],
+    }
+
+
+def self_test():
+    import tempfile
+
+    assert key_obj_to_combo({"modifiers": 4, "key": "x"})[1] == "ctrl+x"
+    assert key_obj_to_combo({"modifiers": 5, "key": "RETURN"})[1] == "ctrl+shift+enter"
+    assert key_obj_to_combo({"modifiers": 12, "key": "RETURN"})[1] == "ctrl+alt+enter"
+    assert key_obj_to_combo({"modifiers": 0, "key": "ESCAPE"})[1] == "escape"
+    assert key_obj_to_combo({"modifiers": 0, "key": "LEFT"})[1] == "left"
+    assert key_obj_to_combo({"modifiers": 0, "key": "code:36"})[2] is not None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        old_home = os.environ.get("HOME")
+        os.environ["HOME"] = tmpdir
+        user_dir = os.path.join(tmpdir, ".config", "Code", "User")
+        os.makedirs(user_dir, exist_ok=True)
+        kb_file = os.path.join(user_dir, "keybindings.json")
+
+        with open(kb_file, "w", encoding="utf-8") as f:
+            f.write(
+                """// Comments allowed
+[
+    /* block */
+    {"key": "ctrl+x", "command": "test.exact"},
+    {"key": "ctrl+y", "command": "test.conditional", "when": "editorTextFocus"},
+    {"key": "ctrl+k ctrl+c", "command": "test.chord"},
+    {"key": "ctrl+z", "command": "test.removed"},
+    {"key": "ctrl+z", "command": "-test.removed"},
+    {"key": "ctrl+w", "command": "test.disabled", "when": "false"},
+]
+"""
+            )
+
+        res = inspect_key({"key": {"modifiers": 4, "key": "x"}})
+        assert res["status"] == "handled" and res["propagation"] == "stops"
+        assert "test.exact" in res["summary"]
+
+        res = inspect_key({"key": {"modifiers": 4, "key": "y"}})
+        assert res["status"] == "handled" and res["propagation"] == "indeterminate"
+        assert any("not evaluated" in d for d in res["details"])
+
+        res = inspect_key({"key": {"modifiers": 4, "key": "k"}})
+        assert res["status"] == "handled" and res["propagation"] == "continues"
+        assert "starts chord" in res["summary"]
+
+        res = inspect_key({"key": {"modifiers": 4, "key": "z"}})
+        assert res["status"] == "not_handled" and res["propagation"] == "continues"
+
+        res = inspect_key({"key": {"modifiers": 4, "key": "w"}})
+        assert res["status"] == "not_handled" and res["propagation"] == "continues"
+
+        res = inspect_key({"key": {"modifiers": 4, "key": "q"}})
+        assert res["status"] == "not_handled" and res["propagation"] == "continues"
+        assert "defaults not evaluated" in res["summary"]
+
+        os.remove(kb_file)
+        res = inspect_key({"key": {"modifiers": 4, "key": "x"}})
+        assert res["status"] == "unavailable" and res["propagation"] == "indeterminate"
+
+        if old_home is not None:
+            os.environ["HOME"] = old_home
+        else:
+            os.environ.pop("HOME", None)
+
+    print("whykey-vscode self_test passed")
+
+
+def main():
+    if "--test" in sys.argv:
+        self_test()
+        return
+
+    try:
+        raw = sys.stdin.read()
+        req = json.loads(raw) if raw else {}
+    except Exception:
+        req = {}
+
+    response = {
+        "schema_version": 1,
+        "capabilities": ["identify_action"],
+        "result": inspect_key(req),
+    }
+    json.dump(response, sys.stdout)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

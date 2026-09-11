@@ -55,6 +55,7 @@ whykey conflicts --source hyprland  # find matching conflicts
 whykey snapshot ctrl+super+return --output whykey-snapshot.json
 whykey diff before.json after.json
 whykey extension extensions/whykey-nvim ctrl+x # query live Neovim runtime via RPC
+whykey extension extensions/whykey-vscode ctrl+x # query user VS Code keybindings.json
 ```
 
 Normal reports fit one screen: key, assessment, one result statement,
