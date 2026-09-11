@@ -29,7 +29,7 @@ struct I3Binding {
 }
 
 pub fn applicable() -> bool {
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if super::compositor::remote_session() {
         return false;
     }
     env::var_os("I3SOCK").is_some_and(|value| !value.is_empty())

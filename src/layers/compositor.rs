@@ -14,7 +14,7 @@ pub struct Context {
 }
 
 pub fn applicable() -> bool {
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if remote_session() {
         return false;
     }
     if ["HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "I3SOCK"]
@@ -32,6 +32,12 @@ pub fn applicable() -> bool {
         return false;
     }
     context.desktop.is_some() || context.session_type.is_some() || context.display_server.is_some()
+}
+
+/// Shared session boundary used by adapters that must not query a local
+/// compositor while the diagnostic itself is running over SSH.
+pub(crate) fn remote_session() -> bool {
+    env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some()
 }
 
 pub fn current_context() -> Context {
