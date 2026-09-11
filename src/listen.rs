@@ -29,7 +29,6 @@ const SEQUENCE_TIMEOUT_MS: i32 = 12;
 /// Escape unambiguously, so normal interactive cancellation is immediate.
 const LEGACY_ESCAPE_SEQUENCE_TIMEOUT_MS: i32 = 30;
 const SIGNAL_POLL_MS: i32 = 100;
-const WAITING_HINT_AFTER: Duration = Duration::from_secs(5);
 const MAX_TERMINAL_SEQUENCE_BYTES: usize = 4096;
 /// Ask for every currently specified Kitty keyboard enhancement. The original
 /// flags are kept separately in `TerminalSession::protocol_flags` so the
@@ -844,60 +843,6 @@ fn run_observed_loop<B: CaptureBackend>(
     }
 }
 
-/// Capture one intentional terminal key, restoring termios and the keyboard
-/// protocol before returning it for analysis.
-#[allow(dead_code)]
-fn capture_terminal_key(
-    deadline: Option<Instant>,
-    signals: &SignalGuard,
-    json: bool,
-) -> Result<Option<(ObservedKey, libc::termios)>, ListenError> {
-    let mut terminal = TerminalSession::open()?;
-    let original_termios = terminal.original;
-    let mut reader = InputReader::with_pending(&mut terminal.tty, Vec::new());
-    let waiting_since = Instant::now();
-    let mut waiting_hint_shown = false;
-
-    if json {
-        eprintln!("Waiting for input...");
-    } else {
-        println!("Waiting for input...");
-    }
-    io::stdout().flush()?;
-
-    loop {
-        if signals.received() {
-            return Err(ListenError::Message(
-                "interrupted; terminal settings restored".into(),
-            ));
-        }
-        if deadline.is_some_and(|value| Instant::now() >= value) {
-            return Err(ListenError::Message("capture timed out".into()));
-        }
-        match read_event(&mut reader, deadline)? {
-            ReadEvent::Idle => {
-                if !waiting_hint_shown && waiting_since.elapsed() >= WAITING_HINT_AFTER {
-                    eprintln!(
-                        "No event arrived. A shortcut may have been consumed before the terminal; inspect it by name with `whykey <combination>`."
-                    );
-                    waiting_hint_shown = true;
-                }
-            }
-            ReadEvent::Key(mut observed) => {
-                observed.protocol_flags = terminal.protocol_flags;
-                if is_cancel_key(&observed) {
-                    return Ok(None);
-                }
-                if observed.event_type != KeyEventType::Press || is_terminal_modifier_key(&observed)
-                {
-                    continue;
-                }
-                return Ok(Some((*observed, original_termios)));
-            }
-        }
-    }
-}
-
 fn is_cancel_key(observed: &ObservedKey) -> bool {
     (observed.combo.key() == "ESCAPE" && observed.combo.modmask() == 0)
         || (observed.combo.key() == "C" && observed.combo.modmask() & 4 != 0)
@@ -1025,84 +970,6 @@ fn run_evdev(options: Options) -> Result<(), ListenError> {
         .arm(CapturePolicy::PassThrough)
         .map_err(ListenError::Setup)?;
     run_observed_loop(options, backend, snapshot, None)
-}
-
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-fn run_evdev_legacy(options: Options) -> Result<(), ListenError> {
-    let signals = SignalGuard::install()?;
-    let mut export = open_export(options.output.as_deref())?;
-    let mut session = EvdevSession::open(options.device.as_deref())?;
-    // One snapshot per session: repeated physical reports reuse it instead
-    // of rediscovering the desktop per event. Device state (modifiers,
-    // SYN_DROPPED resync, hotplug, removal) still updates per read.
-    let snapshot = ListenSession::capture();
-    let mut capture_stdout = io::BufWriter::new(io::stdout());
-    session.include_modifiers = options.events_all;
-    let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
-    let mut captured_events = 0_usize;
-    if options.json {
-        eprintln!(
-            "whykey listen --evdev: press a key combination (Esc or Ctrl+C exits; read-only, no grab)"
-        );
-    } else {
-        println!("whykey listen --evdev");
-        println!("Press a key combination. Press Esc or Ctrl+C to exit.");
-        println!("Read-only capture; the input device is not grabbed.");
-        if options.repeat {
-            println!("Repeat mode is on.");
-        }
-        println!();
-    }
-
-    loop {
-        if signals.received() {
-            return Err(ListenError::Message("interrupted".into()));
-        }
-        if deadline.is_some_and(|value| Instant::now() >= value) {
-            return Err(ListenError::Message("capture timed out".into()));
-        }
-        let timeout_ms = deadline
-            .map(remaining_millis)
-            .map_or(100, |remaining| remaining.min(100));
-        let Some(observed) = session.read_key_event(timeout_ms)? else {
-            continue;
-        };
-        if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
-            if options.json {
-                eprintln!("Stopped.");
-            } else {
-                println!("\nStopped.");
-            }
-            return Ok(());
-        }
-
-        let results = snapshot.inspect(&observed, None);
-        let rendered = if options.json {
-            if options.ndjson {
-                report::render_ndjson(&observed.combo, &results, Some(&observed))
-            } else {
-                report::render_listen_json(
-                    &observed.combo,
-                    &results,
-                    Some(&observed),
-                    options.schema_version,
-                )
-            }
-        } else {
-            report::render_observed(&observed, &results, options.verbose)
-        };
-        write_capture(&mut export, &mut capture_stdout, &rendered)?;
-        captured_events += 1;
-        let count_reached = options.count.is_some_and(|count| captured_events >= count);
-        let keep_listening = options.repeat || options.count.is_some_and(|count| count > 1);
-        if !keep_listening || count_reached {
-            return Ok(());
-        }
-        if !options.json {
-            println!();
-        }
-    }
 }
 
 fn open_export(path: Option<&Path>) -> Result<Option<File>, ListenError> {
