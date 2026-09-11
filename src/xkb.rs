@@ -4,6 +4,15 @@
 //! many supported systems do not ship its development headers.  `xkbcli`
 //! uses the same libxkbcommon compiler and gives us a bounded, read-only
 //! fallback when RMLVO data is available from the environment.
+//!
+//! Modifier-state boundary (issue #74): Hyprland's key-event socket exposes
+//! the current pressed modifier mask, while its keyboard snapshot exposes
+//! CapsLock/NumLock LEDs. Neither source exposes latched Shift/AltGr (or
+//! latched/locked modifier masks beyond those LEDs), so the capture path keeps
+//! `latched` conditional and supplies only the observed lock state. Sway's
+//! binding event and `get_bindings`/`get_tree` IPC likewise expose no latched
+//! or lock-state fields. We therefore keep `XkbState` shift-only for latch
+//! selection and never infer missing state from a US layout.
 
 use std::collections::HashMap;
 use std::env;
