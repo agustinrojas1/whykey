@@ -4,6 +4,12 @@
 
 Simplify Whykey's diagnostic core, reduce genuine duplication, isolate responsibilities, and optimize measured costs while preserving existing behavior.
 
+## Document provenance
+
+This plan first entered Git history in PR #86. Earlier planning content existed only in the working tree and cannot be reconstructed from commits before that PR. This note records that boundary rather than backdating the document.
+
+Keep future changes to the plan tracked in the repository so the plan and the work it guides remain auditable together.
+
 Start with the diagnostic engine, not an adapter rewrite. Keep these objectives separate:
 
 - **Refactoring:** fewer duplicated rules, fewer ambiguous states, and clearer ownership of responsibilities.
