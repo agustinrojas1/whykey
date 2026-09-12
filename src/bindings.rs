@@ -5,6 +5,7 @@ pub use crate::layers::BindingRecord;
 pub type BindingEntry = BindingRecord;
 
 use crate::schema;
+use crate::style::RenderOptions;
 
 const MAX_BINDINGS: usize = 8192;
 
@@ -186,9 +187,13 @@ fn inventory_adapter_applies(
 }
 
 pub fn render_text(inventory: &Inventory) -> String {
-    let mut output = String::from("whykey bindings\n\n");
-    output.push_str(&format!(
-        "Scope: {} source(s); complete: {}\n",
+    render_text_with_options(inventory, RenderOptions::plain(false))
+}
+
+pub fn render_text_with_options(inventory: &Inventory, options: RenderOptions) -> String {
+    let mut output = format!("{}\n\n", options.accent("whykey bindings"));
+    let scope = format!(
+        "Scope: {} source(s); complete: {}",
         inventory
             .bindings
             .iter()
@@ -196,30 +201,81 @@ pub fn render_text(inventory: &Inventory) -> String {
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
         if inventory.complete { "yes" } else { "no" }
-    ));
+    );
+    for line in crate::style::wrap_hanging(&scope, options.width, "", "  ") {
+        output.push_str(&line);
+        output.push('\n');
+    }
     for entry in &inventory.bindings {
-        output.push_str(&format!(
-            "- {}  {}  {} [{}]\n",
-            entry.key, entry.action, entry.source, entry.certainty
-        ));
+        let line = format!(
+            "{}  {}  {} [{}]",
+            crate::style::human_key_text(&entry.key),
+            entry.action,
+            entry.source,
+            entry.certainty
+        );
+        for line in crate::style::wrap_hanging(&line, options.width, "  ", "    ") {
+            output.push_str(&line);
+            output.push('\n');
+        }
         if let Some(context) = &entry.context {
-            output.push_str(&format!("  context: {context}\n"));
+            for line in crate::style::wrap_hanging(
+                &format!("context: {context}"),
+                options.width,
+                "    ",
+                "      ",
+            ) {
+                output.push_str(&line);
+                output.push('\n');
+            }
         }
         if let Some(device) = &entry.device {
-            output.push_str(&format!("  device: {device}\n"));
+            for line in crate::style::wrap_hanging(
+                &format!("device: {device}"),
+                options.width,
+                "    ",
+                "      ",
+            ) {
+                output.push_str(&line);
+                output.push('\n');
+            }
         }
         if let Some(submap) = &entry.submap {
-            output.push_str(&format!("  submap: {submap}\n"));
+            for line in crate::style::wrap_hanging(
+                &format!("submap: {submap}"),
+                options.width,
+                "    ",
+                "      ",
+            ) {
+                output.push_str(&line);
+                output.push('\n');
+            }
         }
     }
     if inventory.bindings.is_empty() {
-        output.push_str("No bindings were enumerated from the detected sources.\n");
+        output.push_str("No matching bindings were enumerated from the detected sources.\n");
     }
     for unavailable in &inventory.unavailable {
-        output.push_str(&format!("! unavailable: {unavailable}\n"));
+        for line in crate::style::wrap_hanging(
+            &format!("UNAVAILABLE: {unavailable}"),
+            options.width,
+            "",
+            "  ",
+        ) {
+            output.push_str(&options.failure(line));
+            output.push('\n');
+        }
     }
     for limitation in &inventory.limitations {
-        output.push_str(&format!("? limitation: {limitation}\n"));
+        for line in crate::style::wrap_hanging(
+            &format!("LIMITATION: {limitation}"),
+            options.width,
+            "",
+            "  ",
+        ) {
+            output.push_str(&options.uncertain(line));
+            output.push('\n');
+        }
     }
     output
 }

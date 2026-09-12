@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use whykey::layers::{LayerId, LayerResult, LayerStatus, Outcome, Propagation};
 use whykey::schema;
+use whykey::style::ColorChoice;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GlobalArguments {
@@ -10,6 +11,7 @@ pub(crate) struct GlobalArguments {
     pub json: bool,
     pub ndjson: bool,
     pub verbose: bool,
+    pub color: ColorChoice,
     pub schema_version: u8,
 }
 
@@ -24,12 +26,23 @@ pub(crate) fn parse_global_arguments(raw: Vec<String>) -> Result<GlobalArguments
     let verbose = raw
         .iter()
         .any(|argument| matches!(argument.as_str(), "--verbose" | "-v"));
+    let mut color = ColorChoice::Auto;
     let mut schema_version = schema::DEFAULT_VERSION;
     let mut arguments = Vec::with_capacity(raw.len());
     let mut index = 0;
     while index < raw.len() {
         match raw[index].as_str() {
             "--json" | "--ndjson" | "--verbose" | "-v" => {}
+            "--color" => {
+                let Some(value) = raw.get(index + 1) else {
+                    return Err("--color requires auto, always, or never".into());
+                };
+                color = value.parse()?;
+                index += 1;
+            }
+            option if option.starts_with("--color=") => {
+                color = option["--color=".len()..].parse()?;
+            }
             "--json-v2" => schema_version = 2,
             "--schema-version" => {
                 let Some(value) = raw.get(index + 1) else {
@@ -50,6 +63,7 @@ pub(crate) fn parse_global_arguments(raw: Vec<String>) -> Result<GlobalArguments
         json,
         ndjson,
         verbose,
+        color,
         schema_version,
     })
 }
@@ -182,6 +196,7 @@ pub(crate) fn dispatch(
     json: bool,
     ndjson: bool,
     verbose: bool,
+    color: ColorChoice,
     schema_version: u8,
 ) -> ExitCode {
     let mut arguments = raw_arguments.into_iter();
@@ -190,7 +205,7 @@ pub(crate) fn dispatch(
         return ExitCode::from(2);
     }
     if argument == "inspect" {
-        return crate::run_inspect(arguments.collect(), json, verbose, schema_version);
+        return crate::run_inspect(arguments.collect(), json, verbose, color, schema_version);
     }
     if argument == "listen" {
         let mut repeat = false;
@@ -232,7 +247,7 @@ pub(crate) fn dispatch(
                 "--explain-capture" => explain_capture = true,
                 "-h" | "--help" => {
                     println!(
-                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--dry-run] [--explain-capture] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. By default, native capture observes without suppression; use --suppress for an explicit temporary compositor-state change. It falls back to terminal capture when native capture is unavailable. --no-suppress captures without suppression and --pass-through is its compatibility alias. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer instead of only matching, consuming, unavailable, or uncertain layers. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
+                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--dry-run] [--explain-capture] [--terminal] [--evdev] [--device PATH] [--verbose] [--color MODE] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression. It falls back to terminal capture when native capture is unavailable. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -331,6 +346,7 @@ pub(crate) fn dispatch(
             events_all,
             output,
             verbose,
+            color,
             schema_version,
             capture_policy,
             explicit_suppress,
@@ -340,10 +356,10 @@ pub(crate) fn dispatch(
     }
     if argument == "doctor" {
         if arguments.next().is_some() {
-            eprintln!("error: usage is `whykey doctor [--json]`");
+            eprintln!("error: usage is `whykey doctor [--color MODE] [--json]`");
             return ExitCode::from(2);
         }
-        return crate::run_doctor(json, schema_version);
+        return crate::run_doctor(json, color, schema_version);
     }
     if argument == "capabilities" {
         let mut all = false;
@@ -351,22 +367,23 @@ pub(crate) fn dispatch(
             if option == "--all" {
                 all = true;
             } else {
-                eprintln!("error: usage is `whykey capabilities [--all] [--json]`");
+                eprintln!("error: usage is `whykey capabilities [--all] [--color MODE] [--json]`");
                 return ExitCode::from(2);
             }
         }
-        return crate::run_capabilities(json, all, schema_version);
+        return crate::run_capabilities(json, all, color, schema_version);
     }
     if argument == "bindings" || argument == "conflicts" {
-        let run: fn(bool, u8, InventoryFilters) -> ExitCode = if argument == "bindings" {
+        let run: fn(bool, u8, InventoryFilters, ColorChoice) -> ExitCode = if argument == "bindings"
+        {
             crate::run_bindings
         } else {
             crate::run_conflicts
         };
         let usage = if argument == "bindings" {
-            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]"
+            "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--color MODE] [--json] [--schema-version 2]"
         } else {
-            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]"
+            "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--color MODE] [--json] [--schema-version 2]"
         };
         let filters = match parse_inventory_filters(arguments.collect(), usage) {
             Ok(filters) => filters,
@@ -375,30 +392,34 @@ pub(crate) fn dispatch(
                 return ExitCode::from(2);
             }
         };
-        return run(json, schema_version, filters);
+        return run(json, schema_version, filters, color);
     }
     if argument == "extension" {
         let Some(program) = arguments.next() else {
-            eprintln!("error: usage is `whykey extension <program> <combination> [--json]`");
+            eprintln!(
+                "error: usage is `whykey extension <program> <combination> [--color MODE] [--json]`"
+            );
             return ExitCode::from(2);
         };
         let combinations: Vec<_> = arguments.collect();
         if combinations.is_empty() {
-            eprintln!("error: usage is `whykey extension <program> <combination> [--json]`");
+            eprintln!(
+                "error: usage is `whykey extension <program> <combination> [--color MODE] [--json]`"
+            );
             return ExitCode::from(2);
         }
-        return crate::run_extension(program, combinations.join(" "), json, schema_version);
+        return crate::run_extension(program, combinations.join(" "), json, color, schema_version);
     }
     if argument == "replay" {
         let Some(path) = arguments.next() else {
-            eprintln!("error: usage is `whykey replay <file> [--json]`");
+            eprintln!("error: usage is `whykey replay <file> [--verbose] [--color MODE] [--json]`");
             return ExitCode::from(2);
         };
         if arguments.next().is_some() {
-            eprintln!("error: usage is `whykey replay <file> [--json]`");
+            eprintln!("error: usage is `whykey replay <file> [--verbose] [--color MODE] [--json]`");
             return ExitCode::from(2);
         }
-        return crate::run_replay(path, json, schema_version);
+        return crate::run_replay(path, json, verbose, color, schema_version);
     }
     if argument == "snapshot" {
         return crate::run_snapshot(arguments.collect());
@@ -406,10 +427,10 @@ pub(crate) fn dispatch(
     if argument == "diff" {
         let paths: Vec<_> = arguments.collect();
         if paths.len() != 2 {
-            eprintln!("error: usage is `whykey diff <before> <after> [--json]`");
+            eprintln!("error: usage is `whykey diff <before> <after> [--color MODE] [--json]`");
             return ExitCode::from(2);
         }
-        return crate::run_diff(paths, json, schema_version);
+        return crate::run_diff(paths, json, color, schema_version);
     }
     if argument == "shell-init" || argument == "completions" {
         let print: fn(&str) -> String = if argument == "shell-init" {
@@ -454,7 +475,14 @@ pub(crate) fn dispatch(
             whykey::report::render_json(&key, &results, None, schema_version)
         );
     } else {
-        print!("{}", whykey::report::render(&key, &results, verbose));
+        print!(
+            "{}",
+            whykey::report::render_with_options(
+                &key,
+                &results,
+                whykey::style::RenderOptions::cli(color, verbose),
+            )
+        );
     }
     unavailable
 }
@@ -632,18 +660,31 @@ pub(crate) mod doctor_support {
         None
     }
 
-    pub(crate) fn print_check(name: &str, ok: bool, hint: &str) {
-        if ok {
-            println!("✓ {name}");
+    pub(crate) fn print_check_with_options(
+        name: &str,
+        ok: bool,
+        hint: &str,
+        options: whykey::style::RenderOptions,
+    ) {
+        let text = if ok {
+            format!("OK  {name}")
         } else {
-            println!("! {name} ({hint})");
+            format!("FAIL  {name} ({hint})")
+        };
+        for line in whykey::style::wrap_hanging(&text, options.width, "", "  ") {
+            if ok {
+                println!("{}", options.success(line));
+            } else {
+                println!("{}", options.failure(line));
+            }
         }
     }
 }
 
 pub(crate) use doctor_support::{
     DoctorState, command_program_available, command_succeeds, detect_extension, detect_nvim_server,
-    detected_terminal_program, doctor_next_steps, print_check, shell_snapshot_available,
+    detected_terminal_program, doctor_next_steps, print_check_with_options,
+    shell_snapshot_available,
 };
 
 pub(crate) mod help {
@@ -659,49 +700,49 @@ pub(crate) mod help {
     pub(crate) const COMMANDS: &[CommandSpec] = &[
         CommandSpec {
             name: "inspect",
-            usage: "whykey inspect [--pid PID] [--focused] [--instance ID] [--verbose] [--json] [--schema-version 2] <combination-or-sequence>",
+            usage: "whykey inspect [--pid PID] [--focused] [--instance ID] [--verbose] [--color MODE] [--json] [--schema-version 2] <combination-or-sequence>",
             summary: "explain one combination or sequence",
             advanced: false,
         },
         CommandSpec {
             name: "listen",
-            usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
+            usage: "whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--terminal] [--evdev] [--device PATH] [--verbose] [--color MODE] [--json] [--ndjson] [--output PATH] [--schema-version 2]",
             summary: "capture a key and explain its path (Hyprland and Sway; Sway is pass-through-only)",
             advanced: false,
         },
         CommandSpec {
             name: "doctor",
-            usage: "whykey doctor [--json] [--schema-version 2]",
+            usage: "whykey doctor [--color MODE] [--json] [--schema-version 2]",
             summary: "check session integrations",
             advanced: false,
         },
         CommandSpec {
             name: "capabilities",
-            usage: "whykey capabilities [--all] [--json] [--schema-version 2]",
+            usage: "whykey capabilities [--all] [--color MODE] [--json] [--schema-version 2]",
             summary: "list applicable integrations (--all for the full inventory)",
             advanced: true,
         },
         CommandSpec {
             name: "bindings",
-            usage: "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
+            usage: "whykey bindings [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--color MODE] [--json] [--schema-version 2]",
             summary: "enumerate effective bindings",
             advanced: true,
         },
         CommandSpec {
             name: "conflicts",
-            usage: "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--json] [--schema-version 2]",
+            usage: "whykey conflicts [--key TEXT] [--action TEXT] [--source TEXT] [--device TEXT] [--submap TEXT] [--color MODE] [--json] [--schema-version 2]",
             summary: "group duplicate actions",
             advanced: true,
         },
         CommandSpec {
             name: "extension",
-            usage: "whykey extension <program> <combination> [--json] [--schema-version 2]",
+            usage: "whykey extension <program> <combination> [--color MODE] [--json] [--schema-version 2]",
             summary: "ask one opt-in external diagnostic",
             advanced: true,
         },
         CommandSpec {
             name: "replay",
-            usage: "whykey replay <file> [--json]",
+            usage: "whykey replay <file> [--verbose] [--color MODE] [--json]",
             summary: "re-render saved reports without injecting input",
             advanced: true,
         },
@@ -713,7 +754,7 @@ pub(crate) mod help {
         },
         CommandSpec {
             name: "diff",
-            usage: "whykey diff <before> <after> [--json]",
+            usage: "whykey diff <before> <after> [--color MODE] [--json]",
             summary: "compare saved snapshots without querying the desktop",
             advanced: true,
         },
@@ -733,8 +774,13 @@ pub(crate) mod help {
 
     pub(crate) const COMPLETION_SHELLS: &[&str] = &["bash", "zsh", "fish"];
     const COMPLETION_EXAMPLES: &[&str] = &["ctrl+left", "ctrl+z", "super+c"];
-    const COMMON_COMPLETION_OPTIONS: &[&str] =
-        &["--json", "--json-v2", "--schema-version", "--verbose"];
+    const COMMON_COMPLETION_OPTIONS: &[&str] = &[
+        "--json",
+        "--json-v2",
+        "--schema-version",
+        "--verbose",
+        "--color",
+    ];
     const INSPECT_COMPLETION_OPTIONS: &[&str] = &["--pid", "--focused", "--instance", "--verbose"];
     const LISTEN_COMPLETION_OPTIONS: &[&str] = &[
         "--repeat",
@@ -762,7 +808,7 @@ pub(crate) mod help {
     pub(crate) fn help_text() -> String {
         let mut output =
             String::from("whykey - explain where a key combination is handled\n\nUsage:\n");
-        output.push_str("  whykey [--verbose] [--json] [--schema-version 2] <combination>\n");
+        output.push_str("  whykey [--verbose] [--json] [--color auto|always|never] [--schema-version 2] <combination>\n");
         for command in COMMANDS.iter().filter(|command| !command.advanced) {
             output.push_str(&format!("  {}\n    {}\n", command.usage, command.summary));
         }
@@ -771,7 +817,7 @@ pub(crate) mod help {
             output.push_str(&format!("  {}\n    {}\n", command.usage, command.summary));
         }
         output.push_str(
-            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nReports show the conclusion first with only matching, consuming, unavailable, or uncertain layers. Add --verbose for the full evidence view; JSON keeps full structured evidence.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
+            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. JSON, NDJSON, shell-init, and completion output are always plain.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
         );
         output
     }
@@ -842,6 +888,7 @@ pub(crate) mod help {
         '--json-v2[emit JSON schema v2]' \
         '--schema-version[select JSON schema version]:version:(1 2)' \
         '--verbose[show every route layer]' \
+        '--color[set terminal colors]:mode:(auto always never)' \
         '--all[list the complete adapter inventory]' \
         '--key[filter by key]:text:' \
         '--action[filter by action]:text:' \
@@ -873,6 +920,7 @@ pub(crate) mod help {
     complete -c whykey -l json-v2 -d 'emit JSON schema v2'
     complete -c whykey -l schema-version -r -a '1 2' -d 'select JSON schema version'
     complete -c whykey -l verbose -d 'show every route layer'
+    complete -c whykey -l color -r -a 'auto always never' -d 'set terminal colors'
     complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l key -r -d 'filter by key'
     complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l action -r -d 'filter by action'
     complete -c whykey -n '__fish_seen_subcommand_from bindings conflicts' -l source -r -d 'filter by source'
@@ -953,6 +1001,29 @@ mod tests {
         assert_eq!(
             parse_global_arguments(vec!["--schema-version".into(), "3".into()]).unwrap_err(),
             "--schema-version must be 1 or 2"
+        );
+    }
+
+    #[test]
+    fn parses_explicit_color_modes_without_reordering_arguments() {
+        let parsed = parse_global_arguments(vec![
+            "--color=always".into(),
+            "inspect".into(),
+            "ctrl+z".into(),
+            "--color".into(),
+            "never".into(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.arguments, vec!["inspect", "ctrl+z"]);
+        assert_eq!(parsed.color, ColorChoice::Never);
+    }
+
+    #[test]
+    fn rejects_invalid_color_modes_at_the_parser_boundary() {
+        assert!(
+            parse_global_arguments(vec!["--color=rainbow".into()])
+                .unwrap_err()
+                .contains("expected auto, always, or never")
         );
     }
 }

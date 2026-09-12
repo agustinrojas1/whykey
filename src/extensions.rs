@@ -13,6 +13,7 @@ use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{LayerResult, LayerStatus, Outcome, Propagation};
 use crate::schema;
+use crate::style::RenderOptions;
 
 pub const SCHEMA_VERSION: u8 = 1;
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -96,7 +97,18 @@ pub fn inspect(program: &str, key: &KeyCombo) -> Result<RunResult, String> {
 }
 
 pub fn render_text(result: &RunResult, key: &KeyCombo) -> String {
-    let mut output = format!("Key: {key}\n\nExternal extension\n");
+    render_text_with_options(result, key, RenderOptions::plain(false))
+}
+
+pub fn render_text_with_options(
+    result: &RunResult,
+    key: &KeyCombo,
+    options: RenderOptions,
+) -> String {
+    let mut output = String::new();
+    output.push_str(&options.bold(crate::style::human_key(key)));
+    output.push_str(&options.accent(" · Extension"));
+    output.push_str("\n\n");
     output.push_str(&format!("  program: {}\n", result.extension));
     output.push_str(&format!(
         "  capabilities: {}\n",
@@ -106,10 +118,26 @@ pub fn render_text(result: &RunResult, key: &KeyCombo) -> String {
             result.capabilities.join(", ")
         }
     ));
-    output.push_str(&format!("  status: {:?}\n", result.layer.status()));
-    output.push_str(&format!("  {}\n", result.layer.summary));
+    let outcome = match (result.layer.status(), result.layer.propagation()) {
+        (LayerStatus::Unavailable, _) => options.failure("Unavailable"),
+        (LayerStatus::NotHandled, Propagation::Continues) => "No matching binding".into(),
+        // A configured action is evidence of configuration, not proof that it
+        // actually ran; keep this status uncoloured like the main report.
+        (LayerStatus::Handled, Propagation::Stops) => "Configured to stop".into(),
+        (LayerStatus::Handled, Propagation::Redirected) => options.uncertain("Redirected"),
+        (LayerStatus::Handled, Propagation::Continues) => "Configured to forward".into(),
+        _ => options.uncertain("Forwarding unknown"),
+    };
+    output.push_str(&format!("  outcome: {outcome}\n"));
+    for line in crate::style::wrap_hanging(&result.layer.summary, options.width, "  ", "  ") {
+        output.push_str(&line);
+        output.push('\n');
+    }
     for detail in &result.layer.details {
-        output.push_str(&format!("    {detail}\n"));
+        for line in crate::style::wrap_hanging(detail, options.width, "    ", "      ") {
+            output.push_str(&line);
+            output.push('\n');
+        }
     }
     output
 }

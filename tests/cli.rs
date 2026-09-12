@@ -80,6 +80,30 @@ fn json_output_is_parseable_without_a_controlling_tty() {
 }
 
 #[test]
+fn color_policy_is_explicit_for_text_and_ignored_for_json() {
+    let plain = binary()
+        .args(["--color=never", "ctrl+z"])
+        .env("TERM", "xterm-256color")
+        .output()
+        .unwrap();
+    assert!(!plain.stdout.windows(2).any(|bytes| bytes == b"\x1b["));
+
+    let colored = binary()
+        .args(["--color=always", "ctrl+z"])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(colored.stdout.windows(2).any(|bytes| bytes == b"\x1b["));
+
+    let json = binary()
+        .args(["--json", "--color=always", "ctrl+z"])
+        .output()
+        .unwrap();
+    assert!(!json.stdout.windows(2).any(|bytes| bytes == b"\x1b["));
+    serde_json::from_slice::<serde_json::Value>(&json.stdout).unwrap();
+}
+
+#[test]
 fn json_v2_exposes_context_and_structured_evidence() {
     let output = binary()
         .args(["--json", "--schema-version", "2", "ctrl+z"])
@@ -136,9 +160,9 @@ fn inspect_sequence_text_reports_each_step() {
 
     assert_ne!(output.status.code(), Some(2));
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Sequence: CTRL+X CTRL+S"));
-    assert!(text.contains("Step 1/2: CTRL + X"));
-    assert!(text.contains("Step 2/2: CTRL + S"));
+    assert!(text.contains("Sequence · Inspect"));
+    assert!(text.contains("Step 1/2 · Ctrl+X"));
+    assert!(text.contains("Step 2/2 · Ctrl+S"));
 }
 
 #[test]
@@ -895,7 +919,7 @@ fn replay_renders_a_saved_json_report_without_injecting_input() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("whykey replay"));
     assert!(text.contains("no input was injected"));
-    assert!(text.contains("CTRL + Z"));
+    assert!(text.contains("Ctrl+Z"));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -941,7 +965,7 @@ fn snapshot_writes_a_replayable_static_envelope() {
         .output()
         .unwrap();
     assert!(replay.status.success());
-    assert!(String::from_utf8_lossy(&replay.stdout).contains("CTRL + Z"));
+    assert!(String::from_utf8_lossy(&replay.stdout).contains("Ctrl+Z"));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -1057,7 +1081,7 @@ fn replay_renders_a_schema_v2_document() {
         .unwrap();
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("CTRL + Z"));
+    assert!(text.contains("Ctrl+Z"));
     assert!(text.contains("whykey replay"));
     let _ = fs::remove_dir_all(base);
 }
@@ -1725,7 +1749,7 @@ fn listen_output_exports_a_replayable_capture_without_stdout_records() {
         .output()
         .unwrap();
     assert!(replay.status.success(), "replay output: {replay:?}");
-    assert!(String::from_utf8_lossy(&replay.stdout).contains("CTRL + Z"));
+    assert!(String::from_utf8_lossy(&replay.stdout).contains("Ctrl+Z"));
 
     let _ = fs::remove_dir_all(base);
 }
@@ -1750,7 +1774,7 @@ fn listen_repeat_restores_between_reports() {
         "transcript: {transcript:?}"
     );
     assert_eq!(
-        transcript.matches("Waiting for input...").count(),
+        transcript.matches("Waiting for input.").count(),
         2,
         "each report must start a fresh, restored capture cycle: {transcript:?}"
     );
@@ -2749,7 +2773,7 @@ fn kde_adapter_reads_global_shortcut_configuration() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("KDE Plasma"));
-    assert!(text.contains("matching KDE global shortcut configured"));
+    assert!(text.contains("KDE Plasma has a matching binding; forwarding is unknown."));
     assert!(text.contains("Run Command"));
     let _ = fs::remove_dir_all(base);
 }
@@ -3204,9 +3228,7 @@ fn inspect_with_unpredicted_terminal_bytes_exposes_tmux_candidate() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.contains(
-            "tmux has a candidate binding for ALT + RETURN in the root table, but terminal byte delivery could not be verified."
-        ),
+        text.contains("tmux has a candidate binding, but delivery is unverified."),
         "tmux candidate must be exposed when bytes are unpredicted; output:\n{text}"
     );
     assert!(

@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::listen;
 use crate::schema;
+use crate::style::RenderOptions;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Capability {
@@ -308,22 +309,34 @@ pub fn native_capture_available_for_doctor() -> bool {
 /// entries are shown; `--all` restores the complete adapter inventory.
 /// JSON always keeps full structured evidence.
 pub fn render_text(capabilities: &[Capability], all: bool) -> String {
-    let mut output = String::from("whykey capabilities\n\n");
+    render_text_with_options(capabilities, all, RenderOptions::plain(false))
+}
+
+pub fn render_text_with_options(
+    capabilities: &[Capability],
+    all: bool,
+    options: RenderOptions,
+) -> String {
+    let mut output = format!("{}\n\n", options.accent("whykey capabilities"));
     for capability in capabilities
         .iter()
         .filter(|capability| all || capability.availability == "available")
     {
         let marker = if !capability.implemented {
-            "-"
+            options.muted("PLANNED")
         } else if capability.availability == "available" {
-            "✓"
+            options.success("AVAILABLE")
         } else {
-            "!"
+            options.uncertain("UNAVAILABLE")
         };
         output.push_str(&format!(
-            "{marker} {} [{}; {}]\n  {}\n",
-            capability.id, capability.area, capability.availability, capability.evidence
+            "{marker} {} [{}; {}]\n",
+            capability.id, capability.area, capability.availability
         ));
+        for line in crate::style::wrap_hanging(&capability.evidence, options.width, "  ", "  ") {
+            output.push_str(&line);
+            output.push('\n');
+        }
     }
     output
 }

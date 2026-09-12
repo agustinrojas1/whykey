@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::snapshot;
+use crate::style::RenderOptions;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Change {
@@ -35,21 +36,41 @@ pub fn compare(before: &Value, after: &Value) -> Vec<Change> {
 }
 
 pub fn render_text(changes: &[Change]) -> String {
-    let mut output = String::from("whykey diff\n\n");
+    render_text_with_options(changes, RenderOptions::plain(false))
+}
+
+pub fn render_text_with_options(changes: &[Change], options: RenderOptions) -> String {
+    let mut output = format!("{}\n\n", options.accent("whykey diff"));
     if changes.is_empty() {
         output.push_str("No differences were found in the compared context or route.\n");
         return output;
     }
     for change in changes {
         output.push_str(&format!("- {}\n", change.path));
-        output.push_str(&format!(
-            "  before: {}\n",
-            display_value(change.before.as_ref())
-        ));
-        output.push_str(&format!(
-            "  after:  {}\n",
-            display_value(change.after.as_ref())
-        ));
+        for line in crate::style::wrap_hanging(
+            &format!(
+                "before: {}",
+                display_value_for_path(&change.path, change.before.as_ref())
+            ),
+            options.width,
+            "  ",
+            "  ",
+        ) {
+            output.push_str(&line);
+            output.push('\n');
+        }
+        for line in crate::style::wrap_hanging(
+            &format!(
+                "after: {}",
+                display_value_for_path(&change.path, change.after.as_ref())
+            ),
+            options.width,
+            "  ",
+            "  ",
+        ) {
+            output.push_str(&line);
+            output.push('\n');
+        }
     }
     output
 }
@@ -165,6 +186,15 @@ fn display_value(value: Option<&Value>) -> String {
         Some(value) => serde_json::to_string(value).expect("JSON value is serializable"),
         None => "<absent>".into(),
     }
+}
+
+fn display_value_for_path(path: &str, value: Option<&Value>) -> String {
+    if path.ends_with(".input") {
+        if let Some(Value::String(value)) = value {
+            return crate::style::human_key_text(value);
+        }
+    }
+    display_value(value)
 }
 
 #[cfg(test)]
