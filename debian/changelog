@@ -1,3 +1,9 @@
+whykey (1.2.2) unstable; urgency=medium
+
+  * Complete the post-1.0 refactoring batch and remove the local planning document from packaged sources.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Fri, 11 Sep 2026 17:00:00 +0000
+
 whykey (1.2.1) unstable; urgency=medium
 
   * Install first-party extensions in package recipes and compact CLI test mechanics.

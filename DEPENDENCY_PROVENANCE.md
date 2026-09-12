@@ -4,7 +4,7 @@ This file is generated from `Cargo.toml` and `Cargo.lock` by
 [`tools/generate_dependency_provenance.py`](tools/generate_dependency_provenance.py).
 Do not edit it by hand; CI checks that it is current.
 
-- Package: `whykey 1.2.1`
+- Package: `whykey 1.2.2`
 - Rust edition: `2024`
 - Declared MSRV: `1.85`
 - Dependency source: crates.io registry entries pinned by `Cargo.lock`

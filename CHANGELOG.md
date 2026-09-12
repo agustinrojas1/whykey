@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2] - 2026-09-11
+
+### Changed
+
+- Complete the post-1.0 refactoring batch, including CLI dispatch separation, adapter boundary documentation, IME and XKB evidence limits, herbstluftwm support, bounded include resolution, and measured performance follow-up.
+- Keep local planning notes out of the packaged source tree.
+
 ## [1.2.1] - 2026-09-11
 
 ### Packaging and testing
