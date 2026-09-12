@@ -5,6 +5,7 @@ use crate::layers::{
 };
 use crate::listen::ObservedKey;
 use crate::schema;
+use crate::style::{self, RenderOptions};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -237,11 +238,27 @@ fn observation_value_v2(observed: &ObservedKey) -> Option<serde_json::Value> {
 }
 
 pub fn render(key: &KeyCombo, layers: &[LayerResult], verbose: bool) -> String {
-    render_inner(key, layers, false, None, verbose)
+    render_with_options(key, layers, RenderOptions::plain(verbose))
+}
+
+pub fn render_with_options(
+    key: &KeyCombo,
+    layers: &[LayerResult],
+    options: RenderOptions,
+) -> String {
+    render_inner(key, layers, None, options, true)
 }
 
 pub fn render_observed(observed: &ObservedKey, layers: &[LayerResult], verbose: bool) -> String {
-    render_inner(&observed.combo, layers, true, Some(observed), verbose)
+    render_observed_with_options(observed, layers, RenderOptions::plain(verbose))
+}
+
+pub fn render_observed_with_options(
+    observed: &ObservedKey,
+    layers: &[LayerResult],
+    options: RenderOptions,
+) -> String {
+    render_inner(&observed.combo, layers, Some(observed), options, true)
 }
 
 /// Render an inspection where each step is analyzed independently.
@@ -250,10 +267,26 @@ pub fn render_sequence(
     reports: &[Vec<LayerResult>],
     verbose: bool,
 ) -> String {
-    let mut output = format!("Sequence: {sequence}\n\n");
+    render_sequence_with_options(sequence, reports, RenderOptions::plain(verbose))
+}
+
+pub fn render_sequence_with_options(
+    sequence: &KeySequence,
+    reports: &[Vec<LayerResult>],
+    options: RenderOptions,
+) -> String {
+    let mut output = format!("{}\n\n", options.accent("Sequence · Inspect"));
     for (index, (key, layers)) in sequence.as_slice().iter().zip(reports).enumerate() {
-        output.push_str(&format!("Step {}/{}: {key}\n", index + 1, sequence.len()));
-        output.push_str(&render(key, layers, verbose));
+        output.push_str(&format!(
+            "{}\n\n",
+            options.bold(format!(
+                "Step {}/{} · {}",
+                index + 1,
+                sequence.len(),
+                style::human_key(key)
+            ))
+        ));
+        output.push_str(&render_inner(key, layers, None, options, false));
         if index + 1 < sequence.len() {
             output.push('\n');
         }
@@ -322,170 +355,849 @@ pub fn render_sequence_json(
 fn render_inner(
     key: &KeyCombo,
     layers: &[LayerResult],
-    observed: bool,
     observation: Option<&ObservedKey>,
-    verbose: bool,
+    options: RenderOptions,
+    include_header: bool,
 ) -> String {
-    let mut output = String::new();
+    let observed = observation.is_some();
     let terminal_observed = observation.is_some_and(|value| value.source.confirms_terminal());
-    output.push_str(&format!(
-        "Key: {key}\nAssessment: {}\n\n",
-        confidence_label(layers, observed && terminal_observed,)
-    ));
-    output.push_str(&render_conclusion(
-        key,
-        layers,
-        observation,
-        terminal_observed,
-    ));
-    if verbose {
-        if let Some(note) = compositor_candidates_note() {
-            output.push_str(&note);
+    let operation = if observed { "Listen" } else { "Inspect" };
+    let human_key = style::human_key(key);
+    let evaluated = evaluate_conclusion(layers, observation, terminal_observed);
+    let mut output = String::new();
+
+    if include_header {
+        output.push_str(&options.bold(human_key));
+        output.push_str(&options.accent(format!(" · {operation}")));
+        output.push_str("\n\n");
+    }
+
+    let diagnosis = diagnosis_text(key, layers, observation, &evaluated.conclusion);
+    for line in style::wrap_hanging(&diagnosis, options.width, "", "  ") {
+        output.push_str(&options.bold(line));
+        output.push('\n');
+    }
+    if let Some(qualification) = qualification_text(key, layers, observation, &evaluated.conclusion)
+    {
+        for line in style::wrap_hanging(&qualification, options.width, "", "  ") {
+            output.push_str(&options.uncertain(line));
+            output.push('\n');
         }
     }
     if let Some(observation) = observation {
-        // Normal reports name the capture source, key, and event. Raw bytes,
-        // encoding internals, full modifier state, and alternate keys stay
-        // behind `--verbose`; JSON always carries everything.
-        output.push_str(&format!(
-            "Capture\n  source: {}\n  observed key: {}\n  event: {}\n",
+        let capture_mode = match observation.disposition {
+            crate::listen::CaptureDisposition::Suppressed => "suppressed",
+            crate::listen::CaptureDisposition::PassedThrough => "pass-through",
+            crate::listen::CaptureDisposition::ObservedOnly => "observe-only",
+        };
+        let observed_line = format!(
+            "Observed via {} ({}).",
             observation.source.label(),
-            observation.combo,
-            observation.event_type.label(),
-        ));
-        // The conclusion already states suppression once; repeating it here
-        // printed "captured and suppressed" twice.
-        match observation.disposition {
-            crate::listen::CaptureDisposition::Suppressed => {}
-            crate::listen::CaptureDisposition::PassedThrough
-            | crate::listen::CaptureDisposition::ObservedOnly => {
-                let note = if observation.source.proves_compositor_receipt() {
-                    format!(
-                        "  compositor capture proves the key reached {}, but does not prove forwarding",
-                        observation
-                            .source
-                            .backend_name()
-                            .unwrap_or("the compositor")
-                    )
-                } else {
-                    match &observation.source {
-                        crate::listen::CaptureSource::Terminal => {
-                            match crate::layers::terminal_identity() {
-                                Some(name) => {
-                                    format!("  downstream analysis uses {name}'s normal encoding when available")
-                                }
-                                None => "  downstream analysis uses the terminal's normal encoding when available"
-                                    .to_owned(),
-                            }
-                        }
-                        crate::listen::CaptureSource::Evdev { .. } => {
-                            "  physical capture does not prove compositor or terminal forwarding".to_owned()
-                        }
-                        _ => unreachable!("capture source semantics are inconsistent"),
-                    }
-                };
-                output.push_str(&note);
-                output.push('\n');
-            }
-        }
-        if verbose {
-            let raw_display = observation
-                .raw_display
-                .clone()
-                .unwrap_or_else(|| format_bytes(&observation.raw));
-            let raw_label = if observation.source.confirms_terminal() {
-                "probe bytes"
-            } else {
-                "raw event"
-            };
-            output.push_str(&format!(
-                "  {raw_label}: {raw_display}\n  encoding: {}\n",
-                observation.encoding,
-            ));
-            if let Some(text) = &observation.associated_text {
-                output.push_str(&format!("  associated text: {text}\n"));
-            }
-            if let Some(state) = &observation.modifier_state {
-                let pressed = if state.pressed.is_empty() {
-                    "none".into()
-                } else {
-                    state.pressed.join(", ")
-                };
-                let locked = if state.locked.is_empty() {
-                    "none".into()
-                } else {
-                    state.locked.join(", ")
-                };
-                output.push_str(&format!(
-                    "  modifiers pressed: {pressed}\n  modifiers locked: {locked}\n"
-                ));
-                if state.latched.is_none() {
-                    let from = if observation.source.proves_compositor_receipt() {
-                        "compositor"
-                    } else {
-                        match &observation.source {
-                            crate::listen::CaptureSource::Terminal => "terminal",
-                            crate::listen::CaptureSource::Evdev { .. } => "evdev",
-                            _ => unreachable!("capture source semantics are inconsistent"),
-                        }
-                    };
-                    output.push_str(&format!("  modifiers latched: unavailable from {from}\n"));
-                }
-            }
-            if let Some(alternate) = &observation.alternate_key {
-                output.push_str(&format!("  alternate key: {alternate}\n"));
-            }
-        }
-        output.push('\n');
-    }
-    output.push_str("Path\n");
-
-    // Default reports show only matching, consuming, unavailable, or
-    // uncertain layers so the route fits one screen. `--verbose` restores
-    // the full evidence view; JSON always keeps full structured evidence.
-    let visible: Vec<_> = layers
-        .iter()
-        .filter(|layer| {
-            verbose
-                || layer.status() != LayerStatus::NotHandled
-                || layer.propagation() != Propagation::Continues
-        })
-        .collect();
-    if visible.is_empty() {
-        output.push_str(
-            "  No inspected layer claims this key; use --verbose for the full route.\n\n",
+            capture_mode
         );
-    }
-    for (index, layer) in visible.iter().enumerate() {
-        output.push_str(&format!("{}. {}\n", index + 1, layer.layer));
-        output.push_str("  ");
-        output.push_str(match (layer.status(), layer.propagation()) {
-            (LayerStatus::Unavailable, _) => "! ",
-            (LayerStatus::NotHandled, Propagation::Continues) => "✓ ",
-            (LayerStatus::Handled, Propagation::Continues) => "→ ",
-            (LayerStatus::Handled, Propagation::Stops) => "■ ",
-            (LayerStatus::Handled, Propagation::Redirected) => "↗ ",
-            (LayerStatus::Indeterminate, _) | (_, Propagation::Indeterminate) => "? ",
-            _ => "? ",
-        });
-        output.push_str(&layer.summary);
-        output.push('\n');
-        for detail in &layer.details {
-            output.push_str("    ");
-            output.push_str(detail);
+        for line in style::wrap_hanging(&observed_line, options.width, "", "  ") {
+            output.push_str(&options.muted(line));
             output.push('\n');
         }
-        if verbose {
-            for detail in &layer.verbose_details {
-                output.push_str("    ");
-                output.push_str(detail);
+    }
+    output.push('\n');
+
+    output.push_str(&options.accent("Effect"));
+    output.push('\n');
+    let effect = effect_text(key, layers, observation, &evaluated.conclusion);
+    for line in style::wrap_hanging(&effect, options.width, "  ", "  ") {
+        output.push_str(&line);
+        output.push('\n');
+    }
+    output.push('\n');
+
+    let visible = relevant_layers(layers, observation);
+    output.push_str(&options.accent(if observed {
+        "Relevant layers (configuration and observation)"
+    } else {
+        "Relevant layers (configuration)"
+    }));
+    output.push('\n');
+    if visible.is_empty() {
+        output.push_str("  No matching handler was found in the inspected layers.\n");
+    } else {
+        for layer in visible {
+            let line = layer_line(layer, observation, terminal_observed, options);
+            for wrapped in style::wrap_hanging(&line, options.width, "  ", "      ") {
+                output.push_str(&wrapped);
                 output.push('\n');
             }
+            if let Some(evidence) = concise_binding_evidence(layer) {
+                for wrapped in style::wrap_hanging(&evidence, options.width, "      ", "      ") {
+                    output.push_str(&wrapped);
+                    output.push('\n');
+                }
+            } else if let Some(evidence) = concise_detail_evidence(layer) {
+                for wrapped in style::wrap_hanging(&evidence, options.width, "      ", "      ") {
+                    output.push_str(&wrapped);
+                    output.push('\n');
+                }
+            }
+        }
+    }
+    output.push('\n');
+
+    if let Some(uncertainty) = uncertainty_text(key, layers, observation, &evaluated.conclusion) {
+        output.push_str(&options.accent("What remains uncertain"));
+        output.push('\n');
+        for line in style::wrap_hanging(&uncertainty, options.width, "  ", "  ") {
+            output.push_str(&options.uncertain(line));
+            output.push('\n');
         }
         output.push('\n');
     }
 
+    if let Some(next) = next_step(key, layers, observation, &evaluated.conclusion) {
+        output.push_str(&options.accent("Next"));
+        output.push('\n');
+        for line in style::wrap_hanging(&next, options.width, "  ", "  ") {
+            output.push_str(&line);
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+
+    if options.verbose {
+        render_verbose_evidence(&mut output, key, layers, observation, options);
+        if let Some(note) = compositor_candidates_note() {
+            output.push_str(&options.muted(note));
+        }
+    } else {
+        let hint = "Technical detail: use --verbose for the complete route and raw evidence.";
+        for line in style::wrap_hanging(hint, options.width, "", "  ") {
+            output.push_str(&options.muted(line));
+            output.push('\n');
+        }
+    }
     output
+}
+
+fn diagnosis_text(
+    _key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    conclusion: &Conclusion,
+) -> String {
+    if let Some(observation) = observation {
+        if matches!(
+            observation.disposition,
+            crate::listen::CaptureDisposition::Suppressed
+        ) {
+            if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Compositor) {
+                if layer
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.is_opaque())
+                {
+                    let backend = observation.source.backend_name().unwrap_or("compositor");
+                    return format!(
+                        "{backend} has a matching binding; its runtime effect is unknown."
+                    );
+                }
+            }
+        }
+        if observation.source.proves_compositor_receipt() {
+            let backend = observation.source.backend_name().unwrap_or("compositor");
+            if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Compositor) {
+                if layer
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.is_opaque())
+                    || layer.propagation() == Propagation::Indeterminate
+                {
+                    return format!("{backend} has a matching binding; forwarding is unknown.");
+                }
+                if layer.status() == LayerStatus::Handled {
+                    return format!(
+                        "{backend} has a matching binding; its configured route is shown below."
+                    );
+                }
+            }
+            return format!("{backend} observed the key; no matching binding was confirmed.");
+        }
+    }
+
+    match conclusion {
+        Conclusion::ConfiguredConsumer { layer, .. } if *layer == "TTY driver" => {
+            if layers.iter().any(|candidate| {
+                candidate.id == LayerId::Tty
+                    && candidate.outcome == Outcome::Consumed
+                    && candidate
+                        .details
+                        .iter()
+                        .any(|detail| detail.contains("VSUSP"))
+            }) {
+                "TTY is configured to suspend the foreground job.".into()
+            } else {
+                "TTY driver is configured to consume this control byte.".into()
+            }
+        }
+        Conclusion::ConfiguredConsumer { layer, .. } => {
+            format!("{layer} is configured to consume the shortcut.")
+        }
+        Conclusion::ConfiguredRedirect { layer, .. } => {
+            format!("{layer} is configured to redirect the shortcut.")
+        }
+        Conclusion::SelectedApplication { layer, status } => match status {
+            ApplicationStatus::Unavailable => format!("{layer} could not be inspected."),
+            ApplicationStatus::UnresolvedMode | ApplicationStatus::UnverifiedExecution => {
+                format!("{layer} has a matching keymap, but execution is unverified.")
+            }
+            ApplicationStatus::InteractiveGeneric(_) => {
+                format!("{layer} is the selected application; shortcut handling is unverified.")
+            }
+            ApplicationStatus::NoMatchingKeymap => format!("{layer} has no matching keymap."),
+        },
+        Conclusion::UnverifiedSession { layer } => {
+            format!("{layer} has a candidate binding, but delivery is unverified.")
+        }
+        Conclusion::HandledAndForwarded { layers, uncertain, .. } => {
+            let names = layers.join(", ");
+            if *uncertain {
+                format!("{names} has a matching binding; forwarding is unknown.")
+            } else {
+                format!("{names} has a matching binding and is configured to forward it.")
+            }
+        }
+        Conclusion::CouldNotInspect { layer } => format!("{layer} could not be inspected."),
+        Conclusion::ModifierAmbiguity { layer } => {
+            format!("{layer} has same-key bindings, but modifier matching is ambiguous.")
+        }
+        Conclusion::IndeterminateForwarding { layer } => {
+            format!("{layer} has a matching key, but forwarding is unknown.")
+        }
+        Conclusion::ConditionalForwarding => {
+            "No single handler can be confirmed; forwarding depends on an uncertain layer.".into()
+        }
+        Conclusion::NoLayersInspected => "No layers were inspected.".into(),
+        Conclusion::UnhandledContinues => "No inspected layer matches; it can continue.".into(),
+        Conclusion::SuppressedHandled { .. } => {
+            "A matching compositor binding was captured for inspection; its runtime effect is configuration-only.".into()
+        }
+    }
+}
+
+fn qualification_text(
+    _key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    conclusion: &Conclusion,
+) -> Option<String> {
+    if matches!(
+        conclusion,
+        Conclusion::ConfiguredConsumer {
+            assumes_earlier_forward: true,
+            ..
+        } | Conclusion::ConfiguredRedirect {
+            assumes_earlier_forward: true,
+            ..
+        }
+    ) {
+        return Some("This applies if earlier layers forward the key.".into());
+    }
+    if observation.is_some_and(|value| value.source.proves_compositor_receipt())
+        && layers.iter().any(|layer| {
+            layer.id == LayerId::Compositor
+                && (layer.propagation() == Propagation::Indeterminate
+                    || layer
+                        .binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.is_opaque()))
+        })
+    {
+        return Some(
+            "Whykey cannot determine whether the Lua/plugin action passes the key onward.".into(),
+        );
+    }
+    None
+}
+
+fn effect_text(
+    _key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    conclusion: &Conclusion,
+) -> String {
+    if let Some(observation) = observation {
+        match observation.disposition {
+            crate::listen::CaptureDisposition::Suppressed => {
+                return "Whykey temporarily intercepted the compositor event to inspect its configuration. That does not prove the configured action ran.".into();
+            }
+            crate::listen::CaptureDisposition::PassedThrough => {
+                if observation.source.proves_compositor_receipt() {
+                    let backend = observation
+                        .source
+                        .backend_name()
+                        .unwrap_or("the compositor");
+                    return format!(
+                        "The key was observed at {backend}. Receipt is confirmed; downstream forwarding is a separate question."
+                    );
+                }
+            }
+            crate::listen::CaptureDisposition::ObservedOnly => {
+                if observation.source.confirms_terminal() {
+                    return "The event reached the terminal, so earlier forwarding is confirmed."
+                        .into();
+                }
+                if observation.source.proves_compositor_receipt() {
+                    let backend = observation
+                        .source
+                        .backend_name()
+                        .unwrap_or("the compositor");
+                    return format!(
+                        "The key was observed at {backend}. This confirms receipt, not forwarding."
+                    );
+                }
+                return format!(
+                    "The physical key event was observed via {} before compositor processing. Later forwarding is not confirmed.",
+                    observation.source.label()
+                );
+            }
+        }
+    }
+    if layers.iter().any(|layer| {
+        layer.id == LayerId::Tty
+            && layer.outcome == Outcome::Consumed
+            && layer.details.iter().any(|detail| detail.contains("VSUSP"))
+    }) {
+        return "Terminal signal handling sends a stop signal to the foreground job when this control byte arrives.".into();
+    }
+    match conclusion {
+        Conclusion::ConfiguredConsumer { .. } => "The configured consumer stops this shortcut before later layers can handle it.".into(),
+        Conclusion::ConfiguredRedirect { .. } => "The configured redirect sends the shortcut to another window.".into(),
+        Conclusion::HandledAndForwarded { uncertain: true, .. } | Conclusion::ConditionalForwarding => "A configured layer may handle the shortcut, but later handling depends on uncertain forwarding.".into(),
+        Conclusion::HandledAndForwarded { .. } => "The matching configuration passes the shortcut to the next layer.".into(),
+        Conclusion::UnhandledContinues => "No matching configuration was found, so the shortcut can continue downstream.".into(),
+        _ => "The report below separates observed events from configuration-based predictions.".into(),
+    }
+}
+
+fn relevant_layers<'a>(
+    layers: &'a [LayerResult],
+    observation: Option<&ObservedKey>,
+) -> Vec<&'a LayerResult> {
+    let mut selected = Vec::new();
+    for layer in layers {
+        let important = !matches!(layer.outcome, Outcome::Pass)
+            || layer.binding.is_some()
+            || layer.id == LayerId::Terminal
+            || observation.is_some_and(|observed| {
+                observed.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
+            });
+        if important {
+            selected.push(layer);
+        }
+    }
+    if selected.is_empty() {
+        if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Terminal) {
+            selected.push(layer);
+        } else if let Some(layer) = layers.first() {
+            selected.push(layer);
+        }
+    }
+    selected
+}
+
+fn layer_line(
+    layer: &LayerResult,
+    observation: Option<&ObservedKey>,
+    terminal_observed: bool,
+    options: RenderOptions,
+) -> String {
+    let status = match layer.outcome {
+        Outcome::Pass => "No matching binding",
+        Outcome::HandledAndPassed if terminal_observed => "Observed receipt",
+        Outcome::HandledAndPassed => "Matching binding",
+        Outcome::Consumed => "Configured to stop",
+        Outcome::Redirected => "Redirected",
+        Outcome::HandledUncertain | Outcome::UncertainContinues | Outcome::Unknown => {
+            "Forwarding unknown"
+        }
+        Outcome::Unavailable => "Unavailable",
+        Outcome::UnadaptedTarget => "Not evaluated",
+    };
+    let status = match status {
+        "Unavailable" => options.failure(status),
+        "Forwarding unknown" => options.uncertain(status),
+        "Observed receipt" => options.success(status),
+        "No matching binding" | "Not evaluated" => options.muted(status),
+        _ => status.to_owned(),
+    };
+    let explanation = if layer.id == LayerId::Tty && layer.outcome == Outcome::Consumed {
+        "terminal signal handling".into()
+    } else if let Some(binding) = &layer.binding {
+        binding
+            .description
+            .clone()
+            .or_else(|| binding.action.clone())
+            .unwrap_or_else(|| concise_summary(&layer.summary))
+    } else if observation.is_some_and(|value| {
+        value.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
+    }) {
+        "event received at the compositor".into()
+    } else {
+        concise_summary(&layer.summary)
+    };
+    format!("{} — {status}: {explanation}", layer.layer)
+}
+
+fn concise_binding_evidence(layer: &LayerResult) -> Option<String> {
+    let binding = layer.binding.as_ref()?;
+    let mut fields = Vec::new();
+    if let Some(action) = &binding.action {
+        fields.push(format!("action {action}"));
+    }
+    if let Some(source) = &binding.source {
+        let location = source.line.map_or_else(
+            || source.file.clone(),
+            |line| format!("{}:{line}", source.file),
+        );
+        fields.push(format!("source {location}"));
+    }
+    (!fields.is_empty()).then(|| fields.join("; "))
+}
+
+/// Adapter details use a small set of explicit evidence labels. Select only
+/// those tagged lines for the compact report; the complete detail collection
+/// remains available in `--verbose` and JSON. This keeps presentation choices
+/// separate from the typed conclusion instead of parsing prose to decide it.
+fn concise_detail_evidence(layer: &LayerResult) -> Option<String> {
+    for prefix in [
+        "binding:",
+        "action:",
+        "sequence:",
+        "source:",
+        "static transformation:",
+    ] {
+        if let Some(detail) = layer
+            .details
+            .iter()
+            .find(|detail| detail.starts_with(prefix))
+        {
+            return Some(detail.clone());
+        }
+    }
+    None
+}
+
+fn concise_summary(summary: &str) -> String {
+    summary
+        .split(';')
+        .next()
+        .unwrap_or(summary)
+        .trim()
+        .to_owned()
+}
+
+fn uncertainty_text(
+    _key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    conclusion: &Conclusion,
+) -> Option<String> {
+    if observation.is_some_and(|value| value.source.proves_compositor_receipt())
+        && layers.iter().any(|layer| {
+            layer.id == LayerId::Compositor
+                && (layer.propagation() == Propagation::Indeterminate
+                    || layer
+                        .binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.is_opaque()))
+        })
+    {
+        return None;
+    }
+    if matches!(
+        conclusion,
+        Conclusion::ConfiguredConsumer {
+            assumes_earlier_forward: true,
+            ..
+        } | Conclusion::ConfiguredRedirect {
+            assumes_earlier_forward: true,
+            ..
+        }
+    ) {
+        // The diagnosis qualification already states this condition directly;
+        // do not repeat it in a second section.
+        return None;
+    }
+    if layers
+        .iter()
+        .any(|layer| layer.status() == LayerStatus::Unavailable)
+    {
+        return Some("One or more integrations were unavailable, so downstream behavior remains conditional.".into());
+    }
+    if layers
+        .iter()
+        .any(|layer| layer.status() == LayerStatus::Indeterminate)
+    {
+        return Some(
+            "One or more layers remain uncertain, so downstream behavior is conditional.".into(),
+        );
+    }
+    if layers
+        .iter()
+        .any(|layer| layer.propagation() == Propagation::Indeterminate)
+    {
+        return Some("At least one layer could not establish whether it forwards the key.".into());
+    }
+    None
+}
+
+fn next_step(
+    _key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    conclusion: &Conclusion,
+) -> Option<String> {
+    if observation.is_some_and(|value| value.source.proves_compositor_receipt()) {
+        return Some("Use --suppress only when you need to inspect a compositor binding without letting its normal action run.".into());
+    }
+    if matches!(
+        conclusion,
+        Conclusion::ConfiguredConsumer {
+            assumes_earlier_forward: true,
+            ..
+        }
+    ) {
+        return Some(
+            "Run `whykey listen` to observe whether the shortcut reaches the configured consumer."
+                .into(),
+        );
+    }
+    if layers
+        .iter()
+        .any(|layer| layer.status() == LayerStatus::Unavailable)
+    {
+        return Some("Run `whykey doctor` to see which integration is unavailable.".into());
+    }
+    None
+}
+
+fn render_verbose_evidence(
+    output: &mut String,
+    key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    options: RenderOptions,
+) {
+    output.push_str(&options.accent("Technical evidence"));
+    output.push('\n');
+    if let Some(observation) = observation {
+        push_wrapped(
+            output,
+            &format!("source: {}", observation.source.label()),
+            options,
+            "  ",
+            "  ",
+        );
+        push_wrapped(
+            output,
+            &format!("disposition: {:?}", observation.disposition),
+            options,
+            "  ",
+            "  ",
+        );
+        push_wrapped(
+            output,
+            &format!("observed key: {}", style::human_key(&observation.combo)),
+            options,
+            "  ",
+            "  ",
+        );
+        push_wrapped(
+            output,
+            &format!("event: {}", observation.event_type.label()),
+            options,
+            "  ",
+            "  ",
+        );
+        let raw_display = observation
+            .raw_display
+            .clone()
+            .unwrap_or_else(|| format_bytes(&observation.raw));
+        let raw_label = if observation.source.confirms_terminal() {
+            "probe bytes"
+        } else {
+            "raw event"
+        };
+        push_wrapped(
+            output,
+            &format!("{raw_label}: {raw_display}"),
+            options,
+            "  ",
+            "  ",
+        );
+        push_wrapped(
+            output,
+            &format!("encoding: {}", observation.encoding),
+            options,
+            "  ",
+            "  ",
+        );
+        push_wrapped(
+            output,
+            &format!(
+                "protocol flags: {}",
+                observation
+                    .protocol_flags
+                    .map_or_else(|| "unavailable".into(), |flags| format!("0x{flags:x}"))
+            ),
+            options,
+            "  ",
+            "  ",
+        );
+        if let Some(keycode) = observation.physical_keycode {
+            push_wrapped(
+                output,
+                &format!("physical keycode: {keycode:?}"),
+                options,
+                "  ",
+                "  ",
+            );
+        }
+        if let Some(text) = &observation.associated_text {
+            push_wrapped(
+                output,
+                &format!("associated text: {text}"),
+                options,
+                "  ",
+                "  ",
+            );
+        }
+        if let Some(state) = &observation.modifier_state {
+            let pressed = if state.pressed.is_empty() {
+                "none".into()
+            } else {
+                state.pressed.join(", ")
+            };
+            let locked = if state.locked.is_empty() {
+                "none".into()
+            } else {
+                state.locked.join(", ")
+            };
+            push_wrapped(
+                output,
+                &format!("modifiers pressed: {pressed}"),
+                options,
+                "  ",
+                "  ",
+            );
+            push_wrapped(
+                output,
+                &format!("modifiers locked: {locked}"),
+                options,
+                "  ",
+                "  ",
+            );
+            if let Some(latched) = &state.latched {
+                let latched = if latched.is_empty() {
+                    "none".into()
+                } else {
+                    latched.join(", ")
+                };
+                push_wrapped(
+                    output,
+                    &format!("modifiers latched: {latched}"),
+                    options,
+                    "  ",
+                    "  ",
+                );
+            } else {
+                push_wrapped(
+                    output,
+                    "modifiers latched: unavailable from compositor",
+                    options,
+                    "  ",
+                    "  ",
+                );
+            }
+            for device in &state.devices {
+                push_wrapped(
+                    output,
+                    &format!(
+                        "modifier device: {} ({}) pressed={} locked={}",
+                        device.device,
+                        device.path,
+                        device.pressed.join(", "),
+                        device.locked.join(", ")
+                    ),
+                    options,
+                    "  ",
+                    "  ",
+                );
+            }
+        } else {
+            push_wrapped(output, "modifiers: unavailable", options, "  ", "  ");
+        }
+        if let Some(alternate) = &observation.alternate_keys {
+            push_wrapped(
+                output,
+                &format!("alternate keys: {}", alternate.join(", ")),
+                options,
+                "  ",
+                "  ",
+            );
+        } else if let Some(alternate) = &observation.alternate_key {
+            push_wrapped(
+                output,
+                &format!("alternate key: {alternate}"),
+                options,
+                "  ",
+                "  ",
+            );
+        }
+    }
+    push_wrapped(
+        output,
+        &format!("requested key: {}", style::human_key(key)),
+        options,
+        "  ",
+        "  ",
+    );
+    output.push_str(if observation.is_some() {
+        "  route evidence:\n"
+    } else {
+        "  configuration route (predicted):\n"
+    });
+    for (index, layer) in layers.iter().enumerate() {
+        push_wrapped(
+            output,
+            &format!(
+                "{}. {} [{:?}; {:?}]",
+                index + 1,
+                layer.layer,
+                layer.status(),
+                layer.propagation()
+            ),
+            options,
+            "    ",
+            "       ",
+        );
+        push_wrapped(
+            output,
+            &format!("summary: {}", layer.summary),
+            options,
+            "       ",
+            "       ",
+        );
+        for detail in layer.all_details() {
+            push_wrapped(
+                output,
+                &format!("evidence: {detail}"),
+                options,
+                "       ",
+                "       ",
+            );
+        }
+        if let Some(binding) = &layer.binding {
+            output.push_str("       binding:\n");
+            if let Some(dispatcher) = &binding.dispatcher {
+                push_wrapped(
+                    output,
+                    &format!("dispatcher: {dispatcher}"),
+                    options,
+                    "         ",
+                    "         ",
+                );
+            }
+            if let Some(action) = &binding.action {
+                push_wrapped(
+                    output,
+                    &format!("action: {action}"),
+                    options,
+                    "         ",
+                    "         ",
+                );
+            }
+            if let Some(description) = &binding.description {
+                push_wrapped(
+                    output,
+                    &format!("description: {description}"),
+                    options,
+                    "         ",
+                    "         ",
+                );
+            }
+            if let Some(submap) = &binding.submap {
+                push_wrapped(
+                    output,
+                    &format!("submap: {submap}"),
+                    options,
+                    "         ",
+                    "         ",
+                );
+            }
+            push_wrapped(
+                output,
+                &format!("scope: {:?}", binding.scope),
+                options,
+                "         ",
+                "         ",
+            );
+            if let Some(source) = &binding.source {
+                push_wrapped(
+                    output,
+                    &format!(
+                        "source: {}{}",
+                        source.file,
+                        source
+                            .line
+                            .map_or_else(String::new, |line| format!(":{line}"))
+                    ),
+                    options,
+                    "         ",
+                    "         ",
+                );
+            }
+            if let Some(uncertainty) = binding.uncertainty {
+                push_wrapped(
+                    output,
+                    &format!("uncertainty: {uncertainty:?}"),
+                    options,
+                    "         ",
+                    "         ",
+                );
+            }
+        }
+    }
+    output.push('\n');
+}
+
+fn push_wrapped(
+    output: &mut String,
+    text: &str,
+    options: RenderOptions,
+    first: &str,
+    continuation: &str,
+) {
+    if [
+        "source:",
+        "config:",
+        "binding:",
+        "action:",
+        "evidence: source:",
+        "evidence: config:",
+        "evidence: binding:",
+        "evidence: action:",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
+    {
+        output.push_str(first);
+        output.push_str(text);
+        output.push('\n');
+        return;
+    }
+    for line in style::wrap_hanging(text, options.width, first, continuation) {
+        output.push_str(&line);
+        output.push('\n');
+    }
 }
 
 fn compositor_candidates_note() -> Option<String> {
@@ -699,6 +1411,9 @@ pub fn evaluate_conclusion(
 }
 
 fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) -> Conclusion {
+    if layers.is_empty() {
+        return Conclusion::NoLayersInspected;
+    }
     if let Some(layer) = layers
         .iter()
         .find(|l| l.propagation() == Propagation::Stops)
@@ -802,218 +1517,9 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
 
     if !terminal_observed && has_uncertain_layer(layers) {
         Conclusion::ConditionalForwarding
-    } else if layers.is_empty() {
-        Conclusion::NoLayersInspected
     } else {
         Conclusion::UnhandledContinues
     }
-}
-
-/// The conclusion answers the user's question first: which layer finally
-/// handles the key, or why no layer can claim it.
-fn render_conclusion(
-    key: &KeyCombo,
-    layers: &[LayerResult],
-    observation: Option<&ObservedKey>,
-    terminal_observed: bool,
-) -> String {
-    let evaluated = evaluate_conclusion(layers, observation, terminal_observed);
-    let mut output = String::from("Result:\n");
-    if let Some(preamble) = &evaluated.preamble {
-        match preamble {
-            CapturePreamble::Suppressed {
-                universal_match: true,
-            } => {
-                output.push_str(
-                    "  Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute.\n",
-                );
-            }
-            CapturePreamble::Suppressed {
-                universal_match: false,
-            } => {
-                output.push_str("  Whykey captured and suppressed this event.\n");
-            }
-            CapturePreamble::CompositorObserved { backend } => {
-                output.push_str(&format!(
-                    "  The key event was captured by {backend}, but forwarding is not confirmed.\n"
-                ));
-            }
-            CapturePreamble::TerminalObserved => {
-                output.push_str(
-                    "  The captured event reached this terminal, so earlier forwarding is confirmed.\n",
-                );
-            }
-            CapturePreamble::EvdevObserved => {
-                output.push_str(
-                    "  The physical key event was captured before the compositor; forwarding is not confirmed.\n",
-                );
-            }
-        }
-    }
-
-    match &evaluated.conclusion {
-        Conclusion::SuppressedHandled { handled } => match handled {
-            SuppressedHandledOutcome::IndeterminatePropagation { action } => {
-                output.push_str("  A matching Hyprland binding was found, but its runtime effect and propagation could not be determined.\n");
-                if let Some(action) = action {
-                    output.push_str(&format!(
-                            "  The configuration describes the action as {action}; Whykey did not execute the dispatcher.\n"
-                        ));
-                }
-            }
-            SuppressedHandledOutcome::Universal {
-                layer,
-                action: Some(action),
-            } => {
-                output.push_str(&format!(
-                    "  The normal configuration indicates that {layer} may execute {action}.\n"
-                ));
-            }
-            SuppressedHandledOutcome::Universal {
-                layer,
-                action: None,
-            } => {
-                output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} universal binding may handle {key}.\n"
-                    ));
-            }
-            SuppressedHandledOutcome::Opaque {
-                layer,
-                action: Some(action),
-            } => {
-                output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} may execute {action}; Whykey did not execute the dispatcher.\n"
-                    ));
-            }
-            SuppressedHandledOutcome::Opaque {
-                layer,
-                action: None,
-            } => {
-                output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} may handle {key}; Whykey did not execute the dispatcher.\n"
-                    ));
-            }
-            SuppressedHandledOutcome::Standard {
-                layer,
-                action: Some(action),
-            } => {
-                output.push_str(&format!(
-                    "  The normal configuration indicates that {layer} would run {action}.\n"
-                ));
-            }
-            SuppressedHandledOutcome::Standard {
-                layer,
-                action: None,
-            } => {
-                output.push_str(&format!(
-                        "  The normal configuration indicates that {layer} would handle and consume {key}.\n"
-                    ));
-            }
-        },
-        Conclusion::ConfiguredConsumer {
-            layer,
-            assumes_earlier_forward,
-        } => {
-            let qualifier = if *assumes_earlier_forward {
-                "Assuming earlier uncertain layers forward it, "
-            } else {
-                ""
-            };
-            output.push_str(&format!(
-                "  ✓ Configured handler: {layer}\n  {qualifier}{layer} is configured to consume {key}.\n  It should not reach a later layer under this configuration.\n\n"
-            ));
-        }
-        Conclusion::ConfiguredRedirect {
-            layer,
-            assumes_earlier_forward,
-        } => {
-            let qualifier = if *assumes_earlier_forward {
-                "Assuming earlier uncertain layers forward it, "
-            } else {
-                ""
-            };
-            output.push_str(&format!(
-                "  ✓ Configured handler: {layer}\n  {qualifier}{layer} is configured to redirect {key} to another window.\n  It should not reach a later layer in this chain under this configuration.\n\n"
-            ));
-        }
-        Conclusion::SelectedApplication { layer, status } => match status {
-            ApplicationStatus::Unavailable => {
-                output.push_str(&format!("  Could not inspect {layer}.\n\n"));
-            }
-            ApplicationStatus::UnresolvedMode => {
-                output.push_str(&format!(
-                        "  Selected target: {layer} has a matching keymap for {key}, but mode-dependent execution is uncertain.\n\n"
-                    ));
-            }
-            ApplicationStatus::UnverifiedExecution => {
-                output.push_str(&format!(
-                    "  Selected target: {layer} matches {key}; execution is unverified.\n\n"
-                ));
-            }
-            ApplicationStatus::InteractiveGeneric(summary) => {
-                output.push_str(&format!(
-                    "  Selected target: {summary}; application shortcut handling is unverified.\n\n"
-                ));
-            }
-            ApplicationStatus::NoMatchingKeymap => {
-                output.push_str(&format!(
-                    "  Selected target: {layer}; no matching keymap was found for {key}.\n\n"
-                ));
-            }
-        },
-        Conclusion::UnverifiedSession { layer } => {
-            output.push_str(&format!(
-                "  {layer} has a candidate binding for {key} in the root table, but terminal byte delivery could not be verified.\n\n"
-            ));
-        }
-        Conclusion::HandledAndForwarded {
-            layers,
-            uncertain,
-            uninspected_layer,
-        } => {
-            let names = layers.join(", ");
-            if *uncertain {
-                output.push_str(&format!(
-                    "  {names} has a matching binding for {key}; forwarding is uncertain. Other layers may also handle it.\n  Downstream layer results are conditional.\n"
-                ));
-            } else {
-                output.push_str(&format!(
-                    "  {names} has a matching binding for {key} and is configured to forward it.\n  It should continue to the next layer.\n"
-                ));
-            }
-            if let Some(unavailable) = uninspected_layer {
-                output.push_str(&format!("  Note: {unavailable} was not inspected.\n"));
-            }
-            output.push('\n');
-        }
-        Conclusion::CouldNotInspect { layer } => {
-            output.push_str(&format!("  Could not inspect {layer}.\n\n"));
-        }
-        Conclusion::ModifierAmbiguity { layer } => {
-            output.push_str(&format!(
-                "  No exact binding for {key} was found in {layer}.\n  Some same-key bindings may ignore modifiers, so forwarding cannot be proven.\n\n"
-            ));
-        }
-        Conclusion::IndeterminateForwarding { layer } => {
-            output.push_str(&format!(
-                "  Could not determine whether {layer} forwards {key}.\n\n"
-            ));
-        }
-        Conclusion::ConditionalForwarding => {
-            output.push_str(&format!(
-                "  {key} may be forwarded, but one or more layers are uncertain.\n  Downstream layer results are conditional.\n\n"
-            ));
-        }
-        Conclusion::NoLayersInspected => {
-            output.push_str("  No layers were inspected.\n\n");
-        }
-        Conclusion::UnhandledContinues => {
-            output.push_str(&format!(
-                "  No inspected layer has a matching binding for {key}.\n  It should continue to the next layer.\n\n"
-            ));
-        }
-    }
-    output
 }
 
 fn prior_uncertainty(layers: &[LayerResult]) -> bool {
@@ -1060,14 +1566,13 @@ mod tests {
 
         let output = render(&key, std::slice::from_ref(&layer), false);
 
-        assert!(output.contains("Key: CTRL + LEFT"));
-        assert!(output.contains("Assessment: configured"));
-        assert!(output.contains("No inspected layer has a matching binding for CTRL + LEFT."));
-        assert!(output.contains("It should continue to the next layer."));
+        assert!(output.contains("Ctrl+Left · Inspect"));
+        assert!(output.contains("No inspected layer matches; it can continue."));
+        assert!(output.contains("No matching binding"));
         assert!(output.contains("--verbose"));
 
         let verbose = render(&key, std::slice::from_ref(&layer), true);
-        assert!(verbose.contains("✓ no active binding found"));
+        assert!(verbose.contains("active submap: default"));
     }
 
     #[test]
@@ -1092,8 +1597,8 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("Readline is configured to consume CTRL + Z."));
-        assert!(!output.contains("Hyprland handles and consumes"));
+        assert!(output.contains("Readline is configured to consume the shortcut."));
+        assert!(output.contains("Readline — Configured to stop"));
     }
 
     #[test]
@@ -1118,8 +1623,8 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("Assuming earlier uncertain layers forward it"));
-        assert!(output.contains("Assessment: conditional"));
+        assert!(output.contains("This applies if earlier layers forward the key."));
+        assert!(output.contains("Bash / Readline is configured to consume"));
     }
 
     #[test]
@@ -1135,8 +1640,8 @@ mod tests {
 
         let output = render(&key, &[layer], false);
 
-        assert!(output.contains("↗ active binding found"));
-        assert!(output.contains("is configured to redirect"));
+        assert!(output.contains("Hyprland is configured to redirect the shortcut."));
+        assert!(output.contains("Hyprland — Redirected"));
     }
 
     #[test]
@@ -1161,10 +1666,10 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains(
-            "Hyprland has a matching binding for CTRL + LEFT and is configured to forward it."
-        ));
-        assert!(!output.contains("No inspected layer handles"));
+        assert!(
+            output.contains("Hyprland has a matching binding and is configured to forward it.")
+        );
+        assert!(output.contains("Ghostty — No matching binding"));
     }
 
     #[test]
@@ -1189,12 +1694,8 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(
-            output.contains(
-                "Ghostty has a matching binding for CTRL + LEFT; forwarding is uncertain."
-            )
-        );
-        assert!(output.contains("Other layers may also handle it."));
+        assert!(output.contains("Ghostty has a matching binding; forwarding is unknown."));
+        assert!(output.contains("What remains uncertain"));
     }
 
     #[test]
@@ -1210,8 +1711,8 @@ mod tests {
 
         let output = render(&key, &[layer], false);
 
-        assert!(output.contains("! inspection failed"));
-        assert!(output.contains("Could not inspect Hyprland."));
+        assert!(output.contains("Hyprland — Unavailable: inspection failed"));
+        assert!(output.contains("Hyprland could not be inspected."));
     }
 
     #[test]
@@ -1236,7 +1737,8 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("may be forwarded, but one or more layers are uncertain"));
+        assert!(output.contains("Hyprland — Unavailable"));
+        assert!(output.contains("One or more integrations were unavailable"));
     }
 
     #[test]
@@ -1300,12 +1802,13 @@ mod tests {
 
         let output = render_observed(&observed, &layers, true);
 
+        assert!(output.contains("Observed via terminal (observe-only)"));
         assert!(output.contains("earlier forwarding is confirmed"));
         assert!(output.contains("probe bytes: ESC [ 1 ; 5 D"));
         let normal = render_observed(&observed, &layers, false);
         assert!(normal.contains("earlier forwarding is confirmed"));
         assert!(!normal.contains("probe bytes"));
-        assert!(output.contains("Readline is configured to consume CTRL + LEFT."));
+        assert!(output.contains("Readline is configured to consume the shortcut."));
         assert!(!output.contains("Assuming earlier uncertain layers"));
     }
 
@@ -1339,8 +1842,8 @@ mod tests {
         )];
 
         let output = render_observed(&observed, &layers, false);
-        assert!(output.contains("source: evdev (Test Keyboard; /dev/input/event0)"));
-        assert!(output.contains("physical key event was captured before the compositor"));
+        assert!(output.contains("Observed via evdev (Test Keyboard; /dev/input/event0)"));
+        assert!(output.contains("physical key event was observed via evdev"));
         assert!(!output.contains("earlier forwarding is confirmed"));
         assert!(!output.contains("probe bytes:"));
     }
@@ -1379,18 +1882,13 @@ mod tests {
         )];
 
         let output = render_observed(&observed, &layers, true);
-        assert!(output.contains("source: Hyprland"));
-        assert!(output.contains("observed key: CTRL + SUPER + RETURN"));
+        assert!(output.contains("Hyprland"));
         assert!(output.contains("encoding: Hyprland XKB key event"));
         let normal = render_observed(&observed, &layers, false);
-        assert!(normal.contains("source: Hyprland"));
+        assert!(normal.contains("Observed via Hyprland (pass-through)"));
         assert!(!normal.contains("encoding: Hyprland XKB key event"));
         assert!(!normal.contains("modifiers latched"));
-        assert!(
-            output.contains(
-                "The key event was captured by Hyprland, but forwarding is not confirmed."
-            )
-        );
+        assert!(output.contains("The key was observed at Hyprland"));
         assert!(!output.contains("earlier forwarding is confirmed"));
         assert!(output.contains("modifiers latched: unavailable from compositor"));
     }
@@ -1443,18 +1941,15 @@ mod tests {
         .with_binding(opaque_herdr_evidence())];
 
         let output = render_observed(&observed, &layers, false);
-        assert!(output.contains("source: Hyprland"));
-        assert!(output.contains("observed key: CTRL + SUPER + RETURN"));
-        assert!(output.contains("Whykey captured and suppressed this event."));
+        assert!(output.contains("Hyprland"));
+        assert!(output.contains("Observed via Hyprland (suppressed)"));
+        assert!(output.contains("temporarily intercepted the compositor event"));
         // An opaque dispatcher never becomes "executed": the conclusion may
         // name the configured action but must qualify it as unexecuted.
-        assert!(
-            output.contains("The normal configuration indicates that Hyprland may execute Herdr")
-        );
-        assert!(output.contains("Whykey did not execute the dispatcher"));
-        assert!(!output.contains("would run Herdr"));
+        assert!(output.contains("Hyprland has a matching binding; its runtime effect is unknown."));
+        assert!(output.contains("Whykey temporarily intercepted"));
+        assert!(!output.contains("executed"));
         assert!(!output.contains("would handle and consume"));
-        assert!(!output.contains("forwarding is not confirmed"));
         assert!(!output.contains("earlier forwarding is confirmed"));
     }
 
@@ -1489,8 +1984,9 @@ mod tests {
 
         let output = render_observed(&observed, &layers, false);
 
-        assert!(output.contains("runtime effect and propagation could not be determined"));
-        assert!(output.contains("Whykey did not execute the dispatcher"));
+        assert!(output.contains("Hyprland has a matching binding; its runtime effect is unknown."));
+        assert!(output.contains("temporarily intercepted the compositor event"));
+        assert!(!output.contains("executed"));
         assert!(!output.contains("would run Herdr"));
         assert!(!output.contains("would handle and consume"));
     }
@@ -1537,13 +2033,8 @@ mod tests {
         .with_binding(universal)];
 
         let output = render_observed(&observed, &layers, false);
-        assert!(output.contains("source: Hyprland"));
-        assert!(output.contains(
-            "Whykey captured this event, but matching universal Hyprland bindings bypass submap capture and may execute."
-        ));
-        assert!(
-            output.contains("The normal configuration indicates that Hyprland may execute Herdr.")
-        );
+        assert!(output.contains("Hyprland has a matching binding; its runtime effect is unknown."));
+        assert!(output.contains("temporarily intercepted the compositor event"));
     }
 
     #[test]
@@ -1576,9 +2067,8 @@ mod tests {
             vec!["active submap: default".into()],
         )];
         let output = render(&key, &layers, false);
-        assert!(output.contains(
-            "  ? active binding found; forwarding cannot be determined\n    active submap: default\n"
-        ));
+        assert!(output.contains("Hyprland — Forwarding unknown: active binding found"));
+        assert!(!output.contains("active submap: default"));
     }
 
     #[test]
@@ -1625,7 +2115,7 @@ mod tests {
                 "normal report must not carry {diagnostic:?}"
             );
         }
-        assert!(normal.contains("may execute Herdr"));
+        assert!(normal.contains("Hyprland — Configured to stop: Herdr"));
         let verbose = render_observed(&observed, &layers, true);
         for diagnostic in [
             "main keyboard",
@@ -1640,9 +2130,9 @@ mod tests {
             );
         }
         assert_eq!(
-            conclusion_lines(&normal),
-            conclusion_lines(&verbose),
-            "verbosity changes evidence depth, never the conclusion"
+            diagnosis_line(&normal),
+            diagnosis_line(&verbose),
+            "verbosity changes evidence depth, never the diagnosis"
         );
     }
 
@@ -1660,10 +2150,13 @@ mod tests {
         .with_verbose_details(vec!["main keyboard: test".into()])
         .with_binding(opaque_herdr_evidence())];
         let text = render_observed(&observed, &layers, false);
-        let assessment = text
-            .lines()
-            .find_map(|line| line.strip_prefix("Assessment: "))
-            .expect("text report names the assessment");
+        let assessment = if text.contains("conditional") {
+            "conditional"
+        } else if text.contains("confirmed") {
+            "confirmed"
+        } else {
+            "configured"
+        };
         for version in [1, 2] {
             let json: serde_json::Value =
                 serde_json::from_str(&render_listen_json(&key, &layers, Some(&observed), version))
@@ -1711,7 +2204,7 @@ mod tests {
         ];
         let output = render_observed(&observed, &layers, false);
         assert!(!output.contains("Final handler: Input method"));
-        assert!(output.contains("inactive or closed"));
+        assert!(output.contains("Input method — Forwarding unknown"));
     }
     fn suppressed_observed() -> ObservedKey {
         let key: KeyCombo = "ctrl+super+return".parse().unwrap();
@@ -1734,26 +2227,12 @@ mod tests {
         }
     }
 
-    fn conclusion_lines(output: &str) -> Vec<&str> {
-        let mut lines = Vec::new();
-        let mut in_result = false;
-        for line in output.lines() {
-            if line == "Result:" {
-                in_result = true;
-                continue;
-            }
-            if in_result {
-                if line.is_empty() || !line.starts_with(' ') {
-                    break;
-                }
-                lines.push(line);
-            }
-        }
-        lines
+    fn diagnosis_line(output: &str) -> Option<&str> {
+        output.lines().skip(2).find(|line| !line.is_empty())
     }
 
     #[test]
-    fn detail_wording_never_changes_the_conclusion() {
+    fn detail_wording_never_changes_the_diagnosis() {
         let observed = suppressed_observed();
         let plain = [LayerResult::new(
             "Hyprland",
@@ -1772,9 +2251,9 @@ mod tests {
         )
         .with_binding(opaque_herdr_evidence())];
         assert_eq!(
-            conclusion_lines(&render_observed(&observed, &plain, false)),
-            conclusion_lines(&render_observed(&observed, &reworded, false)),
-            "the conclusion follows typed evidence, not detail wording"
+            diagnosis_line(&render_observed(&observed, &plain, false)),
+            diagnosis_line(&render_observed(&observed, &reworded, false)),
+            "the diagnosis follows typed evidence, not detail wording"
         );
     }
 
@@ -1884,9 +2363,9 @@ mod tests {
 
         let output = render_sequence(&sequence, &reports, false);
 
-        assert!(output.contains("Sequence: CTRL+X CTRL+S"));
-        assert!(output.contains("Step 1/2: CTRL + X"));
-        assert!(output.contains("Step 2/2: CTRL + S"));
+        assert!(output.contains("Sequence · Inspect"));
+        assert!(output.contains("Step 1/2 · Ctrl+X"));
+        assert!(output.contains("Step 2/2 · Ctrl+S"));
     }
 
     #[test]
@@ -1923,11 +2402,9 @@ mod tests {
             ),
         ];
         let output = render(&key, &layers, false);
-        assert!(output.contains(
-            "Hyprland has a matching binding for CTRL + ALT + DELETE; forwarding is uncertain."
-        ));
-        assert!(!output.contains("Result:\n  Could not inspect Shell input."));
-        assert!(output.contains("Note: Shell input was not inspected."));
+        assert!(output.contains("Hyprland — Forwarding unknown: active binding found"));
+        assert!(!output.contains("Result:"));
+        assert!(output.contains("Shell input — Unavailable"));
     }
 
     #[test]
@@ -1951,9 +2428,7 @@ mod tests {
             uncertainty: Some(UncertaintyReason::UnverifiedTerminalBytes),
         })];
         let output = render(&key, &layers, false);
-        assert!(output.contains(
-            "tmux has a candidate binding for ALT + RETURN in the root table, but terminal byte delivery could not be verified."
-        ));
+        assert!(output.contains("tmux has a candidate binding, but delivery is unverified."));
         assert!(!output.contains("No inspected layer handles"));
     }
 
@@ -1978,9 +2453,7 @@ mod tests {
             uncertainty: Some(UncertaintyReason::UnresolvedMode),
         })];
         let output = render(&key, &layers, false);
-        assert!(output.contains(
-            "Selected target: Neovim has a matching keymap for CTRL + W, but mode-dependent execution is uncertain."
-        ));
+        assert!(output.contains("Neovim has a matching keymap, but execution is unverified."));
         assert!(!output.contains("Bash"));
         assert!(!output.contains("Readline"));
     }
@@ -2111,5 +2584,129 @@ mod tests {
                 status: ApplicationStatus::NoMatchingKeymap,
             }
         );
+    }
+
+    #[test]
+    fn ctrl_z_leads_with_tty_suspend_diagnosis_and_keeps_exact_evidence_verbose() {
+        let key: KeyCombo = "ctrl+z".parse().unwrap();
+        let layers = [
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Unknown,
+                "compositor forwarding is unknown",
+                vec![],
+            ),
+            LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Consumed,
+                "interprets byte 0x1a as VSUSP",
+                vec![
+                    "special character: VSUSP = ^Z".into(),
+                    "byte: 0x1a".into(),
+                    "kernel sends SIGTSTP to the foreground process".into(),
+                ],
+            ),
+        ];
+
+        let normal = render_with_options(&key, &layers, RenderOptions::plain(false));
+        assert!(normal.contains("TTY is configured to suspend the foreground job."));
+        assert!(normal.contains("This applies if earlier layers forward the key."));
+        assert!(normal.contains("TTY driver — Configured to stop: terminal signal handling"));
+        assert!(!normal.contains("special character: VSUSP"));
+
+        let verbose = render_with_options(&key, &layers, RenderOptions::plain(true));
+        for evidence in ["VSUSP", "0x1a", "SIGTSTP"] {
+            assert!(
+                verbose.contains(evidence),
+                "verbose output must retain {evidence}"
+            );
+        }
+    }
+
+    #[test]
+    fn compositor_capture_with_opaque_binding_names_unknown_forwarding() {
+        let key: KeyCombo = "super+k".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: vec![],
+            raw_display: Some("Hyprland XKB keycode=45 (press)".into()),
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: None,
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
+            disposition: crate::listen::CaptureDisposition::PassedThrough,
+        };
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching binding; runtime effect unknown",
+            vec![],
+        )
+        .with_binding(BindingEvidence {
+            dispatcher: Some("__lua".into()),
+            action: Some("__lua 42".into()),
+            description: Some("Open launcher".into()),
+            submap: Some("default".into()),
+            scope: BindingScope::Submap("default".into()),
+            source: Some(crate::layers::SourceLocation::new(
+                "/tmp/hyprland.conf",
+                Some(12),
+            )),
+            has_universal_match: false,
+            uncertainty: Some(UncertaintyReason::OpaqueDispatcher),
+        });
+
+        let output = render_observed_with_options(&observed, &[layer], RenderOptions::plain(false));
+        assert!(output.contains("Super+K · Listen"));
+        assert!(output.contains("Hyprland has a matching binding; forwarding is unknown."));
+        assert!(output.contains("The key was observed at Hyprland."));
+        assert!(output.contains("Open launcher"));
+        assert!(output.contains(
+            "Whykey cannot determine whether the Lua/plugin action passes the key onward."
+        ));
+        assert!(!output.contains("executed"));
+        assert!(!output.contains("blocked"));
+    }
+
+    #[test]
+    fn narrow_and_color_modes_keep_text_readable_without_touching_json() {
+        let key: KeyCombo = "ctrl+z".parse().unwrap();
+        let layer = LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Consumed,
+            "interprets byte 0x1a as VSUSP",
+            vec!["special character: VSUSP = ^Z".into()],
+        );
+        let narrow =
+            render_with_options(&key, &[layer], RenderOptions::plain(false).with_width(60));
+        assert!(
+            narrow
+                .lines()
+                .all(|line| crate::style::display_width(line) <= 60)
+        );
+        assert!(!narrow.contains("\x1b["));
+        let colored = render_with_options(
+            &key,
+            &[],
+            RenderOptions {
+                color: crate::style::ColorChoice::Always,
+                verbose: false,
+                width: 80,
+            },
+        );
+        assert!(colored.contains("\x1b[1m"));
+        let json = render_json(&key, &[], None, 1);
+        assert!(!json.contains("\x1b["));
     }
 }

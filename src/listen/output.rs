@@ -1,4 +1,11 @@
 fn print_capture_dry_run(environment: &crate::environment::Environment, options: &Options) {
+    let write_line = |line: String| {
+        if options.json {
+            eprintln!("{line}");
+        } else {
+            println!("{}", crate::style::RenderOptions::cli(options.color, false).accent(line));
+        }
+    };
     let forced = if options.evdev || options.device.is_some() {
         Some("Evdev")
     } else if options.terminal {
@@ -7,17 +14,19 @@ fn print_capture_dry_run(environment: &crate::environment::Environment, options:
         None
     };
     if let Some(backend) = forced {
-        println!("capture backend: {backend} (dry-run; not armed)");
+        write_line(format!("capture backend: {backend} (dry-run; not armed)"));
         return;
     }
     match select_native_backend(environment) {
-        Ok(session) => println!(
+        Ok(session) => write_line(format!(
             "capture backend: {} (dry-run; not armed; policy={})",
             session.display(),
             options.capture_policy
-        ),
+        )),
         Err(error) => {
-            println!("capture backend: terminal fallback (dry-run; native unavailable: {error})")
+            write_line(format!(
+                "capture backend: terminal fallback (dry-run; native unavailable: {error})"
+            ))
         }
     }
 }
@@ -29,26 +38,73 @@ fn print_capture_dry_run(_environment: &crate::environment::Environment, options
     } else {
         "Terminal"
     };
-    println!("capture backend: {backend} (dry-run; not armed)");
+    let line = format!("capture backend: {backend} (dry-run; not armed)");
+    if options.json {
+        eprintln!("{line}");
+    } else {
+        println!("{}", crate::style::RenderOptions::cli(options.color, false).accent(line));
+    }
 }
 
-fn print_capture_explanation(environment: &crate::environment::Environment, policy: CapturePolicy) {
-    println!("capture detection (policy={policy})");
+fn print_capture_explanation(
+    environment: &crate::environment::Environment,
+    policy: CapturePolicy,
+    color: crate::style::ColorChoice,
+    json: bool,
+) {
+    let write_line = |line: String| {
+        if json {
+            eprintln!("{line}");
+        } else {
+            println!("{}", crate::style::RenderOptions::cli(color, false).accent(line));
+        }
+    };
+    write_line(format!("capture detection (policy={policy})"));
     for status in &environment.desktops {
         let capture = crate::registry::DESKTOPS
             .iter()
             .find(|entry| entry.id == status.id)
             .is_some_and(|entry| entry.capture.is_some());
-        println!(
+        write_line(format!(
             "- {}: applicable={} ipc={} capture_factory={}",
             status.id, status.applicable, status.ipc, capture
-        );
+        ));
     }
-    println!("selected compositor: {:?}", environment.selected_compositor);
-    println!(
-        "compositor candidates: {:?}",
-        environment.compositor_candidates
-    );
+    write_line(format!("selected compositor: {:?}", environment.selected_compositor));
+    write_line(format!("compositor candidates: {:?}", environment.compositor_candidates));
+}
+
+fn print_waiting_message(
+    backend: &str,
+    policy: CapturePolicy,
+    repeat: bool,
+    json: bool,
+    color: crate::style::ColorChoice,
+    physical_observation: bool,
+) {
+    let mode = if physical_observation {
+        "read-only physical observation; normal shortcut actions can still run"
+    } else if backend == CaptureBackendId::Terminal.display() {
+        "terminal observation; whykey reads the captured key, so its normal action does not run"
+    } else if policy == CapturePolicy::Suppress {
+        "temporary suppression; compositor actions are held where the hook can intercept them; universal bindings may still run"
+    } else {
+        "pass-through observation; normal shortcut actions can still run"
+    };
+    if json {
+        eprintln!(
+            "whykey listen: capturing via {backend} ({mode}); Waiting for input. Esc or Ctrl+C exits"
+        );
+        return;
+    }
+    let options = crate::style::RenderOptions::cli(color, false);
+    println!("{}", options.accent(format!("Capture ready · {backend}")));
+    println!("  {mode}.");
+    if repeat {
+        println!("  Repeat mode keeps each report in scrollback.");
+    }
+    println!("  Waiting for input.");
+    println!("  Press Esc or Ctrl+C to exit.");
 }
 
 #[cfg(target_os = "linux")]
@@ -158,28 +214,14 @@ fn run_native(
         }
     }
 
-    if options.json {
-        eprintln!("whykey listen: press a key combination (Esc or Ctrl+C exits)");
-    } else {
-        println!("whykey listen");
-        if options.capture_policy == CapturePolicy::Suppress {
-            println!(
-                "{} shortcuts are temporarily suppressed.",
-                capture_session.display()
-            );
-        }
-        println!("Press a key combination. Press Esc or Ctrl+C to exit.");
-        if options.repeat {
-            println!("Repeat mode is on.");
-        }
-        println!();
-    }
-
-    if options.json {
-        eprintln!("Waiting for input...");
-    } else {
-        println!("Waiting for input...");
-    }
+    print_waiting_message(
+        capture_session.display(),
+        options.capture_policy,
+        options.repeat,
+        options.json,
+        options.color,
+        false,
+    );
     let _ = io::stdout().flush();
 
     let mut last_renewed = Instant::now();
@@ -315,7 +357,11 @@ fn run_native(
                 )
             }
         } else {
-            report::render_observed(&observed, &results, options.verbose)
+            report::render_observed_with_options(
+                &observed,
+                &results,
+                crate::style::RenderOptions::cli(options.color, options.verbose),
+            )
         };
         write_capture(&mut export, &mut capture_stdout, &rendered)?;
 
@@ -334,7 +380,7 @@ fn run_native(
                 .map_err(ListenError::Message)?;
         }
         if !options.json {
-            println!();
+            println!("\n{}\n", crate::style::RenderOptions::cli(options.color, false).muted("--- next capture ---"));
         }
     }
 
@@ -371,38 +417,14 @@ fn run_observed_loop<B: CaptureBackend>(
     let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
     let mut capture_stdout = io::BufWriter::new(io::stdout());
-    if options.json {
-        eprintln!(
-            "whykey listen{}: press a key combination (Esc or Ctrl+C exits)",
-            if backend.id() == CaptureBackendId::Evdev {
-                " --evdev"
-            } else {
-                ""
-            }
-        );
-    } else {
-        println!(
-            "whykey listen{}",
-            if backend.id() == CaptureBackendId::Evdev {
-                " --evdev"
-            } else {
-                ""
-            }
-        );
-        println!("Press a key combination. Press Esc or Ctrl+C to exit.");
-        if backend.id() == CaptureBackendId::Evdev {
-            println!("Read-only capture; the input device is not grabbed.");
-        }
-        if options.repeat {
-            println!("Repeat mode is on.");
-        }
-        println!();
-    }
-    if options.json {
-        eprintln!("Waiting for input...");
-    } else {
-        println!("Waiting for input...");
-    }
+    print_waiting_message(
+        backend.display(),
+        CapturePolicy::PassThrough,
+        options.repeat,
+        options.json,
+        options.color,
+        backend.id() == CaptureBackendId::Evdev,
+    );
     let _ = io::stdout().flush();
     let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
     let mut captured_events = 0_usize;
@@ -446,7 +468,11 @@ fn run_observed_loop<B: CaptureBackend>(
                 )
             }
         } else {
-            report::render_observed(&observed, &results, options.verbose)
+            report::render_observed_with_options(
+                &observed,
+                &results,
+                crate::style::RenderOptions::cli(options.color, options.verbose),
+            )
         };
         write_capture(&mut export, &mut capture_stdout, &rendered)?;
         captured_events += 1;
@@ -459,13 +485,16 @@ fn run_observed_loop<B: CaptureBackend>(
             .arm(CapturePolicy::PassThrough)
             .map_err(ListenError::Setup)?;
         if !options.json {
-            println!();
+            println!("\n{}\n", crate::style::RenderOptions::cli(options.color, false).muted("--- next capture ---"));
         }
-        if options.json {
-            eprintln!("Waiting for input...");
-        } else {
-            println!("Waiting for input...");
-        }
+        print_waiting_message(
+            backend.display(),
+            CapturePolicy::PassThrough,
+            options.repeat,
+            options.json,
+            options.color,
+            backend.id() == CaptureBackendId::Evdev,
+        );
     }
 }
 

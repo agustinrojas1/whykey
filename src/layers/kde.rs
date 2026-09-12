@@ -3,7 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{
+    BindingEvidence, BindingRecord, BindingScope, LayerId, LayerResult, Outcome, SourceLocation,
+};
 
 /// Read-only KDE Plasma global shortcut adapter.
 pub struct Kde;
@@ -110,13 +112,28 @@ impl Kde {
             );
             details.push(format!("{}: {action}", binding.group));
         }
-        LayerResult::new(
+        let binding_evidence = matches.first().map(|binding| BindingEvidence {
+            dispatcher: Some("KGlobalAccel".into()),
+            action: Some(binding.action.clone()),
+            description: binding.description.clone(),
+            submap: None,
+            scope: BindingScope::Unknown,
+            source: Some(SourceLocation::new(path.display().to_string(), None)),
+            has_universal_match: false,
+            uncertainty: Some(crate::layers::UncertaintyReason::EndpointUnavailable),
+        });
+        let result = LayerResult::new(
             "KDE Plasma",
             LayerId::Compositor,
             Outcome::HandledUncertain,
             "matching KDE global shortcut configured; runtime activation is conditional",
             details,
-        )
+        );
+        if let Some(binding) = binding_evidence {
+            result.with_binding(binding)
+        } else {
+            result
+        }
     }
 }
 

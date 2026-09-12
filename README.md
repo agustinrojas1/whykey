@@ -7,16 +7,30 @@ continues to the next layer.
 
 It inspects the active compositor, terminal, TTY, multiplexer, application,
 and shell. It never executes the shortcut or changes your configuration.
-Native compositor listening, currently backed by Hyprland, temporarily changes the compositor session to capture
-the event, then restores the previous submap before reporting it.
+Native compositor listening, currently backed by Hyprland, observes in
+pass-through mode by default. Use `--suppress` only when you want a temporary
+compositor capture that is restored before reporting.
 
 ```console
-$ whykey ctrl+left
-Key: CTRL + LEFT
+$ whykey ctrl+z
+Ctrl+Z · Inspect
 
-Result:
-  ✓ Final handler: Bash / Readline
-  Bash / Readline handles and consumes CTRL + LEFT.
+TTY is configured to suspend the foreground job.
+This applies if earlier layers forward the key.
+
+Effect
+  Terminal signal handling sends a stop signal to the foreground job when this
+  control byte arrives.
+
+Relevant layers (configuration)
+  Hyprland — Unavailable: compositor binding could not be inspected
+  TTY driver — Configured to stop: terminal signal handling
+
+Next
+  Run `whykey listen` to observe whether the shortcut reaches the configured
+  consumer.
+
+Technical detail: use --verbose for the complete route and raw evidence.
 ```
 
 ## Install
@@ -55,7 +69,7 @@ publication follows the first release; see [`packaging/README.md`](packaging/REA
 whykey ctrl+left                    # inspect one combination
 whykey inspect ctrl+x ctrl+s        # inspect a sequence
 whykey inspect --focused ctrl+z     # inspect the focused application
-whykey listen                       # explain the next shortcut (observe-only by default)
+whykey listen                       # explain the next shortcut (pass-through by default)
 whykey listen --suppress            # opt into temporary compositor suppression
 whykey listen --no-suppress         # explain the shortcut without suppressing its action
 whykey listen --repeat              # inspect one deliberate shortcut at a time
@@ -77,11 +91,11 @@ whykey extension extensions/whykey-emacs ctrl+x # query live Emacs keymap stack 
 next check for unavailable integrations. It never repairs permissions or
 changes compositor configuration.
 
-Normal reports fit one screen: key, assessment, one result statement,
-capture source, matching layer, binding action, and concrete uncertainty.
-Use `--verbose` for the full route with raw events, probe bytes, encoding
-internals, full modifier state, XKB candidates, keyboard inventory, inactive
-submaps, and alternate keys. Use `--json` for stable schema-v1 output
+Normal reports lead with a compact shortcut/operation header, a plain-English
+diagnosis, its practical effect, relevant layers, and a specific uncertainty
+statement when one matters. Use `--verbose` for the full route with raw events,
+probe bytes, encoding internals, full modifier state, XKB candidates, keyboard
+inventory, inactive submaps, and alternate keys. Use `--json` for stable schema-v1 output
 or `--json-v2` for structured context and evidence; JSON always carries the
 full evidence including verbose-only lines. `snapshot` saves a
 versioned static report for later offline replay; it never captures or injects
@@ -91,6 +105,11 @@ comparison, not raw IPC or configuration inputs required to re-run every
 adapter offline. Inspect a snapshot before sharing it.
 
 Run `whykey --help` for every command and option.
+
+Human output uses `--color=auto` by default. Auto disables color when
+`NO_COLOR` is set, stdout is not a terminal, or `TERM=dumb`. `--color=always`
+and `--color=never` override those checks. JSON, NDJSON, shell-init, and
+completion output never contain terminal styling.
 
 ## How it works
 
@@ -119,8 +138,8 @@ observing keys that reach the terminal. Pass `--terminal` to explicitly force
 terminal-only capture. Pass `--evdev` to read Linux input events before the
 compositor (may require permission to access `/dev/input/event*`). Whykey
 never grabs an evdev input device and cleans up temporary native capture hooks
-on exit. Press Escape or Ctrl+C to exit. If the Hyprland backend is used,
-the compositor session is temporarily changed; configuration files are not.
+on exit. Press Escape or Ctrl+C to exit. Only `--suppress` temporarily changes
+the Hyprland session; configuration files are never edited.
 When multiple compositor adapters are applicable, Whykey reports their scores
 in verbose output and schema-v2 context before selecting the highest-scoring one.
 

@@ -1,11 +1,11 @@
 //! Capture one key event from a native compositor, Linux evdev, or the
 //! controlling terminal, and explain it.
 //!
-//! When native compositor capture is available, the default listener uses a
-//! temporary runtime hook to suppress bound compositor actions during
-//! inspection (or passes them through when configured). Pass-through-only
-//! native backends do not change compositor state. If native capture is
-//! unavailable, it falls back to terminal capture
+//! When native compositor capture is available, the default listener observes
+//! through a pass-through hook; `--suppress` opts into a temporary runtime
+//! hook that suppresses bound compositor actions during inspection.
+//! Pass-through-only native backends do not change compositor state. If native
+//! capture is unavailable, it falls back to terminal capture
 //! (`--terminal` explicitly forces terminal capture). The optional evdev backend
 //! observes physical input events before compositor processing.
 
@@ -77,6 +77,8 @@ pub struct Options {
     /// Show every route layer instead of only matching, consuming,
     /// unavailable, or uncertain layers.
     pub verbose: bool,
+    /// Human-readable color policy. JSON and NDJSON ignore this field.
+    pub color: crate::style::ColorChoice,
     /// Structured output version for JSON renders, from `--schema-version`.
     pub schema_version: u8,
 }
@@ -405,7 +407,12 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     if options.dry_run || options.explain_capture {
         let discovery = ListenSession::capture();
         if options.explain_capture {
-            print_capture_explanation(&discovery.environment, options.capture_policy);
+            print_capture_explanation(
+                &discovery.environment,
+                options.capture_policy,
+                options.color,
+                options.json,
+            );
         }
         if options.dry_run {
             print_capture_dry_run(&discovery.environment, &options);

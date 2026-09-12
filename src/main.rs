@@ -7,8 +7,8 @@ mod cli;
 use cli::{COMMANDS, COMPLETION_SHELLS};
 use cli::{
     DoctorState, command_program_available, command_succeeds, completions, detect_extension,
-    detect_nvim_server, detected_terminal_program, doctor_next_steps, help_text, print_check,
-    shell_init, shell_snapshot_available,
+    detect_nvim_server, detected_terminal_program, doctor_next_steps, help_text,
+    print_check_with_options, shell_init, shell_snapshot_available,
 };
 
 use whykey::bindings;
@@ -28,6 +28,7 @@ use whykey::replay;
 use whykey::report;
 use whykey::schema;
 use whykey::snapshot;
+use whykey::style::{ColorChoice, RenderOptions};
 
 /// One source of truth for command vocabulary. Help text, the argument
 /// parser below, and shell completions all derive from [`COMMANDS`]; the
@@ -45,6 +46,7 @@ fn main() -> ExitCode {
         json,
         ndjson,
         verbose,
+        color,
         schema_version,
     } = parsed;
     let mut arguments = raw_arguments.into_iter();
@@ -67,6 +69,7 @@ fn main() -> ExitCode {
         json,
         ndjson,
         verbose,
+        color,
         schema_version,
     )
 }
@@ -81,7 +84,13 @@ fn run_listen(options: listen::Options) -> ExitCode {
     }
 }
 
-fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version: u8) -> ExitCode {
+fn run_inspect(
+    arguments: Vec<String>,
+    json: bool,
+    verbose: bool,
+    color: ColorChoice,
+    schema_version: u8,
+) -> ExitCode {
     let cli::InspectArguments {
         sequence,
         target_pid,
@@ -140,7 +149,14 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
             report::render_sequence_json(&sequence, &reports, schema_version)
         );
     } else {
-        print!("{}", report::render_sequence(&sequence, &reports, verbose));
+        print!(
+            "{}",
+            report::render_sequence_with_options(
+                &sequence,
+                &reports,
+                RenderOptions::cli(color, verbose),
+            )
+        );
     }
 
     if unavailable {
@@ -150,7 +166,7 @@ fn run_inspect(arguments: Vec<String>, json: bool, verbose: bool, schema_version
     }
 }
 
-fn run_capabilities(json: bool, all: bool, schema_version: u8) -> ExitCode {
+fn run_capabilities(json: bool, all: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     let environment = whykey::environment::Environment::collect();
     let capabilities = command::with_deadline(command::configured_diagnostic_timeout(), || {
         capabilities::current_with_environment(&environment)
@@ -161,12 +177,24 @@ fn run_capabilities(json: bool, all: bool, schema_version: u8) -> ExitCode {
             capabilities::render_json_with_environment(&capabilities, schema_version, &environment)
         );
     } else {
-        print!("{}", capabilities::render_text(&capabilities, all));
+        print!(
+            "{}",
+            capabilities::render_text_with_options(
+                &capabilities,
+                all,
+                RenderOptions::cli(_color, false),
+            )
+        );
     }
     ExitCode::SUCCESS
 }
 
-fn run_bindings(json: bool, schema_version: u8, filters: cli::InventoryFilters) -> ExitCode {
+fn run_bindings(
+    json: bool,
+    schema_version: u8,
+    filters: cli::InventoryFilters,
+    _color: ColorChoice,
+) -> ExitCode {
     let inventory = command::with_deadline(command::configured_diagnostic_timeout(), || {
         bindings::filter(
             bindings::current(),
@@ -180,7 +208,10 @@ fn run_bindings(json: bool, schema_version: u8, filters: cli::InventoryFilters) 
     if json {
         print!("{}", bindings::render_json(&inventory, schema_version));
     } else {
-        print!("{}", bindings::render_text(&inventory));
+        print!(
+            "{}",
+            bindings::render_text_with_options(&inventory, RenderOptions::cli(_color, false))
+        );
     }
     if inventory.bindings.is_empty() && !inventory.unavailable.is_empty() {
         ExitCode::from(1)
@@ -189,7 +220,12 @@ fn run_bindings(json: bool, schema_version: u8, filters: cli::InventoryFilters) 
     }
 }
 
-fn run_conflicts(json: bool, schema_version: u8, filters: cli::InventoryFilters) -> ExitCode {
+fn run_conflicts(
+    json: bool,
+    schema_version: u8,
+    filters: cli::InventoryFilters,
+    _color: ColorChoice,
+) -> ExitCode {
     let report = command::with_deadline(command::configured_diagnostic_timeout(), || {
         conflicts::filter(
             conflicts::current(),
@@ -203,7 +239,10 @@ fn run_conflicts(json: bool, schema_version: u8, filters: cli::InventoryFilters)
     if json {
         print!("{}", conflicts::render_json(&report, schema_version));
     } else {
-        print!("{}", conflicts::render_text(&report));
+        print!(
+            "{}",
+            conflicts::render_text_with_options(&report, RenderOptions::cli(_color, false))
+        );
     }
     if report.conflicts.is_empty() && !report.unavailable.is_empty() {
         ExitCode::from(1)
@@ -212,7 +251,13 @@ fn run_conflicts(json: bool, schema_version: u8, filters: cli::InventoryFilters)
     }
 }
 
-fn run_extension(program: String, input: String, json: bool, schema_version: u8) -> ExitCode {
+fn run_extension(
+    program: String,
+    input: String,
+    json: bool,
+    _color: ColorChoice,
+    schema_version: u8,
+) -> ExitCode {
     let key: KeyCombo = match input.parse() {
         Ok(key) => key,
         Err(error) => {
@@ -233,7 +278,10 @@ fn run_extension(program: String, input: String, json: bool, schema_version: u8)
     if json {
         print!("{}", extensions::render_json(&result, &key, schema_version));
     } else {
-        print!("{}", extensions::render_text(&result, &key));
+        print!(
+            "{}",
+            extensions::render_text_with_options(&result, &key, RenderOptions::cli(_color, false),)
+        );
     }
     if result.layer.outcome == Outcome::Unavailable {
         ExitCode::from(1)
@@ -242,7 +290,13 @@ fn run_extension(program: String, input: String, json: bool, schema_version: u8)
     }
 }
 
-fn run_replay(path: String, json: bool, schema_version: u8) -> ExitCode {
+fn run_replay(
+    path: String,
+    json: bool,
+    verbose: bool,
+    _color: ColorChoice,
+    schema_version: u8,
+) -> ExitCode {
     let documents = match replay::load(std::path::Path::new(&path)) {
         Ok(documents) => documents,
         Err(error) => {
@@ -253,7 +307,10 @@ fn run_replay(path: String, json: bool, schema_version: u8) -> ExitCode {
     if json {
         print!("{}", replay::render_json(&documents, schema_version));
     } else {
-        print!("{}", replay::render_text(&documents));
+        print!(
+            "{}",
+            replay::render_text_with_options(&documents, RenderOptions::cli(_color, verbose))
+        );
     }
     ExitCode::SUCCESS
 }
@@ -316,7 +373,7 @@ fn run_snapshot(arguments: Vec<String>) -> ExitCode {
     }
 }
 
-fn run_diff(paths: Vec<String>, json: bool, schema_version: u8) -> ExitCode {
+fn run_diff(paths: Vec<String>, json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     let load_one = |path: &str| -> Result<serde_json::Value, String> {
         let documents =
             replay::load(std::path::Path::new(path)).map_err(|error| error.to_string())?;
@@ -349,12 +406,15 @@ fn run_diff(paths: Vec<String>, json: bool, schema_version: u8) -> ExitCode {
     if json {
         print!("{}", diff::render_json(&changes, schema_version));
     } else {
-        print!("{}", diff::render_text(&changes));
+        print!(
+            "{}",
+            diff::render_text_with_options(&changes, RenderOptions::cli(_color, false))
+        );
     }
     ExitCode::SUCCESS
 }
 
-fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
+fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     // One snapshot per command: desktop discovery runs once here.
     let environment = whykey::environment::Environment::collect();
     let tty = environment.tty_available;
@@ -574,7 +634,11 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             serde_json::to_string_pretty(&value).expect("doctor is serializable")
         );
     } else {
-        println!("whykey doctor\n");
+        let render_options = RenderOptions::cli(_color, false);
+        let print_check = |name: &str, ok: bool, hint: &str| {
+            print_check_with_options(name, ok, hint, render_options);
+        };
+        println!("{}\n", render_options.accent("whykey doctor"));
         print_check("controlling TTY", tty, "run inside a terminal");
         print_check(
             &format!("Native capture ({native_backend})"),
@@ -582,13 +646,19 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             "run inside a supported compositor session and ensure its IPC is reachable",
         );
         if !native_available {
-            println!(
-                "  cause: {} — {}",
+            let cause = format!(
+                "cause: {} — {}",
                 native_cause.label(),
                 native_cause.next_check()
             );
+            for line in whykey::style::wrap_hanging(&cause, render_options.width, "  ", "  ") {
+                println!("{}", render_options.uncertain(line));
+            }
         }
-        println!("\nLive compositor runtime readers:");
+        println!(
+            "\n{}",
+            render_options.accent("Live compositor runtime readers")
+        );
         for reader in &runtime_readers {
             print_check(reader.id, reader.availability.available(), &reader.evidence);
         }
@@ -598,10 +668,18 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 .filter_map(|entry| entry.get("backend").and_then(serde_json::Value::as_str))
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!("  attempted: {attempted} (unavailable: IPC connection unavailable)");
+            println!(
+                "{}",
+                render_options.muted(format!(
+                    "  attempted: {attempted} (unavailable: IPC connection unavailable)"
+                ))
+            );
         }
         if !environment.extension_adapters.is_empty() {
-            println!("\nCompositor extension adapters:");
+            println!(
+                "\n{}",
+                render_options.accent("Compositor extension adapters")
+            );
             for adapter in &environment.extension_adapters {
                 let applicable = whykey::extension_adapters::applicable_with_context(
                     adapter,
@@ -622,11 +700,14 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             }
         }
         for warning in &environment.extension_warnings {
-            println!(
-                "! extension manifest: {} ({})",
+            let warning = format!(
+                "FAIL  extension manifest: {} ({})",
                 warning.path.display(),
                 warning.message
             );
+            for line in whykey::style::wrap_hanging(&warning, render_options.width, "", "  ") {
+                println!("{}", render_options.failure(line));
+            }
         }
         // The registry owns desktop detection, IPC status, check labels,
         // and hints; the first applicable desktop adapter wins.
@@ -644,7 +725,10 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 print_check(doctor.check, ipc, doctor.hint);
             }
         } else if ssh {
-            println!("✓ Hyprland IPC: not applicable in this SSH session");
+            println!(
+                "{}",
+                render_options.success("OK  Hyprland IPC: not applicable in this SSH session")
+            );
         } else if generic_compositor {
             let desktop = compositor_context
                 .desktop
@@ -655,19 +739,31 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                 .as_deref()
                 .or(compositor_context.display_server.as_deref())
                 .unwrap_or("unknown display session");
-            println!(
-                "! desktop compositor: {desktop} ({session}) detected, but no read-only adapter is available"
+            let message = format!(
+                "FAIL  desktop compositor: {desktop} ({session}) detected, but no read-only adapter is available"
             );
+            for line in whykey::style::wrap_hanging(&message, render_options.width, "", "  ") {
+                println!("{}", render_options.failure(line));
+            }
         } else {
-            println!("! compositor session: not detected");
+            println!(
+                "{}",
+                render_options.failure("FAIL  compositor session: not detected")
+            );
         }
         if generic_terminal_fallback {
             println!(
-                "✓ terminal: {} (Ghostty adapter not required; generic fallback available)",
-                terminal_program.as_deref().unwrap_or("identity unknown")
+                "{}",
+                render_options.success(format!(
+                    "OK  terminal: {} (Ghostty adapter not required; generic fallback available)",
+                    terminal_program.as_deref().unwrap_or("identity unknown")
+                ))
             );
             if let Some(adapter) = terminal_adapter {
-                println!("  terminal adapter: {adapter}");
+                println!(
+                    "{}",
+                    render_options.muted(format!("  terminal adapter: {adapter}"))
+                );
             }
         } else {
             print_check(
@@ -687,9 +783,9 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             "grant read access to /dev/input/event* (usually the input group)",
         );
         if evdev_devices.is_empty() {
-            println!("  evdev devices: none detected");
+            println!("{}", render_options.muted("  evdev devices: none detected"));
         } else {
-            println!("  evdev devices:");
+            println!("{}", render_options.muted("  evdev devices:"));
             for device in evdev_devices.iter().take(5) {
                 let state = if device.readable {
                     "readable"
@@ -703,9 +799,9 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             }
         }
         if remappers.is_empty() {
-            println!("  remappers: none detected");
+            println!("{}", render_options.muted("  remappers: none detected"));
         } else {
-            println!("  remappers:");
+            println!("{}", render_options.muted("  remappers:"));
             for remapper in &remappers {
                 println!("    {}", remapper.name);
                 for process in &remapper.processes {
@@ -718,12 +814,16 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                     println!("      static transformation: {transformation}");
                 }
             }
-            println!("    transformations and virtual-device routing remain conditional");
+            println!(
+                "{}",
+                render_options
+                    .uncertain("    transformations and virtual-device routing remain conditional")
+            );
         }
         if ime.is_empty() {
-            println!("  input method: none detected");
+            println!("{}", render_options.muted("  input method: none detected"));
         } else {
-            println!("  input methods:");
+            println!("{}", render_options.muted("  input methods:"));
             for engine in &ime {
                 println!("    {}", engine.engine);
                 for source in &engine.sources {
@@ -742,12 +842,18 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
                     println!("      runtime query unavailable: {error}");
                 }
             }
-            println!("    committed text and Compose/dead-key state remain conditional");
+            let message = "committed text and Compose/dead-key state remain conditional";
+            for line in whykey::style::wrap_hanging(message, render_options.width, "    ", "    ") {
+                println!("{}", render_options.uncertain(line));
+            }
         }
         if shell.is_empty() {
-            println!("! shell: SHELL is not set");
+            println!(
+                "{}",
+                render_options.failure("FAIL  shell: SHELL is not set")
+            );
         } else {
-            println!("✓ shell: {shell}");
+            println!("{}", render_options.success(format!("OK  shell: {shell}")));
         }
         print_check(
             "shell runtime snapshot",
@@ -761,24 +867,43 @@ fn run_doctor(json: bool, schema_version: u8) -> ExitCode {
             ["zellij"] => "Zellij detected (custom bindings inspected per key)",
             _ => "nested multiplexers detected (each layer inspected independently)",
         };
-        println!("  multiplexer: {multiplexer_hint}");
+        println!(
+            "{}",
+            render_options.muted(format!("  multiplexer: {multiplexer_hint}"))
+        );
         if ssh {
-            println!("  SSH session: yes");
+            println!("{}", render_options.muted("  SSH session: yes"));
         }
         if nvim_extension {
-            println!("✓ Neovim extension: installed (whykey-nvim)");
+            println!(
+                "{}",
+                render_options.success("OK  Neovim extension: installed (whykey-nvim)")
+            );
             if let Some(server) = &nvim_server {
-                println!("  Neovim server: reachable ({server})");
+                println!(
+                    "{}",
+                    render_options.muted(format!("  Neovim server: reachable ({server})"))
+                );
             } else {
-                println!("  Neovim server: none active (start nvim with --listen)");
+                println!(
+                    "{}",
+                    render_options
+                        .muted("  Neovim server: none active (start nvim with --listen)",)
+                );
             }
         } else {
-            println!("- Neovim extension: not found on PATH or extensions/ (whykey-nvim)");
+            println!(
+                "{}",
+                render_options
+                    .muted("Neovim extension: not found on PATH or extensions/ (whykey-nvim)")
+            );
         }
         if !next_steps.is_empty() {
-            println!("\nNext steps:");
+            println!("\n{}", render_options.accent("Next steps"));
             for step in &next_steps {
-                println!("- {step}");
+                for line in whykey::style::wrap_hanging(step, render_options.width, "- ", "  ") {
+                    println!("{line}");
+                }
             }
         }
     }

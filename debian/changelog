@@ -1,3 +1,9 @@
+whykey (1.3.0) unstable; urgency=medium
+
+  * Redesign human-readable CLI reports, terminal styling, listen status messages, and verbose evidence presentation.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Fri, 11 Sep 2026 22:38:22 -0300
+
 whykey (1.2.2) unstable; urgency=medium
 
   * Complete the post-1.0 refactoring batch and remove the local planning document from packaged sources.

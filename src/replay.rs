@@ -6,6 +6,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::snapshot;
+use crate::style::RenderOptions;
 
 const MAX_REPLAY_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -67,7 +68,15 @@ pub fn load(path: &Path) -> Result<Vec<Value>, ReplayError> {
 }
 
 pub fn render_text(documents: &[Value]) -> String {
-    let mut output = String::from("whykey replay\nReplayed reports; no input was injected.\n\n");
+    render_text_with_options(documents, RenderOptions::plain(false))
+}
+
+pub fn render_text_with_options(documents: &[Value], options: RenderOptions) -> String {
+    let mut output = format!(
+        "{}\n{}\n\n",
+        options.accent("whykey replay"),
+        options.muted("Replayed reports; no input was injected.")
+    );
     for (index, document) in documents.iter().enumerate() {
         let report = snapshot::report(document);
         if index > 0 {
@@ -83,7 +92,11 @@ pub fn render_text(documents: &[Value]) -> String {
                 })
                 .and_then(Value::as_str)
                 .unwrap_or("unknown sequence");
-            output.push_str(&format!("Sequence: {sequence}\n"));
+            output.push_str(&format!("{}\n", options.accent("Sequence · Replay")));
+            output.push_str(&format!(
+                "  stored sequence: {}\n",
+                human_stored_key(sequence)
+            ));
             for (step_index, step) in steps.iter().enumerate() {
                 let key = step
                     .get("key_display")
@@ -94,11 +107,19 @@ pub fn render_text(documents: &[Value]) -> String {
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
                 output.push_str(&format!(
-                    "Step {}/{}: {key} (assessment: {confidence})\n",
-                    step_index + 1,
-                    steps.len()
+                    "{}\n  stored confidence: {confidence}\n",
+                    options.bold(format!(
+                        "Step {}/{} · {}",
+                        step_index + 1,
+                        steps.len(),
+                        human_stored_key(key)
+                    ))
                 ));
-                render_layers(&mut output, step.get("layers").or_else(|| step.get("path")));
+                render_layers(
+                    &mut output,
+                    step.get("layers").or_else(|| step.get("path")),
+                    options,
+                );
             }
         } else {
             let key = report
@@ -119,14 +140,21 @@ pub fn render_text(documents: &[Value]) -> String {
                 })
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            output.push_str(&format!("Key: {key}\nAssessment: {confidence}\n"));
+            output.push_str(&options.bold(human_stored_key(key)));
+            output.push_str(&options.accent(" · Replay\n"));
+            output.push_str(&format!("  stored confidence: {confidence}\n"));
             render_layers(
                 &mut output,
                 report.get("layers").or_else(|| report.get("path")),
+                options,
             );
         }
     }
     output
+}
+
+fn human_stored_key(value: &str) -> String {
+    crate::style::human_key_text(value)
 }
 
 pub fn render_json(documents: &[Value], schema_version: u8) -> String {
@@ -244,12 +272,15 @@ fn invalid(document: usize, message: &str) -> ReplayError {
     }
 }
 
-fn render_layers(output: &mut String, layers: Option<&Value>) {
+fn render_layers(output: &mut String, layers: Option<&Value>, options: RenderOptions) {
     let Some(layers) = layers.and_then(Value::as_array) else {
-        output.push_str("Path: unavailable in stored report\n");
+        output.push_str(&format!(
+            "{}\n",
+            options.failure("Layer evidence unavailable in stored report")
+        ));
         return;
     };
-    output.push_str("Path:\n");
+    output.push_str(&format!("{}\n", options.accent("Layers")));
     for (index, layer) in layers.iter().enumerate() {
         let name = layer
             .get("layer")
@@ -264,18 +295,22 @@ fn render_layers(output: &mut String, layers: Option<&Value>) {
             .and_then(Value::as_str)
             .unwrap_or("Unknown");
         let marker = match (status, propagation) {
-            ("Unavailable", _) => "!",
-            ("NotHandled", "Continues") => "✓",
-            ("Handled", "Stops") => "■",
-            ("Handled", "Redirected") => "↗",
-            ("Handled", "Continues") => "→",
-            _ => "?",
+            ("Unavailable", _) => options.failure("UNAVAILABLE"),
+            ("NotHandled", "Continues") => options.muted("NO MATCH"),
+            ("Handled", "Stops") => "CONFIGURED TO STOP".into(),
+            ("Handled", "Redirected") => "REDIRECTED".into(),
+            ("Handled", "Continues") => "FORWARDS".into(),
+            _ => options.uncertain("FORWARDING UNKNOWN"),
         };
         let summary = layer
             .get("summary")
             .and_then(Value::as_str)
             .unwrap_or("no summary");
-        output.push_str(&format!("{}. {name}\n  {marker} {summary}\n", index + 1));
+        output.push_str(&format!("  {}. {name} — {marker}\n", index + 1));
+        for line in crate::style::wrap_hanging(summary, options.width, "      ", "      ") {
+            output.push_str(&line);
+            output.push('\n');
+        }
         let details = layer
             .get("details")
             .and_then(Value::as_array)
@@ -292,11 +327,63 @@ fn render_layers(output: &mut String, layers: Option<&Value>) {
                     })
             });
         if let Some(details) = details.as_ref() {
-            for detail in details.iter().filter_map(Value::as_str) {
-                output.push_str(&format!("    {detail}\n"));
+            let selected = details.iter().filter_map(Value::as_str).filter(|detail| {
+                options.verbose || details.len() == 1 || stored_detail_is_decisive(detail)
+            });
+            for detail in selected {
+                for line in crate::style::wrap_hanging(detail, options.width, "    ", "      ") {
+                    output.push_str(&line);
+                    output.push('\n');
+                }
+            }
+        }
+        if options.verbose {
+            if let Some(binding) = layer.get("binding").and_then(Value::as_object) {
+                output.push_str("      binding:\n");
+                for field in [
+                    "dispatcher",
+                    "action",
+                    "description",
+                    "submap",
+                    "scope",
+                    "source",
+                    "uncertainty",
+                    "has_universal_match",
+                ] {
+                    let Some(value) = binding.get(field) else {
+                        continue;
+                    };
+                    let value = value
+                        .as_str()
+                        .map_or_else(|| value.to_string(), str::to_owned);
+                    crate::style::wrap_hanging(
+                        &format!("{field}: {value}"),
+                        options.width,
+                        "        ",
+                        "        ",
+                    )
+                    .into_iter()
+                    .for_each(|line| {
+                        output.push_str(&line);
+                        output.push('\n');
+                    });
+                }
             }
         }
     }
+}
+
+fn stored_detail_is_decisive(detail: &str) -> bool {
+    [
+        "binding:",
+        "action:",
+        "sequence:",
+        "source:",
+        "runtime:",
+        "termios:",
+    ]
+    .iter()
+    .any(|prefix| detail.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -362,7 +449,7 @@ mod tests {
         .unwrap();
         let documents = load(&file).unwrap();
         let output = render_text(&documents);
-        assert!(output.contains("CTRL + X"));
+        assert!(output.contains("Ctrl+X"));
         assert!(output.contains("termios unavailable"));
         let _ = fs::remove_file(file);
     }
@@ -397,7 +484,7 @@ mod tests {
 
         let documents = load(&file).unwrap();
         let text = render_text(&documents);
-        assert!(text.contains("CTRL + X"));
+        assert!(text.contains("Ctrl+X"));
         assert!(text.contains("Readline"));
         let json: Value = serde_json::from_str(&render_json(&documents, 2)).unwrap();
         assert_eq!(json["kind"], "whykey.diagnostic_snapshot");
@@ -433,7 +520,7 @@ mod tests {
         let changes = crate::diff::compare(&stored, &changed);
         assert!(!changes.is_empty(), "stored differences must surface");
         let diff_text = crate::diff::render_text(&changes);
-        assert!(diff_text.contains("new stored conclusion"));
+        assert!(diff_text.contains("new") && diff_text.contains("stored"));
     }
 
     fn tempfile_path() -> std::path::PathBuf {

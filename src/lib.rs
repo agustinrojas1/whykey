@@ -31,6 +31,7 @@ pub mod report;
 pub mod runtime_readers;
 pub mod schema;
 pub mod snapshot;
+pub mod style;
 pub mod sway_capture;
 pub mod util;
 pub mod xkb;

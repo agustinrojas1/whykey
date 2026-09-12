@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::bindings;
 use crate::schema;
+use crate::style::RenderOptions;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Conflict {
@@ -160,34 +161,92 @@ fn contains_optional(field: Option<&str>, needle: Option<&str>) -> bool {
 }
 
 pub fn render_text(report: &Report) -> String {
-    let mut output = String::from("whykey conflicts\n\n");
+    render_text_with_options(report, RenderOptions::plain(false))
+}
+
+pub fn render_text_with_options(report: &Report, options: RenderOptions) -> String {
+    let mut output = format!("{}\n\n", options.accent("whykey conflicts"));
     if report.conflicts.is_empty() {
         output.push_str("No conflicts were found in the enumerated sources.\n");
     } else {
         for conflict in &report.conflicts {
-            output.push_str(&format!(
-                "- {} [{}] {}\n",
-                conflict.key, conflict.classification, conflict.source
-            ));
+            let line = format!(
+                "{} [{}] {}",
+                crate::style::human_key_text(&conflict.key),
+                conflict.classification,
+                conflict.source
+            );
+            for line in crate::style::wrap_hanging(&line, options.width, "- ", "  ") {
+                output.push_str(&line);
+                output.push('\n');
+            }
             if let Some(context) = &conflict.context {
-                output.push_str(&format!("  context: {context}\n"));
+                for line in crate::style::wrap_hanging(
+                    &format!("context: {context}"),
+                    options.width,
+                    "  ",
+                    "    ",
+                ) {
+                    output.push_str(&line);
+                    output.push('\n');
+                }
             }
             if let Some(device) = &conflict.device {
-                output.push_str(&format!("  device: {device}\n"));
+                for line in crate::style::wrap_hanging(
+                    &format!("device: {device}"),
+                    options.width,
+                    "  ",
+                    "    ",
+                ) {
+                    output.push_str(&line);
+                    output.push('\n');
+                }
             }
             if let Some(submap) = &conflict.submap {
-                output.push_str(&format!("  submap: {submap}\n"));
+                for line in crate::style::wrap_hanging(
+                    &format!("submap: {submap}"),
+                    options.width,
+                    "  ",
+                    "    ",
+                ) {
+                    output.push_str(&line);
+                    output.push('\n');
+                }
             }
             for action in &conflict.actions {
-                output.push_str(&format!("  action: {action}\n"));
+                for line in crate::style::wrap_hanging(
+                    &format!("action: {action}"),
+                    options.width,
+                    "  ",
+                    "    ",
+                ) {
+                    output.push_str(&line);
+                    output.push('\n');
+                }
             }
         }
     }
     for unavailable in &report.unavailable {
-        output.push_str(&format!("! unavailable: {unavailable}\n"));
+        for line in crate::style::wrap_hanging(
+            &format!("UNAVAILABLE: {unavailable}"),
+            options.width,
+            "",
+            "  ",
+        ) {
+            output.push_str(&options.failure(line));
+            output.push('\n');
+        }
     }
     for limitation in &report.limitations {
-        output.push_str(&format!("? limitation: {limitation}\n"));
+        for line in crate::style::wrap_hanging(
+            &format!("LIMITATION: {limitation}"),
+            options.width,
+            "",
+            "  ",
+        ) {
+            output.push_str(&options.uncertain(line));
+            output.push('\n');
+        }
     }
     output
 }
@@ -411,7 +470,7 @@ mod tests {
         );
         assert!(missing.conflicts.is_empty());
         let text = render_text(&filtered);
-        assert!(text.contains("CTRL+X"));
+        assert!(text.contains("Ctrl+X"));
         let value: serde_json::Value = serde_json::from_str(&render_json(&filtered, 1)).unwrap();
         assert_eq!(value["conflicts"].as_array().unwrap().len(), 1);
     }

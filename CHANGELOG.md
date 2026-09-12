@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0] - 2026-09-11
+
+### Changed
+
+- Redesign human-readable CLI output around a clear diagnosis, practical effect, relevant layers, and explicit uncertainty.
+- Add shared terminal styling, `--color=auto|always|never`, narrow-width wrapping, and a focused default view with complete `--verbose` evidence.
+- Polish listen-mode status messages and repeat separators while keeping machine-readable output plain and schema-compatible.
+
 ## [1.2.2] - 2026-09-11
 
 ### Changed
