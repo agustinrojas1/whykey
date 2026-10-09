@@ -151,24 +151,28 @@ fn inspect_bindings(
 
 /// Analyze once: route finding plus normal input bytes from a single config
 /// load. Reused for the visible terminal layer and downstream TTY/shell
-/// analysis so the file is read once per static inspection.
+/// analysis so the file is read once per static inspection. `layout`
+/// resolves the text of AltGr (level-3) keys.
 pub fn analyze(
     key: &KeyCombo,
     protocol_flags: Option<u32>,
+    layout: Option<&crate::xkb::KeyboardLayout>,
 ) -> (LayerResult, Option<TerminalInput>) {
     let Some(kind) = terminal_kind() else {
         return (not_applicable("terminal identity is not known"), None);
     };
     let (layer, input) = analyze_kind(kind, key);
-    let input = input.or_else(|| {
-        // No binding intercepts the key, so the terminal emits its normal
-        // encoding (shared with the Ghostty/generic path).
-        (layer.outcome == Outcome::Pass)
-            .then(|| crate::layers::ghostty::default_encoding_for_protocol(key, protocol_flags))
-            .flatten()
-            .map(|bytes| TerminalInput::predicted(bytes, format!("{kind} default encoding")))
-    });
-    (layer, input)
+    if input.is_some() || layer.outcome != Outcome::Pass {
+        return (layer, input);
+    }
+    // No binding intercepts the key, so the terminal emits its normal
+    // encoding (shared with the Ghostty/generic path).
+    crate::layers::ghostty::with_default_encoding(
+        layer,
+        crate::layers::ghostty::default_encoding_for_protocol(key, protocol_flags, layout),
+        format!("{kind} default encoding"),
+        true,
+    )
 }
 
 fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
@@ -262,10 +266,6 @@ fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<Term
         .and_then(|binding| binding.output)
         .map(|bytes| TerminalInput::configured(bytes, format!("explicit {kind} terminal output")));
     (layer, input)
-}
-
-pub fn normal_input(key: &KeyCombo) -> Option<TerminalInput> {
-    analyze(key, None).1
 }
 
 pub fn applicable() -> bool {

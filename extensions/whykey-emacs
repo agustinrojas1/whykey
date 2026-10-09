@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
-"""Emacs runtime key query extension for whykey (schema v1)."""
+"""Emacs runtime key query extension for whykey (schema v1).
+
+Asks the running Emacs server, in one `emacsclient --eval`, how the key
+resolves in the buffer of the selected window: `key-binding` at point (so
+overriding, emulation, minor-mode, text-property, major and global maps all
+count), the first active keymap that binds it, and whether it is a prefix.
+It also looks up the forms Emacs falls back to: the function-key event in
+graphical frames (`<return>` before `RET`) and shift translation (`C-S-x`
+runs `C-x` when unbound). Pre-command hooks and key translation maps are not
+inspected, so a key without a binding is reported as uncertain.
+"""
 
 import json
 import os
 import subprocess
 import sys
+
+SHIFT, CTRL, ALT, MOD3, SUPER, MOD5 = 1, 4, 8, 32, 64, 128
+QUERY_TIMEOUT = 1.5
 
 KEY_MAP = {
     "LEFT": "<left>",
@@ -17,150 +30,309 @@ KEY_MAP = {
     "TAB": "TAB",
     "BACKSPACE": "DEL",
     "DELETE": "<delete>",
+    "INSERT": "<insert>",
+    "HOME": "<home>",
+    "END": "<end>",
+    "PAGE_UP": "<prior>",
+    "PAGE_DOWN": "<next>",
 }
 
+# In graphical frames these keys arrive as function-key events, which Emacs
+# looks up before translating them to their ASCII form.
+FUNCTION_KEY_FORMS = {"RET": "<return>", "TAB": "<tab>", "ESC": "<escape>", "DEL": "<backspace>"}
 
-def to_emacs_notation(key_obj):
+# emacsclient's connection failures ("can't find socket", "cannot read server
+# file", "Connection refused"); evaluation errors are reported as "*ERROR*".
+UNAVAILABLE_MARKERS = ("socket", "server file", "connect", "refused", "no such file")
+
+
+def result(status, propagation, summary, details):
+    return {"status": status, "propagation": propagation, "summary": summary, "details": details}
+
+
+def notation_parts(key_obj):
+    """(modifier prefix, key name, shifted) for whykey's key object, or None."""
     if not isinstance(key_obj, dict):
         return None
     raw_key = str(key_obj.get("key", ""))
-    if raw_key.startswith("code:") or raw_key.isdigit():
-        return None
-
     mods = key_obj.get("modifiers", 0)
+    if not raw_key or not isinstance(mods, int):
+        return None
+    if raw_key.lower().startswith("code:"):
+        return None
+    if mods & (MOD3 | MOD5):
+        return None
+    upper = raw_key.upper()
+    if upper in KEY_MAP:
+        name = KEY_MAP[upper]
+    elif len(upper) > 1 and upper[0] == "F" and upper[1:].isdigit():
+        name = f"<{upper.lower()}>"
+    elif len(raw_key) == 1:
+        name = raw_key.lower()
+    else:
+        return None
     prefix = ""
-    if mods & 4:
+    if mods & CTRL:
         prefix += "C-"
-    if mods & 8:
+    if mods & ALT:
         prefix += "M-"
-    if mods & 1:
-        prefix += "S-"
-
-    name = KEY_MAP.get(raw_key.upper(), raw_key.lower())
-    return f"{prefix}{name}"
+    if mods & SUPER:
+        prefix += "s-"
+    return prefix, name, bool(mods & SHIFT)
 
 
-def build_eval_expr(notation):
-    escaped = notation.replace("\\", "\\\\").replace('"', '\\"')
+def with_shift(prefix, name):
+    """Emacs event for a shifted key: a shifted letter without Control is the
+    uppercase character (`X`, `M-X`); everything else carries `S-`."""
+    if len(name) == 1 and name.isalpha() and "C-" not in prefix:
+        return prefix + name.upper()
+    return prefix + "S-" + name
+
+
+def to_emacs_notation(key_obj):
+    parts = notation_parts(key_obj)
+    if parts is None:
+        return None
+    prefix, name, shifted = parts
+    return with_shift(prefix, name) if shifted else prefix + name
+
+
+def lookup_plan(key_obj):
+    """Notations in the order Emacs tries them: [(notation, how, gui_only)].
+
+    Graphical frames look up the function-key event (`<return>`) before its
+    ASCII form (`RET`); an unbound shifted key falls back to its unshifted
+    form (shift translation).
+    """
+    prefix, name, shifted = notation_parts(key_obj)
+    plan = []
+    for shift in ([True, False] if shifted else [False]):
+        how = "shift translation" if shifted and not shift else ""
+        if name in FUNCTION_KEY_FORMS:
+            fkey = FUNCTION_KEY_FORMS[name]
+            plan.append((with_shift(prefix, fkey) if shift else prefix + fkey, how or "function-key event", True))
+        plan.append((with_shift(prefix, name) if shift else prefix + name, how, False))
+    return plan
+
+
+def elisp_string(text):
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def build_eval_expr(notations):
+    names = " ".join(elisp_string(n) for n in notations)
     return (
-        f'(let* ((k (kbd "{escaped}")) '
-        f"(b (key-binding k)) "
-        f"(m (symbol-name major-mode)) "
-        f'(b-str (if b (format "%s" b) "nil")) '
-        f"(src (cond "
-        f'((null b) "none") '
-        f'((and (current-local-map) (equal b (lookup-key (current-local-map) k))) "major") '
-        f'((equal b (lookup-key (current-global-map) k)) "global") '
-        f'((and (boundp \'minor-mode-map-alist) '
-        f"      (cl-some (lambda (map-entry) "
-        f"                 (and (boundp (car map-entry)) "
-        f"                      (symbol-value (car map-entry)) "
-        f"                      (equal b (lookup-key (cdr map-entry) k)))) "
-        f"               minor-mode-map-alist)) "
-        f' "minor") '
-        f'((and (boundp \'overriding-terminal-local-map) overriding-terminal-local-map '
-        f'      (equal b (lookup-key overriding-terminal-local-map k))) "overriding") '
-        f'((and (boundp \'overriding-local-map) overriding-local-map '
-        f'      (equal b (lookup-key overriding-local-map k))) "overriding") '
-        f' (t "active")))) '
-        f'(format "%s\\t%s\\t%s" m b-str src))'
+        "(progn (require 'json) "
+        "(with-current-buffer (window-buffer (selected-window)) "
+        "(let ((pos (window-point (selected-window))) (results nil)) "
+        f"(dolist (notation (list {names})) "
+        "(let* ((k (kbd notation)) (b (key-binding k t nil pos)) (b (if (numberp b) nil b)) (winner \"\")) "
+        "(when b (catch 'found (dolist (m (current-active-maps t pos)) "
+        "(let ((x (lookup-key m k t))) (when (and x (not (numberp x))) "
+        "(setq winner (cond ((eq m (current-global-map)) \"global\") "
+        "((eq m (current-local-map)) \"major\") "
+        "(t (let ((mode nil)) (dolist (e minor-mode-map-alist) "
+        "(when (and (null mode) (boundp (car e)) (symbol-value (car e)) "
+        "(or (eq (cdr e) m) (and (symbolp (cdr e)) (eq (indirect-function (cdr e)) m)))) "
+        "(setq mode (car e)))) "
+        "(if mode (format \"minor (%s)\" mode) \"overriding, emulation or text-property map\"))))) "
+        "(throw 'found nil)))))) "
+        "(push (list (cons \"notation\" notation) "
+        "(cons \"kind\" (cond ((null b) \"none\") ((keymapp b) \"prefix\") "
+        "((eq b 'undefined) \"undefined\") (t \"command\"))) "
+        "(cons \"binding\" (cond ((null b) \"\") ((symbolp b) (symbol-name b)) ((keymapp b) \"\") "
+        "(t (let ((s (format \"%S\" b))) (if (> (length s) 80) (concat (substring s 0 77) \"...\") s))))) "
+        "(cons \"map\" winner)) results))) "
+        "(json-encode (list (cons \"mode\" (symbol-name major-mode)) "
+        "(cons \"buffer\" (buffer-name)) "
+        "(cons \"gui\" (if (display-graphic-p) t :json-false)) "
+        "(cons \"keys\" (vconcat (nreverse results))))))))"
     )
 
 
-def query_emacs(notation):
+def lisp_string(text):
+    """Decode the printed Lisp string emacsclient writes for a string result."""
+    text = text.strip()
+    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
+        raise ValueError(f"expected a printed string, got: {text[:80]}")
+    escapes = {"n": "\n", "t": "\t"}
+    out = []
+    i, end = 1, len(text) - 1
+    while i < end:
+        ch = text[i]
+        if ch == "\\" and i + 1 < end:
+            out.append(escapes.get(text[i + 1], text[i + 1]))
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+class QueryError(Exception):
+    def __init__(self, status, summary, detail):
+        super().__init__(summary)
+        self.status, self.summary, self.detail = status, summary, detail
+
+
+def query_emacs(notations):
     cmd = ["emacsclient"]
     if "EMACS_SERVER_FILE" in os.environ:
         cmd.extend(["--server-file", os.environ["EMACS_SERVER_FILE"]])
     elif "EMACS_SOCKET_NAME" in os.environ:
         cmd.extend(["--socket-name", os.environ["EMACS_SOCKET_NAME"]])
-    cmd.extend(["--eval", build_eval_expr(notation)])
+    cmd.extend(["--eval", build_eval_expr(notations)])
 
+    no_server = "No running Emacs server found (run `emacs --daemon` or evaluate `(server-start)`)"
     try:
-        res = subprocess.run(cmd, capture_output=True, timeout=1.5)
+        res = subprocess.run(cmd, capture_output=True, timeout=QUERY_TIMEOUT)
     except FileNotFoundError:
-        return None, "emacsclient not found on PATH"
+        raise QueryError("unavailable", no_server, "error: emacsclient not found on PATH")
     except subprocess.TimeoutExpired:
-        return None, "emacsclient timed out"
-    except Exception as exc:
-        return None, str(exc)
-
+        raise QueryError(
+            "indeterminate",
+            f"Emacs did not answer within {QUERY_TIMEOUT}s (busy, or waiting in the minibuffer or a prompt)",
+            "error: emacsclient timed out",
+        )
+    err = res.stderr.decode("utf-8", errors="replace").strip()
     if res.returncode != 0:
-        err = res.stderr.decode("utf-8", errors="replace").strip()
-        return None, err or f"emacsclient exited with {res.returncode}"
-
-    out = res.stdout.decode("utf-8", errors="replace").strip()
-    if out.startswith('"') and out.endswith('"') and len(out) >= 2:
-        out = out[1:-1]
-    out = out.replace('\\"', '"').replace("\\t", "\t")
-    parts = out.split("\t")
-    mode = parts[0] if len(parts) > 0 else "fundamental-mode"
-    binding = parts[1] if len(parts) > 1 else "nil"
-    source = parts[2] if len(parts) > 2 else "none"
-    return (mode, binding, source), None
+        if "*ERROR*" not in err and any(m in err.lower() for m in UNAVAILABLE_MARKERS):
+            raise QueryError("unavailable", no_server, f"error: {err}")
+        raise QueryError(
+            "indeterminate", "Emacs could not evaluate the key query",
+            f"error: {err or f'emacsclient exited with {res.returncode}'}",
+        )
+    try:
+        return json.loads(lisp_string(res.stdout.decode("utf-8", errors="replace")))
+    except ValueError as exc:
+        raise QueryError("indeterminate", "Emacs returned an unexpected reply", f"error: {exc}")
 
 
-def inspect_key(req):
-    key_obj = req.get("key", {})
+def interpret(key_obj, data):
     notation = to_emacs_notation(key_obj)
-    if not notation:
-        return {
-            "status": "indeterminate",
-            "propagation": "indeterminate",
-            "summary": "numeric keycodes not mappable to Emacs key notation",
-            "details": [f"key: {key_obj}"],
-        }
-
-    data, err = query_emacs(notation)
-    if err:
-        return {
-            "status": "unavailable",
-            "propagation": "indeterminate",
-            "summary": "No running Emacs daemon found (run `emacs --daemon` or evaluate `(server-start)`)",
-            "details": [
-                f"error: {err}",
-                "remediation: start Emacs daemon with `emacs --daemon` or evaluate `(server-start)`",
-            ],
-        }
-
-    mode, binding, source = data
-    if binding == "nil":
-        return {
-            "status": "not_handled",
-            "propagation": "continues",
-            "summary": f"Emacs has no mapping for {notation} in mode {mode}",
-            "details": [
-                f"major-mode: {mode}",
-                "key-binding: nil",
-            ],
-        }
-
-    return {
-        "status": "handled",
-        "propagation": "stops",
-        "summary": f"Emacs binds {notation} to {binding} ({source} keymap)",
-        "details": [
-            f"action: {binding}",
-            f"winning-map: {source}",
-            f"major-mode: {mode}",
-        ],
+    by_notation = {
+        k.get("notation"): k for k in data.get("keys") or [] if isinstance(k, dict)
     }
+    gui = bool(data.get("gui"))
+    mode = data.get("mode", "?")
+    details = [f"major-mode: {mode}", f"buffer: {data.get('buffer', '?')}"]
+
+    for candidate, how, gui_only in lookup_plan(key_obj):
+        if gui_only and not gui:
+            continue
+        found = by_notation.get(candidate) or {}
+        kind = found.get("kind", "none")
+        if kind == "none":
+            continue
+        binding = found.get("binding") or "a keymap"
+        winner = found.get("map") or "active keymaps"
+        via = f" via {how} to {candidate}" if how and candidate != notation else ""
+        details += [f"action: {binding}", f"winning-map: {winner}", f"looked-up: {candidate}"]
+        if kind == "prefix":
+            summary = f"{notation} is an Emacs prefix key ({binding}, {winner} keymap){via}; Emacs waits for the next key"
+        elif kind == "undefined":
+            summary = f"Emacs explicitly leaves {notation} undefined ({winner} keymap){via}; it beeps and drops the key"
+        else:
+            summary = f"Emacs binds {notation} to {binding} ({winner} keymap){via}"
+        return result("handled", "stops", summary, details)
+
+    tried = [n for n, _, gui_only in lookup_plan(key_obj) if gui or not gui_only]
+    details += [
+        f"looked-up: {', '.join(tried)}",
+        "not inspected: key-translation-map, input-decode-map and pre-command hooks",
+    ]
+    return result(
+        "indeterminate", "indeterminate",
+        f"No binding for {notation} in Emacs's active keymaps ({mode}); key translations not inspected",
+        details,
+    )
+
+
+def inspect_key(req, query=query_emacs):
+    key_obj = req.get("key", {})
+    if to_emacs_notation(key_obj) is None:
+        return result(
+            "indeterminate", "indeterminate",
+            "key cannot be expressed in Emacs key notation (keycode or AltGr/Mod3 modifier)",
+            [f"key: {key_obj}"],
+        )
+    try:
+        data = query([n for n, _, _ in lookup_plan(key_obj)])
+    except QueryError as exc:
+        details = [exc.detail]
+        if exc.status == "unavailable":
+            details.append("remediation: start Emacs daemon with `emacs --daemon` or evaluate `(server-start)`")
+        return result(exc.status, "indeterminate", exc.summary, details)
+    if not isinstance(data, dict):
+        return result("indeterminate", "indeterminate", "Emacs returned an unexpected reply", [])
+    return interpret(key_obj, data)
 
 
 def self_test():
     # Notation vectors mirroring emacs_key_notations in application.rs
-    assert to_emacs_notation({"modifiers": 4, "key": "x"}) == "C-x"
-    assert to_emacs_notation({"modifiers": 4, "key": "LEFT"}) == "C-<left>"
-    assert to_emacs_notation({"modifiers": 12, "key": "RETURN"}) == "C-M-RET"
-    assert to_emacs_notation({"modifiers": 5, "key": "RETURN"}) == "C-S-RET"
+    assert to_emacs_notation({"modifiers": CTRL, "key": "X"}) == "C-x"
+    assert to_emacs_notation({"modifiers": CTRL, "key": "LEFT"}) == "C-<left>"
+    assert to_emacs_notation({"modifiers": CTRL | ALT, "key": "RETURN"}) == "C-M-RET"
+    assert to_emacs_notation({"modifiers": CTRL | SHIFT, "key": "RETURN"}) == "C-S-RET"
     assert to_emacs_notation({"modifiers": 0, "key": "ESCAPE"}) == "ESC"
     assert to_emacs_notation({"modifiers": 0, "key": "SPACE"}) == "SPC"
     assert to_emacs_notation({"modifiers": 0, "key": "TAB"}) == "TAB"
+    assert to_emacs_notation({"modifiers": 0, "key": "F5"}) == "<f5>"
+    assert to_emacs_notation({"modifiers": 0, "key": "CODE:36"}) is None
     assert to_emacs_notation({"modifiers": 0, "key": "code:36"}) is None
+    assert to_emacs_notation({"modifiers": CTRL, "key": "1"}) == "C-1"
+    assert to_emacs_notation({"modifiers": SHIFT, "key": "X"}) == "X"
+    assert to_emacs_notation({"modifiers": ALT | SHIFT, "key": "X"}) == "M-X"
+    assert to_emacs_notation({"modifiers": SUPER, "key": "E"}) == "s-e"
 
-    # Unavailable envelope
-    res = inspect_key({"key": {"modifiers": 4, "key": "x"}})
-    assert res["status"] in ("unavailable", "handled", "not_handled")
-    assert "emacs --daemon" in res.get("summary", "") or res["status"] in ("handled", "not_handled")
+    plan = [n for n, _, _ in lookup_plan({"modifiers": CTRL | SHIFT, "key": "RETURN"})]
+    assert plan == ["C-S-<return>", "C-S-RET", "C-<return>", "C-RET"]
+
+    # The query is one balanced s-expression with the notations quoted.
+    expr = build_eval_expr(["C-x", 'a"b'])
+    assert expr.count("(") == expr.count(")")
+    assert '"a\\"b"' in expr
+    assert lisp_string('"{\\"a\\":\\"x\\\\\\"y\\"}"') == '{"a":"x\\"y"}'
+
+    def reply(gui=False, **keys):
+        data = {"mode": "org-mode", "buffer": "notes.org", "gui": gui, "keys": [
+            dict(notation=n, kind=k, binding=b, map=m) for n, (k, b, m) in keys.items()
+        ]}
+        return lambda notations: data
+
+    def ask(mods, key, query):
+        return inspect_key({"key": {"modifiers": mods, "key": key}}, query=query)
+
+    res = ask(CTRL, "X", reply(**{"C-x": ("prefix", "Control-X-prefix", "global")}))
+    assert (res["status"], res["propagation"]) == ("handled", "stops")
+    assert "winning-map: global" in res["details"]
+
+    res = ask(CTRL, "C", reply(**{"C-c": ("command", "my-cmd", "minor (my-mode)")}))
+    assert (res["status"], res["propagation"]) == ("handled", "stops")
+
+    # No binding: translations and hooks are unknown, never a confident not_handled.
+    res = ask(CTRL, "Q", reply(**{"C-q": ("none", "", "")}))
+    assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+
+    # Shift translation: an unbound C-S-x runs C-x.
+    res = ask(CTRL | SHIFT, "X", reply(**{"C-S-x": ("none", "", ""), "C-x": ("prefix", "Control-X-prefix", "global")}))
+    assert res["status"] == "handled" and "shift translation" in res["summary"]
+
+    # Graphical frames look up <return> before RET; terminal frames do not.
+    keys = {"C-<return>": ("command", "gui-cmd", "major"), "C-RET": ("command", "tty-cmd", "global")}
+    assert "gui-cmd" in ask(CTRL, "RETURN", reply(gui=True, **keys))["summary"]
+    assert "tty-cmd" in ask(CTRL, "RETURN", reply(gui=False, **keys))["summary"]
+
+    # A busy server or a failing evaluation is not "no daemon".
+    def busy(notations):
+        raise QueryError("indeterminate", "Emacs did not answer", "error: emacsclient timed out")
+    res = ask(CTRL, "X", busy)
+    assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+
+    def missing(notations):
+        raise QueryError("unavailable", "No running Emacs server found", "error: no socket")
+    res = ask(CTRL, "X", missing)
+    assert res["status"] == "unavailable" and any("emacs --daemon" in d for d in res["details"])
     print("whykey-emacs self_test passed")
 
 

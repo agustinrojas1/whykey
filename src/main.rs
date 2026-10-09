@@ -27,9 +27,9 @@ use whykey::schema;
 use whykey::snapshot;
 use whykey::style::{ColorChoice, RenderOptions};
 
-/// One source of truth for command vocabulary. Help text, the argument
-/// parser below, and shell completions all derive from [`COMMANDS`]; the
-/// `command_vocabulary_is_shared` test proves they agree.
+/// One source of truth for command vocabulary. Help usage lines and shell
+/// completions render from [`cli::help::COMMANDS`]; the parser tests in
+/// `cli` prove every listed option is accepted.
 fn main() -> ExitCode {
     let parsed = match cli::parse_global_arguments(env::args().skip(1).collect()) {
         Ok(parsed) => parsed,
@@ -299,34 +299,11 @@ fn run_replay(
     ExitCode::SUCCESS
 }
 
-fn run_snapshot(arguments: Vec<String>) -> ExitCode {
-    let mut arguments = arguments.into_iter();
-    let Some(combination) = arguments.next() else {
-        eprintln!("error: usage is `whykey snapshot <combination> [--output PATH]`");
-        return ExitCode::from(2);
-    };
-    if combination == "-h" || combination == "--help" {
-        println!("Usage: whykey snapshot <combination> [--output PATH]");
-        println!("\nSave a static diagnostic snapshot. No key is captured or injected.");
-        return ExitCode::SUCCESS;
-    }
-    let mut output_path = None;
-    while let Some(argument) = arguments.next() {
-        if argument != "--output" {
-            eprintln!("error: usage is `whykey snapshot <combination> [--output PATH]`");
-            return ExitCode::from(2);
-        }
-        let Some(path) = arguments.next() else {
-            eprintln!("error: --output requires a path");
-            return ExitCode::from(2);
-        };
-        if path.is_empty() {
-            eprintln!("error: --output requires a non-empty path");
-            return ExitCode::from(2);
-        }
-        output_path = Some(path);
-    }
-
+fn run_snapshot(request: cli::SnapshotRequest) -> ExitCode {
+    let cli::SnapshotRequest {
+        combination,
+        output_path,
+    } = request;
     let key = match KeyCombo::parse_query(&combination) {
         Ok(key) => key,
         Err(error) => {
@@ -465,7 +442,12 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         whykey::doctor::Cause::IpcUnreachable
     };
     let evdev_devices = listen::evdev_devices();
-    let evdev_cause = whykey::doctor::evdev(!evdev_devices.is_empty(), evdev);
+    let evdev_scan = whykey::doctor::EvdevScan::classify(
+        std::path::Path::new("/dev/input"),
+        evdev || !evdev_devices.is_empty(),
+        evdev,
+    );
+    let evdev_cause = evdev_scan.cause();
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
     let mut multiplexer_names = Vec::new();
@@ -498,7 +480,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         ghostty,
         generic_terminal: generic_terminal_fallback,
         xkb,
-        evdev,
+        evdev: evdev_scan,
         shell_snapshot,
         ssh,
         remapper: !remappers.is_empty(),
@@ -571,7 +553,8 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
                 "available": evdev,
                 "devices": evdev_devices,
                 "cause": evdev_cause,
-                "next_check": evdev_cause.next_check(),
+                "detail": evdev_scan.detail(),
+                "next_check": evdev_scan.next_step().unwrap_or(evdev_cause.next_check()),
             },
             "native-compositor": {
                 "available": native_available,
@@ -764,10 +747,13 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         print_check(
             "evdev keyboard capture",
             evdev,
-            "grant read access to /dev/input/event* (usually the input group)",
+            evdev_scan.next_step().unwrap_or_default(),
         );
         if evdev_devices.is_empty() {
-            println!("{}", render_options.muted("  evdev devices: none detected"));
+            println!(
+                "{}",
+                render_options.muted(format!("  evdev devices: none ({})", evdev_scan.detail()))
+            );
         } else {
             println!("{}", render_options.muted("  evdev devices:"));
             for device in evdev_devices.iter().take(5) {
@@ -907,16 +893,27 @@ mod tests {
         let help = help_text();
         for command in COMMANDS {
             assert!(
-                help.contains(command.usage),
+                help.contains(&cli::usage(command.name)),
                 "help is missing usage for {}",
                 command.name
             );
             for shell in COMPLETION_SHELLS {
+                let completion = completions(shell);
                 assert!(
-                    completions(shell).contains(command.name),
+                    completion.contains(command.name),
                     "{shell} completions are missing {}",
                     command.name
                 );
+                for option in command.options().filter(|option| !option.alias) {
+                    let long = option.long.trim_start_matches('-');
+                    assert!(
+                        completion.contains(option.long)
+                            || completion.contains(&format!("-l {long}")),
+                        "{shell} completions are missing {} for {}",
+                        option.long,
+                        command.name
+                    );
+                }
             }
         }
         let names: Vec<_> = COMMANDS.iter().map(|command| command.name).collect();
@@ -925,14 +922,6 @@ mod tests {
         assert!(help_text().contains("--suppress|--no-suppress|--pass-through"));
         for shell in COMPLETION_SHELLS {
             let completion = completions(shell);
-            assert!(
-                completion.contains("--suppress") || completion.contains("-l suppress"),
-                "{shell} missing suppress"
-            );
-            assert!(
-                completion.contains("--no-suppress") || completion.contains("-l no-suppress"),
-                "{shell} missing no-suppress"
-            );
             assert!(
                 !completion.contains("--pass-through") && !completion.contains("-l pass-through"),
                 "{shell} exposes hidden alias"
@@ -948,7 +937,7 @@ mod tests {
             ghostty: false,
             generic_terminal: false,
             xkb: false,
-            evdev: false,
+            evdev: whykey::doctor::EvdevScan::KeyboardDevices { readable: false },
             shell_snapshot: false,
             ssh: false,
             remapper: true,

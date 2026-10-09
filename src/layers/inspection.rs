@@ -215,6 +215,7 @@ fn inspect_step(
     let generations_before = session.reload_generations();
     let remapper_result = (!command::deadline_exceeded()).then(|| {
         crate::remapper::inspect_with_detections(
+            request.key,
             request.physical_input.as_ref(),
             &session.remappers,
         )
@@ -537,7 +538,7 @@ fn inspect_default_chain_inner_without_remapper(
     }
 
     // 2. Terminal emulator
-    let mut emulator = terminal_dispatch::TerminalAnalysis::analyze(key, request.protocol_flags);
+    let mut emulator = terminal_dispatch::TerminalAnalysis::analyze(request, session);
     let observed_fallback = request.observed_bytes.map(|bytes| TerminalInput {
         bytes: bytes.to_vec(),
         description: "captured bytes; normal encoding is unknown".into(),

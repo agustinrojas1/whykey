@@ -16,7 +16,7 @@
         "key": "ctrl+k ctrl+c",
         "command": "test.chord"
     },
-    /* unbind removal */
+    /* user binding plus a removal: `-command` removes default bindings only, so test.removed stays */
     {
         "key": "ctrl+z",
         "command": "test.removed"

@@ -20,8 +20,11 @@ Capture lifecycle tests must cover:
 - event delivery followed by restoration;
 - stale-token refusal and bounded two-retry cleanup;
 - pass-through ownership (listener removal only, no user-submap restore);
-- chord-release timeout without a normal report; and
-- IPC disconnect/failure without hanging the test process.
+- chord-release timeout without a normal report;
+- IPC disconnect/failure without hanging the test process; and
+- terminal job control through a real PTY: `SIGTSTP` restores the terminal
+  before the job stops, `SIGCONT` re-arms capture, and `SIGTERM` restores the
+  terminal (`tests/listen_pty.rs`).
 
 New adapters are not complete until the fixture, positive/negative/IPC-failure
 tests, inventory boundary, support-matrix entry, and the gate all land in the

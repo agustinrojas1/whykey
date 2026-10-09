@@ -26,7 +26,7 @@ contract shared by the capability registry and tests.
 | `capture.ndjson` | capture | Implemented | Emit one compact schema-v2 record per captured event. |
 | `capture.export` | capture | Implemented | Write replayable JSON or NDJSON capture records to an explicit file. |
 | `capture.evdev` | capture | Implemented | Capture Linux evdev keyboard events when a readable device is available. |
-| `remapper.pre-compositor` | input | Implemented | Detect common pre-compositor remappers and preserve conditional transformations. |
+| `remapper.pre-compositor` | input | Implemented | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions, kmonad, and input-remapper conditional. |
 | `input.ime-context` | input | Implemented | Detect IBus/Fcitx5 session context. |
 | `input.ime-runtime-engine` | input | Implemented | Query an active IBus/Fcitx5 engine through a read-only API when possible. |
 | `input.ime.fcitx5-safe-query` | safety | Implemented | Use bounded read-only Fcitx5 D-Bus calls without launching client helpers. |
@@ -43,7 +43,7 @@ contract shared by the capability registry and tests.
 | `compositor.river` | compositor | Implemented | Inspect literal River init mappings. |
 | `compositor.wayfire` | compositor | Implemented | Inspect literal Wayfire binding settings. |
 | `compositor.labwc` | compositor | Implemented | Inspect labwc Openbox-compatible keybind configuration. |
-| `compositor.bspwm-sxhkd` | compositor | Implemented | Inspect literal sxhkd mappings associated with bspwm. |
+| `compositor.bspwm-sxhkd` | compositor | Implemented | Inspect literal sxhkd mappings from SXHKD_CONFIG, the running sxhkd's -c and extra configuration files, or the default sxhkdrc. |
 | `compositor.openbox` | compositor | Implemented | Inspect Openbox keybind XML. |
 | `compositor.gnome` | compositor | Implemented | Inspect GNOME global shortcuts through read-only GSettings queries. |
 | `compositor.programmable-x11` | compositor | Implemented | Inspect literal AwesomeWM, Qtile, and XMonad mappings. |

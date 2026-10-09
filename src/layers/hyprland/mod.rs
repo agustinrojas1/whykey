@@ -30,6 +30,12 @@ impl Probe {
     pub(crate) fn ipc_available(&self) -> bool {
         self.binds.is_ok() && self.submap.is_ok()
     }
+
+    /// `hyprctl devices -j` captured with the probe, reused by layers that
+    /// need the main keyboard's keymap without another IPC round trip.
+    pub(crate) fn devices_json(&self) -> Option<&str> {
+        self.devices.as_deref()
+    }
 }
 
 thread_local! {
@@ -1097,6 +1103,38 @@ xkb_symbols "pc" {
     }
 
     #[test]
+    fn expands_globbed_sources_in_sorted_order() {
+        let base = std::env::temp_dir().join(format!("whykey-hypr-glob-{}", std::process::id()));
+        let parts = base.join("conf.d");
+        fs::create_dir_all(&parts).unwrap();
+        let root = base.join("hyprland.conf");
+        fs::write(&root, "source = conf.d/*.c?nf\n").unwrap();
+        fs::write(parts.join("a.conf"), "bindi = SUPER, A, exec, a\n").unwrap();
+        // Sorted after a.conf, so its unbind removes the earlier declaration.
+        fs::write(
+            parts.join("b.conf"),
+            "unbind = SUPER, A\nbindi = SUPER, B, exec, b\n",
+        )
+        .unwrap();
+        fs::write(parts.join(".hidden.conf"), "bindi = SUPER, H, exec, h\n").unwrap();
+        fs::write(parts.join("notes.txt"), "bindi = SUPER, T, exec, t\n").unwrap();
+
+        let mut visited = HashSet::new();
+        let mut variables = HashMap::new();
+        let mut hints = Vec::new();
+        collect_config_hints(&root, &mut visited, &mut variables, &mut hints, 0);
+        let keys: Vec<_> = hints.iter().map(|hint| hint.combo.to_string()).collect();
+        let super_b: KeyCombo = "super+b".parse().unwrap();
+        assert!(hints.iter().any(|hint| hint.combo == super_b), "{keys:?}");
+        for absent in ["super+a", "super+h", "super+t"] {
+            let combo: KeyCombo = absent.parse().unwrap();
+            assert!(hints.iter().all(|hint| hint.combo != combo), "{keys:?}");
+        }
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn uses_config_hint_to_resolve_same_key_modifiers() {
         let combo: KeyCombo = "ctrl+z".parse().unwrap();
         let bindings = r#"[{
@@ -1382,7 +1420,7 @@ o.bind("SUPER + E", "Real", "exec")
              "dispatcher": "__lua", "arg": "71"},
             {"modmask": 64, "key": "comma", "keycode": 0, "dispatcher": "__lua", "arg": "3"}
         ]);
-        let records = collect_records(&value, &hints);
+        let records = collect_records(&value, &hints, None);
         assert_eq!(records[0].key, "SUPER+CODE:20");
         assert_eq!(
             records[1].certainty,
@@ -1390,6 +1428,76 @@ o.bind("SUPER + E", "Real", "exec")
         );
         assert_ne!(records[1].key, "SUPER+");
         assert_eq!(records[2].key, "SUPER+COMMA");
+    }
+
+    /// D-041: Lua binds with `code:N` keys come back from `hyprctl binds -j`
+    /// with an empty key; the plain-text listing's display key fills it in.
+    #[test]
+    fn recovers_unreported_lua_keys_from_the_text_listing() {
+        let json = r#"[
+            {"modmask": 64, "submap": "", "key": "", "keycode": 0, "catch_all": false,
+             "description": "Switch to workspace 1", "dispatcher": "__lua", "arg": "71"},
+            {"modmask": 65, "submap": "", "key": "comma", "keycode": 0, "catch_all": false,
+             "description": "Move", "dispatcher": "__lua", "arg": "5"},
+            {"modmask": 64, "submap": "", "key": "", "keycode": 0, "catch_all": false,
+             "description": "Chord", "dispatcher": "__lua", "arg": "90"},
+            {"modmask": 64, "submap": "", "key": "", "keycode": 0, "catch_all": false,
+             "description": "Absent from text", "dispatcher": "__lua", "arg": "91"}
+        ]"#;
+        let text = "bindd\n\tmodmask: 64\n\tsubmap: \n\tkey: SUPER + code:10\n\tkeycode: 0\n\
+            \tcatchall: false\n\tdescription: Switch to workspace 1\n\tdispatcher: __lua\n\targ: 71\n\n\
+            bindd\n\tmodmask: 65\n\tsubmap: \n\tkey: comma\n\tkeycode: 0\n\tcatchall: false\n\
+            \tdescription: Move\n\tdispatcher: __lua\n\targ: 5\n\n\
+            bindd\n\tmodmask: 64\n\tsubmap: \n\tkey: SUPER + code:10 + code:11\n\tkeycode: 0\n\
+            \tcatchall: false\n\tdescription: Chord\n\tdispatcher: __lua\n\targ: 90\n\n";
+        let recovered = recover_unreported_keys(json, || Some(text.to_owned())).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&recovered).unwrap();
+        assert_eq!(value[0]["key"], "code:10");
+        assert_eq!(value[1]["key"], "comma");
+        // A multi-key bind and a bind missing from the text stay unresolved.
+        assert_eq!(value[2]["key"], "");
+        assert_eq!(value[3]["key"], "");
+
+        // Inspection matches the recovered code through the XKB layout.
+        let super_1: KeyCombo = "super+1".parse().unwrap();
+        let inspect = |entry: &serde_json::Value| {
+            inspect_json_with_keycode(
+                &super_1,
+                &serde_json::json!([entry]).to_string(),
+                "default",
+                &[crate::xkb::XkbKeycode::from(10)],
+                &[],
+                &[],
+                None,
+            )
+            .unwrap()
+        };
+        let unresolved: serde_json::Value = serde_json::from_str(json).unwrap();
+        let before = inspect(&unresolved[0]);
+        let after = inspect(&value[0]);
+        assert!(after.binding.is_some());
+        assert_ne!(after.outcome, before.outcome);
+        assert_ne!(after.outcome, Outcome::Pass);
+
+        // The inventory shows the key the active layout produces for code 10,
+        // so `bindings --key` and `conflicts` compare it like a named key.
+        let keymap = "xkb_keymap {\nxkb_keycodes \"evdev\" {\n    <AE01> = 10;\n};\n\
+            xkb_symbols \"pc\" {\n    key <AE01> {\n        symbols[1] = [ 1, exclam ]\n    };\n};\n};\n";
+        let records = collect_records(&value, &[], Some((keymap, 0)));
+        assert_eq!(records[0].key, "SUPER+1");
+        assert_ne!(
+            records[0].certainty,
+            crate::bindings::UNRESOLVED_KEY_CERTAINTY
+        );
+        assert_eq!(
+            records[2].certainty,
+            crate::bindings::UNRESOLVED_KEY_CERTAINTY
+        );
+
+        // Nothing to recover: the text listing is never requested.
+        let resolved =
+            r#"[{"modmask": 64, "key": "Q", "keycode": 0, "dispatcher": "exec", "arg": "x"}]"#;
+        assert!(recover_unreported_keys(resolved, || panic!("text queried")).is_none());
     }
 
     #[test]

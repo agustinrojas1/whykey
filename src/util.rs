@@ -32,11 +32,23 @@ pub fn config_file(relative: &str) -> Option<PathBuf> {
 /// Bounded text read for a configuration file. Files larger than `limit`
 /// bytes are rejected so a runaway file cannot fill memory.
 pub fn read_bounded(path: &std::path::Path, limit: usize) -> Option<String> {
-    let metadata = fs::metadata(path).ok()?;
-    if metadata.len() > limit as u64 {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    // O_NONBLOCK so opening a FIFO cannot block; only regular files are read.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    if !file.metadata().ok()?.is_file() {
         return None;
     }
-    fs::read_to_string(path).ok()
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > limit {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Default bounded text read (64 KiB, matching adapter expectations).
@@ -139,6 +151,21 @@ impl ProcessSnapshot {
         result
     }
 
+    /// PIDs of entries matching any of the given names, with the same
+    /// matching rule as [`Self::find_processes`].
+    pub fn matching_pids(&self, names: &[&str]) -> Vec<u32> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                names.iter().any(|name| {
+                    entry.comm.eq_ignore_ascii_case(name)
+                        || entry.cmdline_name.eq_ignore_ascii_case(name)
+                })
+            })
+            .map(|entry| entry.pid)
+            .collect()
+    }
+
     /// Deduplicated sorted comm names.
     pub fn comm_names(&self) -> Vec<String> {
         let mut names = Vec::new();
@@ -185,6 +212,22 @@ mod tests {
         assert_eq!(unquote("\"key\""), "key");
         assert_eq!(unquote("key"), "key");
         assert_eq!(unquote("\"partial"), "\"partial");
+    }
+
+    #[test]
+    fn read_bounded_rejects_fifo_without_blocking_and_enforces_limit() {
+        let root = std::env::temp_dir().join(format!("whykey-util-fifo-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let fifo = root.join("fifo");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        assert_eq!(read_bounded(&fifo, 16), None);
+        let file = root.join("file");
+        fs::write(&file, "0123456789").unwrap();
+        assert_eq!(read_bounded(&file, 10).as_deref(), Some("0123456789"));
+        assert_eq!(read_bounded(&file, 9), None);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

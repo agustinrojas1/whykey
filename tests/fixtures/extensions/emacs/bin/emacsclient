@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Fake emacsclient fixture script for hermetic whykey extension testing."""
+"""Fake emacsclient fixture script for hermetic whykey extension testing.
 
+Answers the whykey-emacs `--eval` query (a printed Lisp string holding JSON)
+for a few fixture bindings in a terminal frame.
+"""
+
+import json
+import re
 import sys
 
-expr = " ".join(sys.argv)
-if "C-x" in expr:
-    print('"fundamental-mode\\tControl-X-prefix\\tglobal"')
-elif "C-<left>" in expr:
-    print('"org-mode\\torg-left-click\\tmajor"')
-elif "C-M-RET" in expr:
-    print('"text-mode\\tmy-custom-minor-cmd\\tminor"')
-elif "C-q" in expr:
-    print('"fundamental-mode\\tnil\\tnone"')
-else:
-    print('"fundamental-mode\\tnil\\tnone"')
+expr = sys.argv[-1]
+match = re.search(r"\(dolist \(notation \(list ((?:\"(?:[^\"\\]|\\.)*\" ?)+)\)\)", expr)
+notations = re.findall(r"\"((?:[^\"\\]|\\.)*)\"", match.group(1)) if match else []
+
+BINDINGS = {
+    "C-x": ("prefix", "Control-X-prefix", "global"),
+    "C-<left>": ("command", "org-left-click", "major"),
+    "C-M-RET": ("command", "my-custom-minor-cmd", "minor (my-custom-mode)"),
+}
+keys = []
+for notation in notations:
+    kind, binding, winner = BINDINGS.get(notation, ("none", "", ""))
+    keys.append({"notation": notation, "kind": kind, "binding": binding, "map": winner})
+reply = json.dumps({"mode": "fundamental-mode", "buffer": "*scratch*", "gui": False, "keys": keys})
+print('"' + reply.replace("\\", "\\\\").replace('"', '\\"') + '"')

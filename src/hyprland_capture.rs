@@ -723,6 +723,10 @@ pub fn parse_socket_line(line: &str) -> SocketMessage {
             return SocketMessage::Other;
         };
         // Socket wire values are XKB keycodes; they enter typed here.
+        // Hyprland v0.56.2 src/config/lua/LuaEventHandler.cpp pushes
+        // `keyEvent.keycode + 8` as the `input.keyboard.key` callback's first
+        // argument, and `IKeyboard::SKeyEvent::keycode` is the libinput/evdev
+        // code (src/devices/Keyboard.cpp), so `kc` is already XKB (evdev+8).
         let xkb_keycode = crate::xkb::XkbKeycode::from(raw_keycode);
         let Ok(state_raw) = parts[2].parse::<u32>() else {
             return SocketMessage::Other;
@@ -1218,26 +1222,12 @@ impl HyprlandCaptureSession {
             self.locked_num,
             false,
         );
-        let xkb_level = if base_key_name.starts_with("KP_") {
-            xkb_state.keypad_level().unwrap_or(0)
-        } else {
-            xkb_state.level().unwrap_or(0)
-        };
-        let shifted_keysym = if xkb_level > 0 {
-            self.keymap
-                .as_deref()
-                .and_then(|km| {
-                    crate::xkb::preferred_symbol_for_xkb_keycode(
-                        km,
-                        event.xkb_keycode,
-                        self.group,
-                        xkb_level,
-                    )
-                })
-                .filter(|sym| crate::key::normalize_key_str(sym) != normalized_base)
-        } else {
-            None
-        };
+        let shifted_keysym = self
+            .keymap
+            .as_deref()
+            .and_then(|km| crate::xkb::select_level(km, event.xkb_keycode, &xkb_state))
+            .and_then(|selection| selection.keysym)
+            .filter(|sym| crate::key::normalize_key_str(sym) != normalized_base);
 
         // 5. Pressed modifiers for ModifierState
         let mut pressed_mods = Vec::new();
@@ -1602,6 +1592,26 @@ mod tests {
         assert_eq!(observed.disposition, CaptureDisposition::Suppressed);
     }
 
+    /// D-042: Hyprland v0.56.2 `LuaEventHandler.cpp` emits
+    /// `lua_pushinteger(L, keyEvent.keycode + 8)` for `input.keyboard.key`,
+    /// where `keyEvent.keycode` is the evdev code. The hook's `kc` therefore
+    /// arrives on the socket as XKB and must be converted to evdev exactly once.
+    #[test]
+    fn lua_hook_keycode_is_xkb_and_converts_to_evdev_once() {
+        // evdev KEY_1 = 2 → the hook reports XKB 10 (the `code:10` of a bind).
+        let SocketMessage::Key(event) = parse_socket_line("custom>>whykey-probe,tok,10,1,64")
+        else {
+            panic!("expected key event");
+        };
+        assert_eq!(event.xkb_keycode, crate::xkb::XkbKeycode::from(10));
+        let observed = decode_test_event(&event, None, 0, false, false);
+        assert_eq!(
+            observed.physical_keycode,
+            Some(crate::xkb::EvdevKeycode::from(2))
+        );
+        assert_eq!(observed.combo.modmask(), 64);
+    }
+
     #[test]
     fn preserve_ctrl_super_modifier_state() {
         let event = HyprlandKeyEvent {
@@ -1715,7 +1725,9 @@ xkb_symbols "pc" {
             token: "tok".into(),
             xkb_keycode: crate::xkb::XkbKeycode::from(14),
             event_type: KeyEventType::Press,
-            modifier_mask: 1 | 128,
+            // AltGr alone selects level 3; Shift+AltGr would select the
+            // absent level 4 of this FOUR_LEVEL key.
+            modifier_mask: 128,
         };
         let observed = decode_test_event(&altgr, Some(keymap), 0, false, false);
         assert!(

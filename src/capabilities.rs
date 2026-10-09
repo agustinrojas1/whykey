@@ -181,16 +181,15 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
             "capture",
             "whykey listen --output writes replayable JSON or NDJSON records without mixing diagnostics into the export",
         ),
-        available(
-            "capture.evdev",
-            "capture",
-            listen::evdev_available(),
-            if evdev_devices.is_empty() {
-                "no readable keyboard event device was detected"
-            } else {
-                "keyboard event devices were enumerated read-only"
-            },
-        ),
+        {
+            let evdev = listen::evdev_available();
+            let scan = crate::doctor::EvdevScan::classify(
+                std::path::Path::new("/dev/input"),
+                evdev || !evdev_devices.is_empty(),
+                evdev,
+            );
+            available("capture.evdev", "capture", evdev, scan.detail())
+        },
         available(
             "remapper.pre-compositor",
             "input",

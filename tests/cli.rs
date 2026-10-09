@@ -479,7 +479,15 @@ fn whykey_nvim_extension_matches_fixture_runtime_queries() {
     for (key, status, prop, needle) in [
         ("ctrl+x", "Handled", "Stops", ":echo 1<CR>"),
         ("ctrl+left", "Handled", "Stops", "copilot#Accept()"),
-        ("ctrl+q", "NotHandled", "Continues", "no mapping"),
+        // A Lua-callback mapping has an empty rhs but is still a mapping.
+        ("ctrl+l", "Handled", "Stops", "Telescope find_files"),
+        // Without a mapping, Neovim's built-in commands still apply: not a confident "no".
+        (
+            "ctrl+q",
+            "Indeterminate",
+            "Indeterminate",
+            "No user mapping",
+        ),
     ] {
         let output = binary()
             .args(["extension", "extensions/whykey-nvim", key, "--json"])
@@ -505,6 +513,8 @@ fn whykey_vscode_extension_returns_valid_schema_v1() {
     let output = binary()
         .args(["extension", "extensions/whykey-vscode", "ctrl+x", "--json"])
         .env("HOME", "/nonexistent")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("VSCODE_KEYBINDINGS")
         .output()
         .unwrap();
 
@@ -525,24 +535,25 @@ fn whykey_vscode_extension_matches_fixture_keybindings() {
 
     for (key, status, prop, needle) in [
         ("ctrl+x", "Handled", "Stops", "test.exact"),
+        // The `when` clause is not evaluated: handled only conditionally.
         ("ctrl+y", "Handled", "Indeterminate", "not evaluated"),
-        ("ctrl+k", "Handled", "Continues", "chord"),
+        // A chord prefix consumes the first chord.
+        ("ctrl+k", "Handled", "Stops", "chord"),
+        // Not in the user file: VS Code's defaults are unknown, not "unbound".
         (
             "ctrl+q",
-            "NotHandled",
-            "Continues",
-            "defaults not evaluated",
+            "Indeterminate",
+            "Indeterminate",
+            "default keybindings not inspected",
         ),
-        (
-            "ctrl+z",
-            "NotHandled",
-            "Continues",
-            "defaults not evaluated",
-        ),
+        // `-command` removes default bindings only; the user's own binding stays.
+        ("ctrl+z", "Handled", "Stops", "test.removed"),
     ] {
         let output = binary()
             .args(["extension", "extensions/whykey-vscode", key, "--json"])
             .env("HOME", &fixture_home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("VSCODE_KEYBINDINGS")
             .output()
             .unwrap();
         assert!(output.status.success(), "case: {key}");
@@ -614,7 +625,14 @@ fn whykey_emacs_extension_matches_fixture_runtime_queries() {
             "my-custom-minor-cmd",
             Some("minor"),
         ),
-        ("ctrl+q", "NotHandled", "Continues", "no mapping", None),
+        // No binding in the active keymaps: translations and hooks are not inspected.
+        (
+            "ctrl+q",
+            "Indeterminate",
+            "Indeterminate",
+            "No binding",
+            None,
+        ),
     ] {
         let output = binary()
             .args(["extension", "extensions/whykey-emacs", key, "--json"])

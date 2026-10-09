@@ -478,7 +478,7 @@ fn render_inner(
 }
 
 fn diagnosis_text(
-    _key: &KeyCombo,
+    key: &KeyCombo,
     layers: &[LayerResult],
     observation: Option<&ObservedKey>,
     conclusion: &Conclusion,
@@ -523,6 +523,20 @@ fn diagnosis_text(
     }
 
     match conclusion {
+        Conclusion::Remapped {
+            remapper,
+            target,
+            then,
+        } => {
+            let from = style::human_key(key);
+            match then {
+                Some(then) => format!(
+                    "{remapper} remaps {from} to {target}. {}",
+                    diagnosis_text(key, layers, observation, then)
+                ),
+                None => format!("{remapper} remaps {from} to {target}."),
+            }
+        }
         Conclusion::ConfiguredConsumer { layer, .. } if *layer == "TTY driver" => {
             if layers.iter().any(|candidate| {
                 candidate.id == LayerId::Tty
@@ -606,6 +620,11 @@ fn qualification_text(
     observation: Option<&ObservedKey>,
     conclusion: &Conclusion,
 ) -> Option<String> {
+    if let Conclusion::Remapped { then, .. } = conclusion {
+        return then
+            .as_deref()
+            .and_then(|then| qualification_text(_key, layers, observation, then));
+    }
     if matches!(
         conclusion,
         Conclusion::ConfiguredConsumer {
@@ -636,7 +655,7 @@ fn qualification_text(
 }
 
 fn effect_text(
-    _key: &KeyCombo,
+    key: &KeyCombo,
     layers: &[LayerResult],
     observation: Option<&ObservedKey>,
     conclusion: &Conclusion,
@@ -684,6 +703,23 @@ fn effect_text(
             && layer.details.iter().any(|detail| detail.contains("VSUSP"))
     }) {
         return "Terminal signal handling sends a stop signal to the foreground job when this control byte arrives.".into();
+    }
+    if let Conclusion::Remapped {
+        remapper,
+        target,
+        then,
+    } = conclusion
+    {
+        let from = style::human_key(key);
+        return match then {
+            Some(then) => format!(
+                "{remapper} remaps {from} to {target} before the compositor; downstream layers see {target}. {}",
+                effect_text(key, layers, observation, then)
+            ),
+            None => format!(
+                "{remapper} remaps {from} to {target} before the compositor. Whykey cannot name the key that results on this keyboard layout, so the later findings for {from} are conditional."
+            ),
+        };
     }
     match conclusion {
         Conclusion::ConfiguredConsumer { .. } => {
@@ -785,6 +821,7 @@ fn layer_line(
         (_, Outcome::HandledAndPassed) if terminal_observed => "Observed receipt",
         (_, Outcome::HandledAndPassed) => "Matching binding",
         (_, Outcome::Consumed) => "Configured to stop",
+        (_, Outcome::Redirected) if layer.id == LayerId::Remapper => "Remapped",
         (_, Outcome::Redirected) => "Redirected",
         (_, Outcome::HandledUncertain | Outcome::UncertainContinues | Outcome::Unknown) => {
             "Forwarding unknown"
@@ -886,6 +923,15 @@ fn uncertainty_text(
     observation: Option<&ObservedKey>,
     conclusion: &Conclusion,
 ) -> Option<String> {
+    if let Conclusion::Remapped { then, .. } = conclusion {
+        return match then {
+            Some(then) => uncertainty_text(_key, layers, observation, then),
+            None => Some(
+                "The remapped key depends on the XKB layout, so later layers were not evaluated for it."
+                    .into(),
+            ),
+        };
+    }
     if observation.is_some_and(|value| value.source.proves_compositor_receipt())
         && layers.iter().any(|layer| {
             layer.id == LayerId::Compositor
@@ -965,6 +1011,12 @@ fn next_step(
 ) -> Option<String> {
     if observation.is_some_and(|value| value.source.proves_compositor_receipt()) {
         return Some("Use --suppress only when you need to inspect a compositor binding without letting its normal action run.".into());
+    }
+    if let Conclusion::Remapped {
+        then: Some(then), ..
+    } = conclusion
+    {
+        return next_step(_key, layers, observation, then);
     }
     if let Some(command) = layers
         .iter()
@@ -1377,6 +1429,14 @@ pub enum Conclusion {
         layer: &'static str,
         assumes_earlier_forward: bool,
     },
+    /// A pre-compositor remapper turns the key into `target`. `then` is the
+    /// conclusion for the remapped key, or `None` when Whykey cannot name
+    /// the key that results.
+    Remapped {
+        remapper: String,
+        target: String,
+        then: Option<Box<Conclusion>>,
+    },
     SelectedApplication {
         layer: &'static str,
         status: ApplicationStatus,
@@ -1552,6 +1612,34 @@ pub fn evaluate_conclusion(
 fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) -> Conclusion {
     if layers.is_empty() {
         return Conclusion::NoLayersInspected;
+    }
+    // A remapper that turns the key into another one hands the rest of the
+    // route to the remapped key; the conclusion follows that key.
+    if let [remapper, downstream @ ..] = layers
+        && remapper.id == LayerId::Remapper
+        && remapper.outcome == Outcome::Redirected
+        && let Some(binding) = &remapper.binding
+        && let Some(action) = binding.action.as_deref()
+    {
+        let name = binding
+            .dispatcher
+            .clone()
+            .unwrap_or_else(|| remapper.layer.to_owned());
+        return match KeyCombo::parse_query(action) {
+            Ok(target) => Conclusion::Remapped {
+                remapper: name,
+                target: style::human_key(&target),
+                then: Some(Box::new(evaluate_layer_conclusion(
+                    downstream,
+                    terminal_observed,
+                ))),
+            },
+            Err(_) => Conclusion::Remapped {
+                remapper: name,
+                target: action.to_owned(),
+                then: None,
+            },
+        };
     }
     if let Some(layer) = layers
         .iter()
@@ -1840,6 +1928,58 @@ mod tests {
 
         assert!(output.contains("Hyprland is configured to redirect the shortcut."));
         assert!(output.contains("Hyprland — Redirected"));
+    }
+
+    #[test]
+    fn remapper_redirect_concludes_with_the_remapped_key_route() {
+        let remapper = |action: &str| {
+            LayerResult::new(
+                "Input remapper",
+                LayerId::Remapper,
+                Outcome::Redirected,
+                "keyd remaps CAPS_LOCK",
+                vec![],
+            )
+            .with_binding(
+                BindingEvidence::action(action, BindingScope::Universal, None)
+                    .with_dispatcher("keyd"),
+            )
+        };
+        let compositor = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec![],
+        );
+        let escape = KeyCombo::parse_query("escape").unwrap();
+
+        let eval = evaluate_conclusion(&[remapper("ESCAPE"), compositor.clone()], None, false);
+        assert_eq!(
+            eval.conclusion,
+            Conclusion::Remapped {
+                remapper: "keyd".into(),
+                target: style::human_key(&escape),
+                then: Some(Box::new(Conclusion::ConfiguredConsumer {
+                    layer: "Hyprland",
+                    assumes_earlier_forward: false,
+                })),
+            }
+        );
+
+        // A target Whykey cannot name leaves the later route unevaluated.
+        let eval = evaluate_conclusion(
+            &[
+                remapper("KEY_B (its keysym depends on the XKB layout)"),
+                compositor,
+            ],
+            None,
+            false,
+        );
+        assert!(matches!(
+            eval.conclusion,
+            Conclusion::Remapped { then: None, .. }
+        ));
     }
 
     #[test]
