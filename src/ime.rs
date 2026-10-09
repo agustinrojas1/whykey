@@ -165,9 +165,9 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     }
 
     let mut details = Vec::new();
-    let mut runtime_active = false;
-    let mut runtime_inactive = false;
-    let mut runtime_unreachable = false;
+    let mut transforming = false;
+    let mut unknown = false;
+    let mut forwarding_reasons = Vec::new();
     for detection in detections {
         details.push(format!("detected: {}", detection.engine));
         details.extend(
@@ -186,13 +186,15 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             details.push(format!("active engine: {active_engine}"));
         }
         if let Some(state) = &detection.state {
-            runtime_active |= state == "active";
-            runtime_inactive |= matches!(state.as_str(), "inactive" | "closed");
             details.push(format!("runtime state: {state}"));
         }
         if let Some(error) = &detection.query_error {
-            runtime_unreachable = true;
             details.push(format!("runtime query unavailable: {error}"));
+        }
+        match runtime_mode(detection) {
+            RuntimeMode::Forwarding(reason) => forwarding_reasons.push(reason),
+            RuntimeMode::Transforming => transforming = true,
+            RuntimeMode::Unknown => unknown = true,
         }
     }
     details.push(
@@ -202,21 +204,83 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             .collect::<Vec<_>>()
             .join("; "),
     );
+    if transforming {
+        return LayerResult::new(
+            "Input method",
+            LayerId::Ime,
+            Outcome::UncertainContinues,
+            "an active input method may transform this input before text is committed",
+            details,
+        );
+    }
+    if unknown {
+        return LayerResult::new(
+            "Input method",
+            LayerId::Ime,
+            Outcome::UncertainContinues,
+            if detections
+                .iter()
+                .any(|detection| detection.query_error.is_some())
+            {
+                "input method was detected but its runtime API is unreachable; transformation state remains unknown"
+            } else {
+                "an input-method context may transform this input before text is committed"
+            },
+            details,
+        );
+    }
+    // Every detected daemon reported a runtime state that forwards keys
+    // unchanged. Its own global hotkeys (for example the trigger key) are
+    // not read, so say so instead of implying they were checked.
+    details.push("input-method hotkeys (trigger/switch keys) were not inspected".into());
     LayerResult::new(
         "Input method",
         LayerId::Ime,
-        Outcome::UncertainContinues,
-        if runtime_active {
-            "an active input method may transform this input before text is committed".to_owned()
-        } else if runtime_inactive {
-            "input method was detected but inactive or closed; application-side text transformation remains unobserved".to_owned()
-        } else if runtime_unreachable {
-            "input method was detected but its runtime API is unreachable; transformation state remains unknown".to_owned()
-        } else {
-            "an input-method context may transform this input before text is committed".to_owned()
-        },
+        Outcome::Pass,
+        format!(
+            "input method was detected but {}; keys pass through unchanged",
+            forwarding_reasons.join(" and ")
+        ),
         details,
     )
+}
+
+enum RuntimeMode {
+    /// Runtime state proves the daemon forwards keys; the payload says why.
+    Forwarding(String),
+    /// An input method is engaged and may compose or transform keys.
+    Transforming,
+    /// The runtime state could not be read.
+    Unknown,
+}
+
+fn runtime_mode(detection: &Detection) -> RuntimeMode {
+    if let Some(state) = detection
+        .state
+        .as_deref()
+        .filter(|state| matches!(*state, "inactive" | "closed"))
+    {
+        return RuntimeMode::Forwarding(format!("is {state}"));
+    }
+    match detection.active_engine.as_deref() {
+        Some(engine) if is_keyboard_engine(engine) => RuntimeMode::Forwarding(format!(
+            "its active engine {engine} is a plain keyboard layout"
+        )),
+        Some(_)
+            if detection.state.as_deref() != Some("active") && detection.query_error.is_some() =>
+        {
+            RuntimeMode::Unknown
+        }
+        Some(_) => RuntimeMode::Transforming,
+        None if detection.state.as_deref() == Some("active") => RuntimeMode::Transforming,
+        None => RuntimeMode::Unknown,
+    }
+}
+
+/// Engines that only apply an XKB layout: Fcitx5's `keyboard-<layout>` and
+/// IBus's `xkb:<layout>:<variant>:<language>`.
+fn is_keyboard_engine(engine: &str) -> bool {
+    engine.starts_with("keyboard-") || engine.starts_with("xkb:")
 }
 
 #[derive(Default)]
@@ -518,21 +582,44 @@ mod tests {
         assert_eq!(fcitx5_state(Some(3)), None);
     }
 
-    #[test]
-    fn inactive_fcitx_is_not_described_as_an_active_transformer() {
-        let result = inspect_with_detections(&[Detection {
+    fn fcitx5(active_engine: &str, state: &str) -> Detection {
+        Detection {
             engine: "fcitx5".into(),
             sources: vec!["GTK_IM_MODULE=fcitx".into()],
             processes: vec!["fcitx5".into()],
-            active_engine: Some("keyboard-us".into()),
-            state: Some("inactive".into()),
+            active_engine: Some(active_engine.into()),
+            state: Some(state.into()),
             query_error: None,
             text_reconstruction: TextReconstruction::default(),
-        }]);
+        }
+    }
 
-        assert!(result.summary.contains("inactive or closed"));
+    #[test]
+    fn inactive_fcitx_forwards_keys_with_evidence() {
+        let result = inspect_with_detections(&[fcitx5("pinyin", "inactive")]);
+
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(result.summary.contains("is inactive"));
+        assert!(result.summary.contains("keys pass through unchanged"));
         assert!(!result.summary.contains("active input method"));
-        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail == "runtime state: inactive")
+        );
+    }
+
+    #[test]
+    fn plain_keyboard_engine_forwards_keys_even_when_active() {
+        let result = inspect_with_detections(&[fcitx5("keyboard-us", "active")]);
+
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(
+            result
+                .summary
+                .contains("keyboard-us is a plain keyboard layout")
+        );
     }
 
     #[test]
@@ -557,17 +644,13 @@ mod tests {
 
     #[test]
     fn renders_the_fcitx5_state_matrix_without_stringly_typed_evidence() {
-        for state in ["active", "inactive", "closed"] {
-            let result = inspect_with_detections(&[Detection {
-                engine: "fcitx5".into(),
-                sources: vec!["GTK_IM_MODULE=fcitx".into()],
-                processes: vec!["fcitx5".into()],
-                active_engine: Some("keyboard-us".into()),
-                state: Some(state.into()),
-                query_error: None,
-                text_reconstruction: TextReconstruction::default(),
-            }]);
-            assert_eq!(result.outcome, Outcome::UncertainContinues);
+        for (state, outcome) in [
+            ("active", Outcome::UncertainContinues),
+            ("inactive", Outcome::Pass),
+            ("closed", Outcome::Pass),
+        ] {
+            let result = inspect_with_detections(&[fcitx5("pinyin", state)]);
+            assert_eq!(result.outcome, outcome, "state {state}");
             assert!(result.details.iter().any(|detail| {
                 detail.contains("text reconstruction:") && detail.contains("conditional")
             }));
@@ -576,16 +659,21 @@ mod tests {
 
     #[test]
     fn renders_ibus_active_and_unreachable_as_distinct_evidence() {
-        let active = inspect_with_detections(&[Detection {
+        let ibus = |active_engine: &str| Detection {
             engine: "ibus".into(),
             sources: vec!["GTK_IM_MODULE=ibus".into()],
             processes: vec!["ibus-daemon".into()],
-            active_engine: Some("xkb:us::eng".into()),
-            state: Some("active".into()),
+            active_engine: Some(active_engine.into()),
+            state: None,
             query_error: None,
             text_reconstruction: TextReconstruction::default(),
-        }]);
+        };
+        let active = inspect_with_detections(&[ibus("libpinyin")]);
         assert!(active.summary.contains("active input method"));
+        assert_eq!(active.outcome, Outcome::UncertainContinues);
+
+        let layout = inspect_with_detections(&[ibus("xkb:us::eng")]);
+        assert_eq!(layout.outcome, Outcome::Pass);
 
         let unreachable = inspect_with_detections(&[Detection {
             engine: "ibus".into(),
@@ -597,6 +685,7 @@ mod tests {
             text_reconstruction: TextReconstruction::default(),
         }]);
         assert!(unreachable.summary.contains("runtime API is unreachable"));
+        assert_eq!(unreachable.outcome, Outcome::UncertainContinues);
         assert!(
             unreachable
                 .details

@@ -19,10 +19,7 @@ use whykey::diff;
 use whykey::extensions;
 use whykey::focus;
 use whykey::key::KeyCombo;
-use whykey::layers::{
-    Outcome, hyprland, inspect_default_chain, inspect_default_chain_for_pid,
-    inspect_default_chain_for_pid_with_source, programmable,
-};
+use whykey::layers::{Outcome, hyprland, inspect_default_chain, inspect_sequence, programmable};
 use whykey::listen;
 use whykey::replay;
 use whykey::report;
@@ -109,21 +106,8 @@ fn run_inspect(
                 .map(|target| target.pid)
                 .or(target_pid);
             let resolved_source = focused_target.as_ref().map(|target| target.source.as_str());
-            let reports: Vec<_> = sequence
-                .as_slice()
-                .iter()
-                .map(|key| {
-                    resolved_pid.map_or_else(
-                        || inspect_default_chain(key),
-                        |pid| match resolved_source {
-                            Some(source) => {
-                                inspect_default_chain_for_pid_with_source(key, pid, Some(source))
-                            }
-                            None => inspect_default_chain_for_pid(key, pid),
-                        },
-                    )
-                })
-                .collect();
+            let target = resolved_pid.map(|pid| (pid, resolved_source));
+            let reports = inspect_sequence(sequence.as_slice(), target);
             Ok::<_, String>(reports)
         })
     };
@@ -258,7 +242,7 @@ fn run_extension(
     _color: ColorChoice,
     schema_version: u8,
 ) -> ExitCode {
-    let key: KeyCombo = match input.parse() {
+    let key = match KeyCombo::parse_query(&input) {
         Ok(key) => key,
         Err(error) => {
             eprintln!("error: {error}\n\nTry 'whykey --help'.");
@@ -343,7 +327,7 @@ fn run_snapshot(arguments: Vec<String>) -> ExitCode {
         output_path = Some(path);
     }
 
-    let key: KeyCombo = match combination.parse() {
+    let key = match KeyCombo::parse_query(&combination) {
         Ok(key) => key,
         Err(error) => {
             eprintln!("error: {error}");

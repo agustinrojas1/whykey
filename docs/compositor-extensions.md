@@ -45,12 +45,13 @@ failed query is conditional evidence, not a fatal diagnostic error.
 T1 compiled-in live IPC and T2 bounded live queries can report runtime state.
 T3 literal configuration and T4 manifests describe what is configured, not
 what the compositor currently loaded. T4 never participates in `listen`
-capture. Native Hyprland capture, terminal capture, and evdev remain the only
-capture transports.
+capture. Native Hyprland and Sway capture, terminal capture, and evdev remain
+the only capture transports.
 
 The environment snapshot discovers manifests once. An applicable adapter's
 binding command runs at most once per snapshot and its result is shared by
-`inspect` and `bindings`. `doctor` and `capabilities` report applicability and
+`inspect` and `bindings`. When several manifests apply, `inspect` runs only
+the highest-scored one. `doctor` and `capabilities` report applicability and
 command reachability without executing the command.
 
 First-party examples for herbstluftwm, bspwm/sxhkd, and dwl are under

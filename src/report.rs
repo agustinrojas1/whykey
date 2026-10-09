@@ -556,6 +556,23 @@ fn diagnosis_text(
         Conclusion::UnverifiedSession { layer } => {
             format!("{layer} has a candidate binding, but delivery is unverified.")
         }
+        Conclusion::UnverifiedDefault {
+            layer,
+            action,
+            source: None,
+        } => format!(
+            "{layer}'s default binds this to {action}, but your shell config may override it."
+        ),
+        Conclusion::UnverifiedDefault {
+            layer,
+            action,
+            source: Some(file),
+        } => format!(
+            "{layer} binds this to {action} in {file}, but your shell config may override it."
+        ),
+        Conclusion::PossibleUnresolvedMatch { layer, summary, .. } => {
+            format!("{layer} may handle this: {summary}.")
+        }
         Conclusion::HandledAndForwarded { layers, uncertain, .. } => {
             let names = layers.join(", ");
             if *uncertain {
@@ -571,9 +588,10 @@ fn diagnosis_text(
         Conclusion::IndeterminateForwarding { layer } => {
             format!("{layer} has a matching key, but forwarding is unknown.")
         }
-        Conclusion::ConditionalForwarding => {
-            "No single handler can be confirmed; forwarding depends on an uncertain layer.".into()
-        }
+        Conclusion::NoBindingReported { unknown } => format!(
+            "No inspected layer reports a binding; handling is unknown in {}.",
+            human_list(unknown, "and")
+        ),
         Conclusion::NoLayersInspected => "No layers were inspected.".into(),
         Conclusion::UnhandledContinues => "No inspected layer matches; it can continue.".into(),
         Conclusion::SuppressedHandled { .. } => {
@@ -668,39 +686,76 @@ fn effect_text(
         return "Terminal signal handling sends a stop signal to the foreground job when this control byte arrives.".into();
     }
     match conclusion {
-        Conclusion::ConfiguredConsumer { .. } => "The configured consumer stops this shortcut before later layers can handle it.".into(),
-        Conclusion::ConfiguredRedirect { .. } => "The configured redirect sends the shortcut to another window.".into(),
-        Conclusion::HandledAndForwarded { uncertain: true, .. } | Conclusion::ConditionalForwarding => "A configured layer may handle the shortcut, but later handling depends on uncertain forwarding.".into(),
-        Conclusion::HandledAndForwarded { .. } => "The matching configuration passes the shortcut to the next layer.".into(),
-        Conclusion::UnhandledContinues => "No matching configuration was found, so the shortcut can continue downstream.".into(),
-        _ => "The report below separates observed events from configuration-based predictions.".into(),
+        Conclusion::ConfiguredConsumer { .. } => {
+            "The configured consumer stops this shortcut before later layers can handle it.".into()
+        }
+        Conclusion::ConfiguredRedirect { .. } => {
+            "The configured redirect sends the shortcut to another window.".into()
+        }
+        Conclusion::UnverifiedDefault { layer, action, .. } => format!(
+            "If that binding is still in effect, {layer} runs {action} and the key goes no further."
+        ),
+        Conclusion::PossibleUnresolvedMatch {
+            layer,
+            consumes_if_matched: true,
+            ..
+        } => format!("If one of them uses this key, {layer} consumes it."),
+        Conclusion::PossibleUnresolvedMatch { layer, .. } => format!(
+            "If one of them uses this key, {layer} handles it; whether it is passed on is unknown."
+        ),
+        Conclusion::HandledAndForwarded {
+            layers,
+            uncertain: true,
+            ..
+        } => format!(
+            "The shortcut matches a binding in {}; whether it is passed on and handled later depends on uncertain layers.",
+            human_list(layers, "and")
+        ),
+        Conclusion::HandledAndForwarded { .. } => {
+            "The matching configuration passes the shortcut to the next layer.".into()
+        }
+        Conclusion::IndeterminateForwarding { layer } => format!(
+            "{layer} has a candidate binding; whether it stops the shortcut or passes it on is unknown."
+        ),
+        Conclusion::NoBindingReported { unknown } => format!(
+            "No matching configuration was found. The shortcut continues downstream unless it is handled by {}.",
+            human_list(unknown, "or")
+        ),
+        Conclusion::UnhandledContinues => {
+            "No matching configuration was found, so the shortcut can continue downstream.".into()
+        }
+        _ => "The report below separates observed events from configuration-based predictions."
+            .into(),
     }
 }
 
+/// Join names as "A", "A and B", or "A, B, and C" (with `conjunction`).
+fn human_list(names: &[&str], conjunction: &str) -> String {
+    match names {
+        [] => String::new(),
+        [only] => (*only).to_owned(),
+        [first, second] => format!("{first} {conjunction} {second}"),
+        [rest @ .., last] => format!("{}, {conjunction} {last}", rest.join(", ")),
+    }
+}
+
+/// Rows worth showing without `--verbose`: layers that match, stop,
+/// redirect, or remain uncertain. Layers that simply pass the key on (or do
+/// not apply) are evidence for the verbose route only.
 fn relevant_layers<'a>(
     layers: &'a [LayerResult],
     observation: Option<&ObservedKey>,
 ) -> Vec<&'a LayerResult> {
-    let mut selected = Vec::new();
-    for layer in layers {
-        let important = !matches!(layer.outcome, Outcome::Pass)
-            || layer.binding.is_some()
-            || layer.id == LayerId::Terminal
-            || observation.is_some_and(|observed| {
-                observed.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
-            });
-        if important {
-            selected.push(layer);
-        }
-    }
-    if selected.is_empty() {
-        if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Terminal) {
-            selected.push(layer);
-        } else if let Some(layer) = layers.first() {
-            selected.push(layer);
-        }
-    }
-    selected
+    layers
+        .iter()
+        .filter(|layer| {
+            !matches!(layer.outcome, Outcome::Pass)
+                || layer.binding.is_some()
+                || observation.is_some_and(|observed| {
+                    observed.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
+                })
+        })
+        .collect()
 }
 
 fn layer_line(
@@ -709,48 +764,79 @@ fn layer_line(
     terminal_observed: bool,
     options: RenderOptions,
 ) -> String {
-    let status = match layer.outcome {
-        Outcome::Pass => "No matching binding",
-        Outcome::HandledAndPassed if terminal_observed => "Observed receipt",
-        Outcome::HandledAndPassed => "Matching binding",
-        Outcome::Consumed => "Configured to stop",
-        Outcome::Redirected => "Redirected",
-        Outcome::HandledUncertain | Outcome::UncertainContinues | Outcome::Unknown => {
+    let reason = layer
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.uncertainty);
+    let status = match (reason, layer.outcome) {
+        (Some(UncertaintyReason::UnverifiedDefault), _) => {
+            if layer
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.source.is_some())
+            {
+                "Startup file (unverified)"
+            } else {
+                "Default (unverified)"
+            }
+        }
+        (Some(UncertaintyReason::UnresolvedBindingKey { .. }), _) => "Possible match",
+        (_, Outcome::Pass) => "No matching binding",
+        (_, Outcome::HandledAndPassed) if terminal_observed => "Observed receipt",
+        (_, Outcome::HandledAndPassed) => "Matching binding",
+        (_, Outcome::Consumed) => "Configured to stop",
+        (_, Outcome::Redirected) => "Redirected",
+        (_, Outcome::HandledUncertain | Outcome::UncertainContinues | Outcome::Unknown) => {
             "Forwarding unknown"
         }
-        Outcome::Unavailable => "Unavailable",
-        Outcome::UnadaptedTarget => "Not evaluated",
+        (_, Outcome::Unavailable) => "Unavailable",
+        (_, Outcome::UnadaptedTarget) => "Not evaluated",
     };
     let status = match status {
         "Unavailable" => options.failure(status),
-        "Forwarding unknown" => options.uncertain(status),
+        "Forwarding unknown"
+        | "Possible match"
+        | "Default (unverified)"
+        | "Startup file (unverified)" => options.uncertain(status),
         "Observed receipt" => options.success(status),
         "No matching binding" | "Not evaluated" => options.muted(status),
         _ => status.to_owned(),
     };
-    let explanation = if layer.id == LayerId::Tty && layer.outcome == Outcome::Consumed {
-        "terminal signal handling".into()
-    } else if let Some(binding) = &layer.binding {
-        binding
-            .description
-            .clone()
-            .or_else(|| binding.action.clone())
-            .unwrap_or_else(|| concise_summary(&layer.summary))
-    } else if observation.is_some_and(|value| {
-        value.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
-    }) {
-        "event received at the compositor".into()
-    } else {
-        concise_summary(&layer.summary)
-    };
+    let explanation =
+        if let Some(UncertaintyReason::UnresolvedBindingKey { candidates, .. }) = reason {
+            format!(
+                "{candidates} binding{} with unreported keys",
+                if candidates == 1 { "" } else { "s" }
+            )
+        } else if let Some(binding) = &layer.binding {
+            binding
+                .description
+                .clone()
+                .or_else(|| binding.action.clone())
+                .unwrap_or_else(|| concise_summary(&layer.summary))
+        } else if observation.is_some_and(|value| {
+            value.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
+        }) {
+            "event received at the compositor".into()
+        } else {
+            concise_summary(&layer.summary)
+        };
     format!("{} — {status}: {explanation}", layer.layer)
 }
 
 fn concise_binding_evidence(layer: &LayerResult) -> Option<String> {
     let binding = layer.binding.as_ref()?;
     let mut fields = Vec::new();
-    if let Some(action) = &binding.action {
-        fields.push(format!("action {action}"));
+    match binding.uncertainty {
+        // The row already names the count; the candidates are verbose-only.
+        Some(UncertaintyReason::UnresolvedBindingKey { .. }) => return None,
+        // The row already names the action.
+        Some(UncertaintyReason::UnverifiedDefault) => {}
+        _ => {
+            if let Some(action) = &binding.action {
+                fields.push(format!("action {action}"));
+            }
+        }
     }
     if let Some(source) = &binding.source {
         let location = source.line.map_or_else(
@@ -832,21 +918,43 @@ fn uncertainty_text(
     {
         return Some("One or more integrations were unavailable, so downstream behavior remains conditional.".into());
     }
-    if layers
-        .iter()
-        .any(|layer| layer.status() == LayerStatus::Indeterminate)
-    {
+    // Layers whose uncertainty is a typed, already-explained reason (an
+    // unverified shell default, bindings with unreported keys) do not need
+    // the generic forwarding caveat.
+    let unexplained = || {
+        layers.iter().filter(|layer| {
+            !matches!(
+                layer
+                    .binding
+                    .as_ref()
+                    .and_then(|binding| binding.uncertainty),
+                Some(
+                    UncertaintyReason::UnverifiedDefault
+                        | UncertaintyReason::UnresolvedBindingKey { .. }
+                )
+            )
+        })
+    };
+    if unexplained().any(|layer| layer.status() == LayerStatus::Indeterminate) {
         return Some(
             "One or more layers remain uncertain, so downstream behavior is conditional.".into(),
         );
     }
-    if layers
-        .iter()
-        .any(|layer| layer.propagation() == Propagation::Indeterminate)
-    {
+    if unexplained().any(|layer| layer.propagation() == Propagation::Indeterminate) {
         return Some("At least one layer could not establish whether it forwards the key.".into());
     }
     None
+}
+
+/// The command that loads live bindings for a shell layer answering from
+/// defaults or startup files.
+fn shell_init_command(layer: &str) -> Option<&'static str> {
+    match layer {
+        "Bash / Readline" => Some("eval \"$(whykey shell-init bash)\""),
+        "Zsh / ZLE" => Some("eval \"$(whykey shell-init zsh)\""),
+        "Fish" => Some("whykey shell-init fish | source"),
+        _ => None,
+    }
 }
 
 fn next_step(
@@ -857,6 +965,19 @@ fn next_step(
 ) -> Option<String> {
     if observation.is_some_and(|value| value.source.proves_compositor_receipt()) {
         return Some("Use --suppress only when you need to inspect a compositor binding without letting its normal action run.".into());
+    }
+    if let Some(command) = layers
+        .iter()
+        .filter(|layer| {
+            layer
+                .binding
+                .as_ref()
+                .and_then(|binding| binding.uncertainty)
+                == Some(UncertaintyReason::UnverifiedDefault)
+        })
+        .find_map(|layer| shell_init_command(layer.layer))
+    {
+        return Some(format!("Load live shell bindings: {command}"));
     }
     if matches!(
         conclusion,
@@ -1263,6 +1384,20 @@ pub enum Conclusion {
     UnverifiedSession {
         layer: &'static str,
     },
+    /// A shell answers from its built-in defaults or startup files; the live
+    /// shell may have rebound the key.
+    UnverifiedDefault {
+        layer: &'static str,
+        action: String,
+        source: Option<String>,
+    },
+    /// The layer has bindings whose keys it does not report; any of them
+    /// may use this key. `summary` is the adapter's description of them.
+    PossibleUnresolvedMatch {
+        layer: &'static str,
+        summary: String,
+        consumes_if_matched: bool,
+    },
     HandledAndForwarded {
         layers: Vec<&'static str>,
         uncertain: bool,
@@ -1277,7 +1412,11 @@ pub enum Conclusion {
     IndeterminateForwarding {
         layer: &'static str,
     },
-    ConditionalForwarding,
+    /// No layer reports a binding; the named layers could not establish
+    /// whether they handle or forward the key.
+    NoBindingReported {
+        unknown: Vec<&'static str>,
+    },
     NoLayersInspected,
     UnhandledContinues,
 }
@@ -1468,6 +1607,46 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
         };
     }
 
+    // Bindings with unreported keys decide the route only when no earlier
+    // layer already matched the key.
+    if let Some(layer) = layers.iter().find(|l| {
+        l.status() == LayerStatus::Handled
+            || matches!(
+                l.binding.as_ref().and_then(|b| b.uncertainty),
+                Some(UncertaintyReason::UnresolvedBindingKey { .. })
+            )
+    }) && let Some(UncertaintyReason::UnresolvedBindingKey {
+        consumes_if_matched,
+        ..
+    }) = layer.binding.as_ref().and_then(|b| b.uncertainty)
+    {
+        return Conclusion::PossibleUnresolvedMatch {
+            layer: layer.layer,
+            summary: concise_summary(&layer.summary),
+            consumes_if_matched,
+        };
+    }
+
+    let unverified_default = |l: &LayerResult| {
+        l.binding.as_ref().and_then(|b| b.uncertainty) == Some(UncertaintyReason::UnverifiedDefault)
+    };
+    if let Some(shell) = layers.iter().find(|l| unverified_default(l))
+        && !layers
+            .iter()
+            .any(|l| l.status() == LayerStatus::Handled && !unverified_default(l))
+    {
+        let binding = shell.binding.as_ref();
+        return Conclusion::UnverifiedDefault {
+            layer: shell.layer,
+            action: binding
+                .and_then(|b| b.action.clone())
+                .unwrap_or_else(|| concise_summary(&shell.summary)),
+            source: binding
+                .and_then(|b| b.source.as_ref())
+                .map(|source| source.file.clone()),
+        };
+    }
+
     let handled_layers: Vec<_> = layers
         .iter()
         .filter(|layer| layer.status() == LayerStatus::Handled)
@@ -1509,33 +1688,51 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
     }) {
         return Conclusion::ModifierAmbiguity { layer: layer.layer };
     }
+    // Only a layer with binding evidence has a candidate match; an
+    // indeterminate layer without one merely could not be evaluated.
     if let Some(layer) = layers.iter().find(|l| {
-        l.status() == LayerStatus::Indeterminate && l.propagation() == Propagation::Indeterminate
+        l.status() == LayerStatus::Indeterminate
+            && l.propagation() == Propagation::Indeterminate
+            && l.binding.is_some()
     }) {
         return Conclusion::IndeterminateForwarding { layer: layer.layer };
     }
 
-    if !terminal_observed && has_uncertain_layer(layers) {
-        Conclusion::ConditionalForwarding
+    // An event observed at the terminal proves every earlier layer forwarded
+    // it, so only later layers can remain unknown.
+    let first_unproven = if terminal_observed {
+        layers
+            .iter()
+            .position(|l| l.id == LayerId::Terminal)
+            .map_or(0, |index| index + 1)
     } else {
+        0
+    };
+    let mut unknown: Vec<&'static str> = Vec::new();
+    for layer in &layers[first_unproven..] {
+        if is_uncertain(layer) && !unknown.contains(&layer.layer) {
+            unknown.push(layer.layer);
+        }
+    }
+    if unknown.is_empty() {
         Conclusion::UnhandledContinues
+    } else {
+        Conclusion::NoBindingReported { unknown }
     }
 }
 
+fn is_uncertain(layer: &LayerResult) -> bool {
+    layer.status() == LayerStatus::Indeterminate
+        || layer.status() == LayerStatus::Unavailable
+        || layer.propagation() == Propagation::Indeterminate
+}
+
 fn prior_uncertainty(layers: &[LayerResult]) -> bool {
-    layers.iter().rev().skip(1).any(|layer| {
-        layer.status() == LayerStatus::Indeterminate
-            || layer.status() == LayerStatus::Unavailable
-            || layer.propagation() == Propagation::Indeterminate
-    })
+    layers.iter().rev().skip(1).any(is_uncertain)
 }
 
 fn has_uncertain_layer(layers: &[LayerResult]) -> bool {
-    layers.iter().any(|layer| {
-        layer.status() == LayerStatus::Indeterminate
-            || layer.status() == LayerStatus::Unavailable
-            || layer.propagation() == Propagation::Indeterminate
-    })
+    layers.iter().any(is_uncertain)
 }
 
 fn confidence_label(layers: &[LayerResult], observed: bool) -> &'static str {
@@ -1568,7 +1765,8 @@ mod tests {
 
         assert!(output.contains("Ctrl+Left · Inspect"));
         assert!(output.contains("No inspected layer matches; it can continue."));
-        assert!(output.contains("No matching binding"));
+        assert!(output.contains("No matching handler was found in the inspected layers."));
+        assert!(!output.contains("Hyprland — No matching binding"));
         assert!(output.contains("--verbose"));
 
         let verbose = render(&key, std::slice::from_ref(&layer), true);
@@ -1669,7 +1867,9 @@ mod tests {
         assert!(
             output.contains("Hyprland has a matching binding and is configured to forward it.")
         );
-        assert!(output.contains("Ghostty — No matching binding"));
+        // A terminal that only passes the key on is verbose-only evidence.
+        assert!(!output.contains("Ghostty — No matching binding"));
+        assert!(render(&key, &layers, true).contains("Ghostty [NotHandled; Continues]"));
     }
 
     #[test]
@@ -2601,7 +2801,7 @@ mod tests {
                 "TTY driver",
                 LayerId::Tty,
                 Outcome::Consumed,
-                "interprets byte 0x1a as VSUSP",
+                "terminal signal handling; interprets byte 0x1a as VSUSP (SIGTSTP)",
                 vec![
                     "special character: VSUSP = ^Z".into(),
                     "byte: 0x1a".into(),
@@ -2685,7 +2885,7 @@ mod tests {
             "TTY driver",
             LayerId::Tty,
             Outcome::Consumed,
-            "interprets byte 0x1a as VSUSP",
+            "terminal signal handling; interprets byte 0x1a as VSUSP (SIGTSTP)",
             vec!["special character: VSUSP = ^Z".into()],
         );
         let narrow =
@@ -2708,5 +2908,275 @@ mod tests {
         assert!(colored.contains("\x1b[1m"));
         let json = render_json(&key, &[], None, 1);
         assert!(!json.contains("\x1b["));
+    }
+
+    fn render_wide(key: &str, layers: &[LayerResult]) -> String {
+        let key: KeyCombo = key.parse().unwrap();
+        render_with_options(
+            &key,
+            layers,
+            RenderOptions {
+                color: crate::style::ColorChoice::Never,
+                verbose: false,
+                width: 400,
+            },
+        )
+    }
+
+    fn unevaluated_byte_layers() -> Vec<LayerResult> {
+        vec![
+            LayerResult::pass(
+                "Hyprland",
+                LayerId::Compositor,
+                "no active binding found",
+                vec![],
+            ),
+            LayerResult::pass(
+                "Kitty",
+                LayerId::Terminal,
+                "no Kitty binding; forwarded to the terminal input",
+                vec![],
+            ),
+            LayerResult::pass(
+                "Ghostty",
+                LayerId::Terminal,
+                "not applicable to the current terminal",
+                vec![],
+            ),
+            LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Unknown,
+                "terminal byte encoding is unknown; TTY signal checks unevaluated",
+                vec![],
+            ),
+            LayerResult::new(
+                "Shell input",
+                LayerId::Shell,
+                Outcome::Unknown,
+                "terminal byte encoding is unknown; shell line editing unevaluated",
+                vec![],
+            ),
+        ]
+    }
+
+    #[test]
+    fn unevaluated_layers_without_bindings_do_not_claim_a_match() {
+        let output = render_wide("super+1", &unevaluated_byte_layers());
+
+        assert!(output.contains(
+            "No inspected layer reports a binding; handling is unknown in TTY driver and Shell input."
+        ));
+        assert!(!output.contains("has a matching key"));
+        assert!(output.contains(
+            "No matching configuration was found. The shortcut continues downstream unless it is handled by TTY driver or Shell input."
+        ));
+    }
+
+    #[test]
+    fn indeterminate_layer_with_binding_evidence_keeps_candidate_headline() {
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Unknown,
+            "binding found",
+            vec![],
+        )
+        .with_binding(BindingEvidence::action(
+            "exec foo",
+            BindingScope::Unknown,
+            None,
+        ))];
+
+        let output = render_wide("super+1", &layers);
+
+        assert!(output.contains("Hyprland has a matching key, but forwarding is unknown."));
+    }
+
+    #[test]
+    fn effect_does_not_invent_a_configured_layer() {
+        let layers = [
+            LayerResult::pass("Kitty", LayerId::Terminal, "no Kitty binding", vec![]),
+            LayerResult::uncertain_continues(
+                "Input method",
+                LayerId::Ime,
+                "an active input method may transform this input before text is committed",
+                vec![],
+            ),
+        ];
+
+        let output = render_wide("ctrl+t", &layers);
+
+        assert!(!output.contains("A configured layer may handle"));
+        assert!(output.contains("unless it is handled by Input method."));
+    }
+
+    #[test]
+    fn passing_and_inapplicable_layers_are_verbose_only() {
+        let output = render_wide("ctrl+]", &unevaluated_byte_layers());
+
+        assert!(!output.contains("Kitty —"));
+        assert!(!output.contains("Ghostty —"));
+        assert!(!output.contains("Hyprland —"));
+        assert!(output.contains("TTY driver — Forwarding unknown"));
+
+        let key: KeyCombo = "ctrl+]".parse().unwrap();
+        let verbose = render(&key, &unevaluated_byte_layers(), true);
+        assert!(verbose.contains("Ghostty [NotHandled; Continues]"));
+    }
+
+    #[test]
+    fn doctor_is_suggested_only_for_unavailable_layers() {
+        let output = render_wide("ctrl+t", &unevaluated_byte_layers());
+        assert!(!output.contains("whykey doctor"));
+
+        let mut layers = unevaluated_byte_layers();
+        layers.push(LayerResult::unavailable(
+            "tmux",
+            LayerId::Multiplexer,
+            "tmux server is unreachable",
+            vec![],
+        ));
+        assert!(render_wide("ctrl+t", &layers).contains("whykey doctor"));
+    }
+
+    #[test]
+    fn consumed_tty_row_uses_the_layer_summary() {
+        let layers = [LayerResult::consumed(
+            "TTY driver",
+            LayerId::Tty,
+            "terminal flow control (IXON); Ctrl+S matches VSTOP",
+            vec![],
+        )];
+
+        let output = render_wide("ctrl+s", &layers);
+
+        assert!(output.contains("TTY driver — Configured to stop: terminal flow control (IXON)"));
+    }
+
+    fn readline_default(source: Option<crate::layers::SourceLocation>) -> LayerResult {
+        LayerResult::new(
+            "Bash / Readline",
+            LayerId::Shell,
+            Outcome::HandledUncertain,
+            "bound to transpose-chars",
+            vec!["sequence: 0x14".into()],
+        )
+        .with_binding(
+            BindingEvidence::action("transpose-chars", BindingScope::Unknown, source)
+                .with_uncertainty(UncertaintyReason::UnverifiedDefault),
+        )
+    }
+
+    #[test]
+    fn unverified_shell_default_is_not_described_as_forwarding() {
+        let layers = [
+            LayerResult::pass("Kitty", LayerId::Terminal, "no Kitty binding", vec![]),
+            readline_default(None),
+        ];
+
+        let output = render_wide("ctrl+t", &layers);
+
+        assert!(output.contains(
+            "Bash / Readline's default binds this to transpose-chars, but your shell config may override it."
+        ));
+        assert!(output.contains("Bash / Readline — Default (unverified): transpose-chars"));
+        assert!(output.contains("Load live shell bindings: eval \"$(whykey shell-init bash)\""));
+        assert!(!output.contains("forwarding is unknown"));
+        assert!(!output.contains("Forwarding unknown"));
+        assert!(!output.contains("uncertain forwarding"));
+        assert!(!output.contains("could not establish whether it forwards"));
+
+        let json = render_json(&"ctrl+t".parse().unwrap(), &layers, None, 2);
+        assert!(json.contains("\"UnverifiedDefault\""), "{json}");
+    }
+
+    #[test]
+    fn unverified_inputrc_binding_names_the_file() {
+        let layers = [readline_default(Some(crate::layers::SourceLocation::new(
+            "/home/user/.inputrc",
+            None,
+        )))];
+
+        let output = render_wide("ctrl+t", &layers);
+
+        assert!(output.contains(
+            "Bash / Readline binds this to transpose-chars in /home/user/.inputrc, but your shell config may override it."
+        ));
+        assert!(output.contains("Startup file (unverified): transpose-chars"));
+    }
+
+    #[test]
+    fn zsh_and_fish_defaults_suggest_their_own_shell_init() {
+        for (layer, command) in [
+            ("Zsh / ZLE", "eval \"$(whykey shell-init zsh)\""),
+            ("Fish", "whykey shell-init fish | source"),
+        ] {
+            let layers = [LayerResult::new(
+                layer,
+                LayerId::Shell,
+                Outcome::Unknown,
+                "common default likely binds to transpose-chars",
+                vec![],
+            )
+            .with_binding(
+                BindingEvidence::action("transpose-chars", BindingScope::Unknown, None)
+                    .with_uncertainty(UncertaintyReason::UnverifiedDefault),
+            )];
+            let output = render_wide("ctrl+t", &layers);
+            assert!(output.contains(&format!("{layer}'s default binds this to transpose-chars")));
+            assert!(output.contains(&format!("Load live shell bindings: {command}")));
+        }
+    }
+
+    fn unresolved_hyprland(consumes_if_matched: bool) -> LayerResult {
+        LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Unknown,
+            "10 Super bindings have keys hyprctl does not report (e.g. 'Switch to workspace 1')",
+            vec![],
+        )
+        .with_binding(
+            BindingEvidence::action(
+                "one of 10 bindings whose key Hyprland does not report",
+                BindingScope::Submap("default".into()),
+                None,
+            )
+            .with_uncertainty(UncertaintyReason::UnresolvedBindingKey {
+                candidates: 10,
+                consumes_if_matched,
+            }),
+        )
+    }
+
+    #[test]
+    fn unresolved_binding_keys_are_a_possible_match_not_unknown_forwarding() {
+        let mut layers = vec![unresolved_hyprland(true)];
+        layers.extend(unevaluated_byte_layers().into_iter().skip(1));
+
+        let output = render_wide("super+1", &layers);
+
+        assert!(output.contains(
+            "Hyprland may handle this: 10 Super bindings have keys hyprctl does not report (e.g. 'Switch to workspace 1')."
+        ));
+        assert!(output.contains("If one of them uses this key, Hyprland consumes it."));
+        assert!(output.contains("Hyprland — Possible match: 10 bindings with unreported keys"));
+        assert!(!output.contains("Hyprland has a matching key"));
+        assert!(!output.contains("action one of 10"));
+
+        let generic = render_wide("super+1", &[unresolved_hyprland(false)]);
+        assert!(generic.contains(
+            "If one of them uses this key, Hyprland handles it; whether it is passed on is unknown."
+        ));
+    }
+
+    #[test]
+    fn mod5_is_displayed_as_altgr_in_human_output() {
+        let key = KeyCombo::parse_query("altgr+q").unwrap();
+        let output = render(&key, &[], false);
+        assert!(output.starts_with("AltGr+Q · Inspect"), "{output}");
+        let json = render_json(&key, &[], None, 1);
+        assert!(json.contains("\"modifiers\": 128"), "{json}");
     }
 }

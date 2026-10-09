@@ -7,13 +7,15 @@ fn run_evdev(_options: Options) -> Result<(), ListenError> {
 
 #[cfg(target_os = "linux")]
 fn run_evdev(options: Options) -> Result<(), ListenError> {
+    // Install first: the guard must outlive the capture session it protects.
+    let signals = SignalGuard::install()?;
     let snapshot = ListenSession::capture();
     let mut backend = EvdevBackend::open(options.device.as_deref())?;
     backend.set_events_all(options.events_all);
     backend
         .arm(CapturePolicy::PassThrough)
         .map_err(ListenError::Setup)?;
-    run_observed_loop(options, backend, snapshot, None)
+    run_observed_loop(options, backend, snapshot, None, &signals)
 }
 
 #[cfg(target_os = "linux")]

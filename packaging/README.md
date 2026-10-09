@@ -39,3 +39,13 @@ crates from `Cargo.lock` through its fixed-output dependency builder.
 
 None of these recipes install a service, udev rule, input-group membership, or
 desktop autostart entry. Physical capture remains an explicit read-only action.
+
+Every recipe also installs the first-party `whykey-nvim`, `whykey-vscode`, and
+`whykey-emacs` extensions. They are `#!/usr/bin/env python3` scripts, so the
+recipes declare `python3` as optional for them (Debian and RPM `Recommends`,
+Arch `optdepends`). The Nix recipe patches their shebangs to its `python3`.
+The `whykey` binary itself needs no Python.
+
+The PKGBUILD lists `x86_64` and `aarch64` because it compiles the vendored
+source archive. Prebuilt release binaries are only published for
+`x86_64-unknown-linux-gnu`.

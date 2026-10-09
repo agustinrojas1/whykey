@@ -8,12 +8,15 @@ not observable. Adapter applicability never means that every binding is known.
 ## Desktop and compositor adapters
 
 Native capture backends are separate from static desktop adapters. Hyprland
-uses socket2 IPC and a temporary Lua hook, restores the recorded submap before
-reporting, and exposes `capture.native-compositor`. Sway exposes read-only
-binding notifications through IPC in pass-through mode (`capture.native-sway`);
-Sway IPC has no suppression/restoration hook, so default suppression fails
-closed and users must select `--no-suppress`. Other desktops keep their static
-inspection adapters and fall back to terminal or evdev capture.
+uses socket2 IPC and a temporary Lua hook (`capture.native-compositor`). The
+default pass-through hook only observes. `--suppress` also installs the private
+`__whykey_capture` submap and restores the recorded submap before each report.
+Both hooks carry a 5-second lease that whykey renews every 2 seconds, so a
+listener killed without cleanup cannot leave them behind. Sway reports binding
+events through IPC in pass-through mode (`capture.native-sway`). Pass-through
+is the default there too. Sway IPC has no suppression hook, so an explicit
+`--suppress` fails and points to `--no-suppress`. Other desktops keep their
+static inspection adapters and fall back to terminal or evdev capture.
 
 Support tiers are T1 live IPC, T2 live query, T3 literal configuration, and
 T4 manifest extension. T4 manifests are opt-in, bounded, and conditional. They
@@ -22,9 +25,9 @@ not add a capture backend.
 
 | Adapter | Detection | Source/API | Version evidence | Parsed or reported | Explicit unknown boundary |
 | --- | --- | --- | --- | --- | --- |
-| Hyprland | `HYPRLAND_INSTANCE_SIGNATURE`, instance discovery, or Hyprland IPC; skipped for remote SSH | `hyprctl binds/submap/devices/activewindow`, literal config and Lua files; bounded `source=` chains retain file/line hints | IPC availability; version is not persisted | bindings, submaps, device scopes, keymaps, focused PID, Lua/config hints | dynamic Lua, inhibitors, generated config, and runtime-vs-disk divergence |
-| Sway | `SWAYSOCK` or Sway desktop identity; skipped for SSH | `swaymsg -t get_bindings/get_tree` (the compositor resolves its own includes before IPC) | native version probe for applicability | bindings, release/exact/pass behavior, focused PID | runtime ordering outside IPC, external grabs, and unobservable source-file provenance |
-| i3 | `I3SOCK` or i3 desktop identity; skipped for SSH | `i3-msg -t get_bindings/get_tree` (the compositor resolves its own includes before IPC) | native version probe for applicability | bindings, release/exact/nop/pass behavior, focused PID | external clients, ordering races, unreported grabs, and unobservable source-file provenance |
+| Hyprland | `HYPRLAND_INSTANCE_SIGNATURE`, instance discovery, or Hyprland IPC; skipped for remote SSH | `hyprctl binds/submap/devices/activewindow`, literal config and Lua files; bounded `source=` chains retain file/line hints | IPC availability; version is not persisted | bindings, submaps, device scopes, keymaps, focused PID, Lua/config hints; keysym-named keys are normalized; `__lua`/plugin dispatchers consume unless the callback returns `pass_event` | dynamic Lua, inhibitors, generated config, and runtime-vs-disk divergence. Runtime-built Lua binds that Hyprland reports with key `""`/keycode 0 are resolved only from a literal Lua `code:` hint. Otherwise they stay possible matches for their modifiers, and `conflicts` counts them without comparing them |
+| Sway | `SWAYSOCK` or Sway desktop identity; skipped for SSH | `swaymsg -t get_config -r` (running main config), `get_binding_state`, `get_tree`; `include` files are read from disk (`~`, `$ENV`, last-component globs) | native version probe for applicability | `set`/`set_from_resource` variables (resource fallback only), modes, `bindsym`/`bindcode`/`unbind*` with `--release`/`--locked`/`--inhibited`/`--input-device`, exact modifiers, focused PID; a `nop` binding still grabs the key; `--release` binds forward the press | included files on disk may differ from what Sway loaded; runtime `bindsym` via IPC, external grabs, and unknown binding mode (assumed default when `get_binding_state` fails) |
+| i3 | `I3SOCK` or i3 desktop identity; skipped for SSH | `i3-msg -t get_config` (running config plus `included_configs`), `get_binding_state`, `get_tree` | native version probe for applicability | variables, modes, `bindsym`/`bindcode`/`unbind*` flags, exact modifiers, focused PID; a `nop` binding still grabs the key | runtime `bindsym` via IPC, external clients, unreported grabs, whether a `--release` bind withholds the press (unverified, reported as uncertain), and unknown binding mode (assumed default when `get_binding_state` fails) |
 | GNOME | GNOME desktop/session identity or `gsettings` availability | `gsettings` media-key and custom-keybinding schemas | no version claim | standard/custom literal accelerators and configured command text | daemon runtime registration, extensions, and command execution |
 | GNOME Shell runtime | GNOME Shell session D-Bus introspection | `org.gnome.Shell` read-only introspection | service reachability only | live API reachability; no full keybinding dump is claimed | Shell exposes no read-only full shortcut inventory; extensions and runtime state remain unknown |
 | KDE Plasma | KDE desktop identity or `kglobalshortcutsrc` path | `kglobalshortcutsrc` (or `KGLOBALSHORTCUTS_CONFIG`) plus read-only `org.kde.KGlobalAccel` introspection | service reachability only | literal file bindings with live-vs-file provenance | the bounded D-Bus spike found no stable, read-only enumeration contract for `allComponents`/`getGlobalShortcuts`; live registrations, runtime reload, and plugin shortcuts remain conditional |
@@ -61,12 +64,12 @@ not add a capture backend.
 
 | Adapter | Detection | Source/API | Version evidence | Parsed or reported | Explicit unknown boundary |
 | --- | --- | --- | --- | --- | --- |
-| Linux TTY | readable `/dev/tty` | `termios` and terminal adapter bytes | kernel behavior is not version-claimed | `ISIG`, `VSUSP`, canonical/flow-control evidence | kernel line discipline details outside the snapshot |
-| Bash/Readline | `SHELL` plus shell-init snapshot or inputrc paths | runtime `bind` snapshot, `INPUTRC`, `/etc/inputrc` | Bash version is not claimed | active map, macros, shell commands, literal overrides | unobserved runtime mode and generated includes |
+| Linux TTY | readable `/dev/tty` | `termios` and terminal adapter bytes | kernel behavior is not version-claimed | `ISIG` signal characters (`VINTR`/`VQUIT`/`VSUSP`) and `IXON` flow control (`VSTOP`/`VSTART`) reported separately; bytes shared with other keys (Escape, Tab, Return, Ctrl+@/Space, Ctrl+H) are called out | kernel line discipline details outside the snapshot |
+| Bash/Readline | `SHELL` (or the `--pid` target's parent shell) plus shell-init snapshot or inputrc paths | runtime `bind -P/-S/-X` snapshot when present (then authoritative); otherwise `INPUTRC`, `~/.inputrc`, `/etc/inputrc` plus GNU Readline's emacs defaults | Bash version is not claimed | active map, prefix keys (`\C-x`, `\e`) and their continuations, multi-key sequences across `inspect` steps, macros, `bind -x` shell commands | without a snapshot, answers are reported as unverified because `~/.bashrc` `bind` commands may override them; unobserved runtime mode and generated includes |
 | Zsh/ZLE | `SHELL` plus shell-init snapshot/config | `WHYKEY_ZLE_BINDINGS`, `.zshrc`/`.zshenv` | Zsh version is not claimed | active keymap and literal sequences | plugin-generated maps and runtime mode races |
 | Fish | `SHELL` plus shell-init snapshot/config | `WHYKEY_FISH_BINDINGS`, `config.fish` | Fish version is not claimed | active bind mode and literal sequences | dynamic functions, generated bindings, and unknown mode |
-| tmux | `TMUX`/`TMUX_PANE` | `tmux list-keys` root/active/prefix tables | command output only | active table, prefixes, bindings, action classification | nested server races and hooks not visible through tables |
-| GNU Screen | `STY` or screen process/config | system then user `screenrc`, `bind`, `bindkey` | command/config evidence only | effective prefix and literal bindings | nested sessions, runtime reload, and shell expansion |
+| tmux | `TMUX`/`TMUX_PANE` | `tmux list-keys` root/active/prefix tables | command output only | a bare key is looked up in the active (or root) table only; across `inspect` steps the prefix and `switch-client -T` select the next table, and an unbound key after the prefix is reported as discarded | nested server races and hooks not visible through tables |
+| GNU Screen | `STY` or screen process/config | system then user `screenrc`, `bind`, `bindkey` | command/config evidence only | effective prefix and literal bindings; a key right after the command escape in an `inspect` sequence is resolved against `bind` | nested sessions, runtime reload, and shell expansion |
 | Zellij | `ZELLIJ` markers or config | dumped defaults plus `config.kdl` overrides | installed command availability only | mode tables, defaults, user overrides, clear-defaults | active mode unless explicitly supplied and runtime reload |
 | SSH boundary | `SSH_CONNECTION`/`SSH_TTY` | local process ancestry, PTY, and environment | not applicable | local/remote boundary and conditional remote leg | remote whykey state and remote application internals |
 
@@ -80,9 +83,16 @@ not add a capture backend.
 | kmonad | process/config detection | literal config aliases/layers/tap-hold forms | process/config evidence only | conservative literal mappings | active layer and timing-dependent behavior |
 | input-remapper | process/config detection | bounded JSON mapping pairs | process/config evidence only | literal pairs | profiles, timing, and virtual-device routing |
 | xremap | process/config detection | bounded YAML `remap` entries | process/config evidence only | literal remaps | device matching, layers, and generated config |
-| Fcitx5 | session variables/process and D-Bus preflight | bounded read-only `org.fcitx.Fcitx.Controller1` calls | service presence only | active engine/context when query succeeds | committed text, application preedit, and unavailable D-Bus |
-| IBus | session variables/process and safe API availability | read-only IBus context where available | service presence only | detected IME context and limited engine state | committed text, dead-key/Compose history, and app preedit |
+| Fcitx5 | session variables/process and D-Bus preflight | bounded read-only `org.fcitx.Fcitx.Controller1` calls | service presence only | active engine/context when query succeeds; an inactive context or a plain `keyboard-*` engine passes keys through | committed text, application preedit, input-method hotkeys, and unavailable D-Bus |
+| IBus | session variables/process and safe API availability | read-only IBus context where available | service presence only | detected IME context and limited engine state; an inactive context or an `xkb:*` engine passes keys through | committed text, dead-key/Compose history, input-method hotkeys, and app preedit |
 | XKB/layout | device keymap fields and optional `xkbcli` | RMLVO/keymap data, compiled `symbols[N]` groups, `NoSymbol` level positions, and optional `WHYKEY_XKB_GROUP` | compiler availability only | symbolic/code candidates plus typed Shift/AltGr/Caps/NumLock/latched level state when supplied | compositor-independent Compose history and missing group/RMLVO state remain conditional |
+
+The route stops at a remapper result that consumes the key. A redirect sends
+the target key to the later layers, or makes them conditional when the target
+cannot be parsed. The remapper adapters above currently report only pass or
+uncertain results, so neither path is reached with real configurations yet.
+An Input method row is shown whenever an IME is detected, right after the
+Terminal row.
 
 ## Interactive application adapters
 

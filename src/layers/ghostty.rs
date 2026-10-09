@@ -183,19 +183,7 @@ impl Ghostty {
 }
 
 fn known_non_ghostty_terminal() -> Option<String> {
-    let Some(program) = env::var("TERM_PROGRAM")
-        .ok()
-        .or_else(|| env::var("LC_TERMINAL").ok())
-        .or_else(|| {
-            let term = env::var("TERM").ok()?;
-            let normalized = term.to_ascii_lowercase();
-            matches!(
-                normalized.as_str(),
-                "xterm-kitty" | "foot" | "foot-direct" | "xterm-ghostty"
-            )
-            .then_some(term)
-        })
-    else {
+    let Some(program) = crate::layers::terminal_app::terminal_program() else {
         return Some("terminal identity unknown".into());
     };
     let normalized = program.to_ascii_lowercase();
@@ -594,7 +582,10 @@ fn default_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
     default_encoding_for_protocol(key, None)
 }
 
-fn default_encoding_for_protocol(key: &KeyCombo, protocol_flags: Option<u32>) -> Option<Vec<u8>> {
+pub(crate) fn default_encoding_for_protocol(
+    key: &KeyCombo,
+    protocol_flags: Option<u32>,
+) -> Option<Vec<u8>> {
     if let Some(flags) = protocol_flags {
         if flags & (1 | 8) != 0 {
             if let Some(bytes) = kitty_encoding(key) {
@@ -636,13 +627,14 @@ fn kitty_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
 }
 
 fn default_non_arrow_encoding(key: &str, mask: u32) -> Option<Vec<u8>> {
-    if key.len() == 1 && mask & 4 != 0 && mask & !(4 | 8) == 0 {
-        let character = key.as_bytes()[0].to_ascii_uppercase();
-        if character.is_ascii_alphabetic() {
-            return Some(vec![character & 0x1f]);
-        }
-        if character == b' ' {
-            return Some(vec![0]);
+    if mask & 4 != 0 && mask & !(4 | 8) == 0 {
+        if let Some(byte) = crate::layers::terminal::legacy_control_byte(key) {
+            // Alt prefixes the control byte with ESC in legacy encoding.
+            return Some(if mask & 8 != 0 {
+                vec![0x1b, byte]
+            } else {
+                vec![byte]
+            });
         }
     }
     if mask == 0 && key.chars().count() == 1 {
@@ -938,6 +930,23 @@ mod tests {
             input.as_ref().map(|input| input.bytes.as_slice()),
             Some(&b"\x1b[70;5u"[..])
         );
+    }
+
+    #[test]
+    fn encodes_ctrl_punctuation_and_space_as_control_bytes() {
+        for (key, bytes) in [
+            ("ctrl+bracketright", vec![0x1d]),
+            ("ctrl+bracketleft", vec![0x1b]),
+            ("ctrl+backslash", vec![0x1c]),
+            ("ctrl+asciicircum", vec![0x1e]),
+            ("ctrl+underscore", vec![0x1f]),
+            ("ctrl+at", vec![0x00]),
+            ("ctrl+space", vec![0x00]),
+            ("ctrl+alt+x", vec![0x1b, 0x18]),
+        ] {
+            let combo: KeyCombo = key.parse().unwrap();
+            assert_eq!(default_encoding(&combo), Some(bytes), "{key}");
+        }
     }
 
     #[test]

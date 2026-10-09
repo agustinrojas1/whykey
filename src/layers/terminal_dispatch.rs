@@ -21,7 +21,7 @@ impl TerminalAnalysis {
     /// bytes from the same loaded configuration.
     pub fn analyze(key: &KeyCombo, protocol_flags: Option<u32>) -> Self {
         if let Some(name) = terminal_app::detected_name() {
-            let (layer, input) = terminal_app::analyze(key);
+            let (layer, input) = terminal_app::analyze(key, protocol_flags);
             return Self {
                 layer,
                 input,

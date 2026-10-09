@@ -2,43 +2,78 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput, readline};
-
-pub fn inspect(key: &KeyCombo) -> LayerResult {
-    match shell_name().as_deref() {
-        Some("bash") => readline::Readline.inspect(key),
-        Some("zsh") => inspect_zsh(key, None),
-        Some("fish") => inspect_fish(key, None),
-        Some(shell) => unsupported(shell),
-        None => unsupported("unknown shell"),
-    }
-}
+use crate::layers::{InputConfidence, LayerId, LayerResult, Outcome, TerminalInput, readline};
 
 pub fn inspect_input(input: &TerminalInput) -> LayerResult {
-    match shell_name().as_deref() {
-        Some("bash") => readline::Readline.inspect_input(input),
-        Some("zsh") => inspect_zsh_bytes(input),
-        Some("fish") => inspect_fish_bytes(input),
-        Some(shell) => unsupported(shell),
-        None => unsupported("unknown shell"),
-    }
+    inspect_sequence(std::slice::from_ref(input), None)
 }
 
 /// Inspect the shell associated with a caller-selected process. This avoids
 /// using whykey's own `SHELL` environment when `inspect --pid` or
 /// `inspect --focused` targets a different terminal session.
 pub fn inspect_input_for_pid(input: &TerminalInput, target_pid: u32) -> LayerResult {
-    let Some(shell) = ancestor_shell(target_pid) else {
-        return inspect_input(input);
-    };
-    match shell.as_str() {
-        "bash" => readline::Readline.inspect_input(input),
-        "zsh" => inspect_zsh_bytes(input),
-        "fish" => inspect_fish_bytes(input),
-        other => unsupported(other),
+    inspect_sequence(std::slice::from_ref(input), Some(target_pid))
+}
+
+/// Evaluate the terminal inputs of consecutive key presses that reached the
+/// shell, in order, and describe what the last one does. Bash replays them
+/// through Readline's keymap (prefix keys such as `\C-x` stay pending), so
+/// `[\x18], [\x05]` resolves to `edit-and-execute-command`. `target_pid`
+/// selects that process's ancestor shell instead of whykey's own `SHELL`.
+pub fn inspect_sequence(inputs: &[TerminalInput], target_pid: Option<u32>) -> LayerResult {
+    let shell = target_pid.and_then(ancestor_shell).or_else(shell_name);
+    match shell.as_deref() {
+        Some("bash") => readline::Readline.inspect_sequence(inputs),
+        Some("zsh") => inspect_steps(inputs, inspect_zsh_bytes),
+        Some("fish") => inspect_steps(inputs, inspect_fish_bytes),
+        Some(shell) => unsupported(shell),
+        None => unsupported("unknown shell"),
     }
 }
+
+/// ZLE and Fish bindings are matched against the whole byte sequence first
+/// (`^X^E`), then against the last key alone.
+fn inspect_steps(
+    inputs: &[TerminalInput],
+    inspect: fn(&TerminalInput) -> LayerResult,
+) -> LayerResult {
+    match inputs {
+        [] => inspect_unknown(),
+        [input] => inspect(input),
+        [.., last] => {
+            let combined = inspect(&concatenate(inputs));
+            if combined.outcome == Outcome::Pass {
+                inspect(last)
+            } else {
+                combined
+            }
+        }
+    }
+}
+
+fn concatenate(inputs: &[TerminalInput]) -> TerminalInput {
+    let confidence = if inputs
+        .iter()
+        .any(|input| input.confidence == InputConfidence::Predicted)
+    {
+        InputConfidence::Predicted
+    } else {
+        inputs[0].confidence
+    };
+    TerminalInput {
+        bytes: inputs
+            .iter()
+            .flat_map(|input| input.bytes.iter().copied())
+            .collect(),
+        description: inputs
+            .iter()
+            .map(|input| input.description.as_str())
+            .collect::<Vec<_>>()
+            .join(" + "),
+        confidence,
+    }
+}
+
 pub fn inspect_unknown() -> LayerResult {
     LayerResult::new(
         "Shell input",
@@ -148,7 +183,8 @@ fn inspect_configured_shell_binding(
     } else {
         "binding source: common shell default (inferred)"
     };
-    LayerResult::new(
+    let inferred_default = !configured && !runtime_shell_snapshot(layer);
+    let result = LayerResult::new(
         layer,
         LayerId::Shell,
         if configured {
@@ -175,7 +211,19 @@ fn inspect_configured_shell_binding(
             }
             details
         },
-    )
+    );
+    if inferred_default {
+        result.with_binding(
+            crate::layers::BindingEvidence::action(
+                default_binding,
+                crate::layers::BindingScope::Unknown,
+                None,
+            )
+            .with_uncertainty(crate::layers::UncertaintyReason::UnverifiedDefault),
+        )
+    } else {
+        result
+    }
 }
 
 fn runtime_shell_snapshot(layer: &str) -> bool {
@@ -249,101 +297,18 @@ fn shell_sequence_literal(bytes: &[u8]) -> String {
     sequence
 }
 
-fn inspect_zsh(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
-    let Some((sequence, default_binding)) = zsh_known_key(key) else {
-        return LayerResult::new(
-            "Zsh / ZLE",
-            LayerId::Shell,
-            Outcome::Pass,
-            "no known Zsh binding",
-            vec!["static ZLE defaults are only mapped for common control keys".into()],
-        );
-    };
-    if let Some(input) = input {
-        inspect_configured_shell_binding("Zsh / ZLE", sequence, default_binding, input)
-    } else {
-        let binding = zsh_binding(sequence).unwrap_or_else(|| default_binding.into());
-        LayerResult::new(
-            "Zsh / ZLE",
-            LayerId::Shell,
-            Outcome::Unknown,
-            format!("common default likely binds to {binding}"),
-            vec![format!(
-                "sequence: {}",
-                crate::layers::format_bytes(sequence.as_bytes())
-            )],
-        )
-    }
-}
-
-fn inspect_fish(key: &KeyCombo, input: Option<&TerminalInput>) -> LayerResult {
-    let Some((sequence, default_binding)) = fish_known_key(key) else {
-        return LayerResult::new(
-            "Fish",
-            LayerId::Shell,
-            Outcome::Pass,
-            "no known Fish binding",
-            {
-                let mut details = vec![
-                    "Fish defaults and active mode are not available without runtime bind output"
-                        .into(),
-                ];
-                append_fish_mode_detail(&mut details);
-                details
-            },
-        );
-    };
-    if let Some(input) = input {
-        inspect_configured_shell_binding("Fish", sequence, default_binding, input)
-    } else {
-        let binding = fish_binding(sequence).unwrap_or_else(|| default_binding.into());
-        LayerResult::new(
-            "Fish",
-            LayerId::Shell,
-            Outcome::Unknown,
-            format!("common default likely binds to {binding}"),
-            vec![format!(
-                "sequence: {}",
-                crate::layers::format_bytes(sequence.as_bytes())
-            )],
-        )
-    }
-}
-
-fn zsh_known_key(key: &KeyCombo) -> Option<(&'static str, &'static str)> {
-    if key.modmask() == 4 && key.key().len() == 1 {
-        return match key.key() {
-            "A" => Some(("\x01", "beginning-of-line")),
-            "B" => Some(("\x02", "backward-char")),
-            "D" => Some(("\x04", "delete-char")),
-            "E" => Some(("\x05", "end-of-line")),
-            "F" => Some(("\x06", "forward-char")),
-            "N" => Some(("\x0e", "down-line-or-history")),
-            "P" => Some(("\x10", "up-line-or-history")),
-            "W" => Some(("\x17", "backward-kill-word")),
-            _ => None,
-        };
-    }
-    None
-}
-
-fn fish_known_key(key: &KeyCombo) -> Option<(&'static str, &'static str)> {
-    zsh_known_key(key)
-}
-
 fn zsh_known_binding(sequence: &[u8]) -> Option<(&'static str, &'static str)> {
-    let key = match sequence {
-        [0x01] => "A",
-        [0x02] => "B",
-        [0x04] => "D",
-        [0x05] => "E",
-        [0x06] => "F",
-        [0x0e] => "N",
-        [0x10] => "P",
-        [0x17] => "W",
-        _ => return None,
-    };
-    zsh_known_key(&format!("ctrl+{key}").parse().ok()?)
+    match sequence {
+        [0x01] => Some(("\x01", "beginning-of-line")),
+        [0x02] => Some(("\x02", "backward-char")),
+        [0x04] => Some(("\x04", "delete-char")),
+        [0x05] => Some(("\x05", "end-of-line")),
+        [0x06] => Some(("\x06", "forward-char")),
+        [0x0e] => Some(("\x0e", "down-line-or-history")),
+        [0x10] => Some(("\x10", "up-line-or-history")),
+        [0x17] => Some(("\x17", "backward-kill-word")),
+        _ => None,
+    }
 }
 
 fn fish_known_binding(sequence: &[u8]) -> Option<(&'static str, &'static str)> {
@@ -714,6 +679,38 @@ mod tests {
         assert_eq!(decode_shell_sequence("^F"), "\x06");
         assert_eq!(decode_shell_sequence("\\cf"), "\x06");
         assert_eq!(decode_shell_sequence("\\c-f"), "\x06");
+    }
+
+    fn ctrl_x_ctrl_e_editor(input: &TerminalInput) -> LayerResult {
+        let outcome = match input.bytes.as_slice() {
+            [0x18, 0x05] | [0x05] => Outcome::Consumed,
+            _ => Outcome::Pass,
+        };
+        LayerResult::new(
+            "Zsh / ZLE",
+            LayerId::Shell,
+            outcome,
+            input.display_bytes(),
+            vec![],
+        )
+    }
+
+    #[test]
+    fn line_editor_steps_try_the_concatenated_sequence_first() {
+        let ctrl_x = TerminalInput::predicted(vec![0x18], "Kitty default encoding");
+        let ctrl_e = TerminalInput::configured(vec![0x05], "explicit output");
+
+        let result = inspect_steps(&[ctrl_x.clone(), ctrl_e.clone()], ctrl_x_ctrl_e_editor);
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(result.summary, "0x18 0x05");
+
+        let ctrl_a = TerminalInput::predicted(vec![0x01], "Kitty default encoding");
+        let result = inspect_steps(&[ctrl_a, ctrl_e], ctrl_x_ctrl_e_editor);
+        assert_eq!(result.summary, "0x05");
+
+        let combined = concatenate(&[ctrl_x, TerminalInput::configured(vec![0x05], "x")]);
+        assert_eq!(combined.bytes, [0x18, 0x05]);
+        assert_eq!(combined.confidence, InputConfidence::Predicted);
     }
 
     #[test]

@@ -13,32 +13,65 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::process::Stdio;
 
-fn binary() -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_whykey"));
-    // CLI fixtures must not inherit the developer's live compositor, bus, or
-    // terminal identity. Individual tests opt into the context they model.
-    for variable in [
-        "HYPRLAND_INSTANCE_SIGNATURE",
-        "SWAYSOCK",
-        "I3SOCK",
-        "SSH_CONNECTION",
-        "SSH_TTY",
-        "XDG_CURRENT_DESKTOP",
-        "XDG_SESSION_DESKTOP",
-        "XDG_SESSION_TYPE",
-        "WAYLAND_DISPLAY",
-        "DISPLAY",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "GTK_IM_MODULE",
-        "QT_IM_MODULE",
-        "XMODIFIERS",
-        "TERM_PROGRAM",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "XDG_RUNTIME_DIR",
-    ] {
+/// Host identity that would otherwise leak from the developer's live session
+/// (compositor, bus, terminal, multiplexer, editor, SSH) into whykey runs.
+/// Tests opt into the context they model by setting those variables explicitly
+/// after this runs.
+const HOST_ENV_VARS: &[&str] = &[
+    "HYPRLAND_INSTANCE_SIGNATURE",
+    "SWAYSOCK",
+    "I3SOCK",
+    "SSH_CONNECTION",
+    "SSH_TTY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_DESKTOP",
+    "XDG_SESSION_TYPE",
+    "WAYLAND_DISPLAY",
+    "DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "GTK_IM_MODULE",
+    "QT_IM_MODULE",
+    "XMODIFIERS",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "KITTY_PID",
+    "KITTY_WINDOW_ID",
+    "KITTY_LISTEN_ON",
+    "GHOSTTY_RESOURCES_DIR",
+    "WEZTERM_PANE",
+    "WEZTERM_EXECUTABLE",
+    "KONSOLE_VERSION",
+    "ALACRITTY_SOCKET",
+    "ALACRITTY_WINDOW_ID",
+    "TMUX",
+    "TMUX_PANE",
+    "STY",
+    "ZELLIJ",
+    "ZELLIJ_SESSION_NAME",
+    "NVIM",
+    "VIMRUNTIME",
+    "INSIDE_EMACS",
+];
+
+/// Removes host-identifying variables and every `WHYKEY_*` override so a
+/// fixture only sees the environment it sets explicitly.
+fn strip_host_env(command: &mut Command) {
+    for variable in HOST_ENV_VARS {
         command.env_remove(variable);
     }
+    for (key, _) in env::vars_os() {
+        if key.to_string_lossy().starts_with("WHYKEY_") {
+            command.env_remove(key);
+        }
+    }
+}
+
+fn binary() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_whykey"));
+    strip_host_env(&mut command);
     command
 }
 
@@ -808,7 +841,10 @@ fn ime_runtime_query_reports_the_active_fcitx5_engine_without_changing_it() {
         .iter()
         .find(|layer| layer["layer"] == "Input method")
         .unwrap();
-    assert_eq!(ime_layer["status"], "Indeterminate");
+    // A plain keyboard engine forwards keys unchanged; the runtime evidence
+    // stays attached to the pass-through row.
+    assert_eq!(ime_layer["status"], "NotHandled");
+    assert_eq!(ime_layer["propagation"], "Continues");
     assert!(
         ime_layer["details"]
             .as_array()
@@ -1428,7 +1464,9 @@ fn evdev_requires_a_device_path_when_device_option_is_used() {
 #[test]
 fn listen_without_a_controlling_tty_is_an_operational_failure() {
     let executable = env!("CARGO_BIN_EXE_whykey");
-    let output = Command::new("setsid")
+    let mut command = Command::new("setsid");
+    strip_host_env(&mut command);
+    let output = command
         .args(["--wait", executable, "listen", "--json", "--timeout", "0.1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1518,7 +1556,7 @@ fn no_arguments_prints_help_instead_of_entering_capture_mode() {
 fn script_command(command_line: &str) -> Command {
     let mut command = Command::new("script");
     command.args(["-qfec", command_line, "/dev/null"]);
-    command.env_remove("HYPRLAND_INSTANCE_SIGNATURE");
+    strip_host_env(&mut command);
     command
 }
 
@@ -2185,7 +2223,7 @@ fn alacritty_yaml_adapter_is_used_when_configured() {
     .unwrap();
 
     let output = binary()
-        .args(["ctrl+left"])
+        .args(["--verbose", "ctrl+left"])
         .env("TERM_PROGRAM", "alacritty")
         .env("ALACRITTY_CONFIG_FILE", &config)
         .env("XDG_CONFIG_HOME", &base)
@@ -2263,7 +2301,7 @@ fn sway_adapter_reads_effective_bindings() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("Sway"));
-    assert!(text.contains("active binding found"));
+    assert!(text.contains("Sway is configured to consume the shortcut"));
     assert!(text.contains("exec copy"));
     let _ = fs::remove_dir_all(base);
 }
@@ -2294,7 +2332,7 @@ fn i3_adapter_reads_effective_bindings() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("i3"));
-    assert!(text.contains("active binding found"));
+    assert!(text.contains("i3 is configured to consume the shortcut"));
     assert!(text.contains("exec copy"));
     let _ = fs::remove_dir_all(base);
 }
@@ -2947,7 +2985,7 @@ fn konsole_adapter_reads_explicit_keytab() {
     .unwrap();
 
     let output = binary()
-        .args(["ctrl+left"])
+        .args(["--verbose", "ctrl+left"])
         .env("TERM_PROGRAM", "konsole")
         .env("KONSOLE_KEYTAB", &keytab)
         .env("HOME", &base)
@@ -3054,7 +3092,7 @@ fn hyprland_suppression_failure_fails_closed() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("could not suppress native compositor shortcuts (Hyprland)"));
     assert!(stderr.contains("No key was captured and no shortcut was executed."));
-    assert!(stderr.contains("Use --pass-through to capture without suppression."));
+    assert!(stderr.contains("Use --no-suppress to capture without suppression."));
 }
 
 #[test]
@@ -3082,7 +3120,7 @@ fn suppress_and_passthrough_conflict() {
     assert_eq!(output.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("--suppress and --pass-through cannot be used together")
+            .contains("--suppress and --no-suppress cannot be used together")
     );
 }
 
@@ -3274,7 +3312,9 @@ fn inspect_pid_on_non_editor_tui_does_not_fall_through_to_shell() {
 #[cfg(unix)]
 #[test]
 fn inspect_pid_on_shell_inspects_shell_directly() {
-    let mut bash = std::process::Command::new("bash")
+    let mut bash_command = std::process::Command::new("bash");
+    strip_host_env(&mut bash_command);
+    let mut bash = bash_command
         .stdin(std::process::Stdio::piped())
         .spawn()
         .expect("bash must spawn");

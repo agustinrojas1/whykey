@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
 
 use serde::Deserialize;
 
@@ -362,7 +363,7 @@ mod tests {
         let result = inspect_json(&combo, BINDINGS, "default").unwrap();
 
         assert_eq!(result.status(), LayerStatus::Handled);
-        assert_eq!(result.propagation(), Propagation::Indeterminate);
+        assert_eq!(result.propagation(), Propagation::Stops);
         assert!(result.details[1].contains("__lua 61"));
         assert!(result.details[1].contains("Universal copy"));
     }
@@ -539,16 +540,9 @@ mod tests {
             keycode: crate::xkb::EvdevKeycode::from(46),
         };
 
-        let result = inspect_json_with_keycode(
-            &combo,
-            bindings,
-            "default",
-            &[],
-            &[],
-            false,
-            Some(&physical),
-        )
-        .unwrap();
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], Some(&physical))
+                .unwrap();
 
         assert_eq!(result.status(), LayerStatus::Handled);
         assert_eq!(result.propagation(), Propagation::Stops);
@@ -573,7 +567,7 @@ mod tests {
             "submap_universal": true
         }]"#;
         let result =
-            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], false, None).unwrap();
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], None).unwrap();
         let evidence = result.binding.expect("a match must carry evidence");
         assert_eq!(evidence.dispatcher.as_deref(), Some("__lua"));
         assert_eq!(evidence.action.as_deref(), Some("__lua 285"));
@@ -604,15 +598,14 @@ mod tests {
             line_number: 42,
         }];
         let result =
-            inspect_json_with_keycode(&combo, bindings, "default", &[], &hints, false, None)
-                .unwrap();
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &hints, &[], None).unwrap();
         let evidence = result.binding.expect("a match must carry evidence");
         assert_eq!(evidence.scope, BindingScope::Submap("default".into()));
         let source = evidence.source.expect("an exact hint must link");
         assert_eq!(source.file, "/home/user/.config/hypr/bindings.lua");
         assert_eq!(source.line, Some(42));
         let unrelated =
-            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], false, None).unwrap();
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], None).unwrap();
         assert!(
             unrelated
                 .binding
@@ -636,16 +629,9 @@ mod tests {
             keycode: crate::xkb::EvdevKeycode::from(46),
         };
 
-        let result = inspect_json_with_keycode(
-            &combo,
-            bindings,
-            "default",
-            &[],
-            &[],
-            false,
-            Some(&physical),
-        )
-        .unwrap();
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], Some(&physical))
+                .unwrap();
 
         assert_eq!(result.status(), LayerStatus::Indeterminate);
         assert_eq!(result.propagation(), Propagation::Indeterminate);
@@ -671,16 +657,9 @@ mod tests {
             keycode: crate::xkb::EvdevKeycode::from(105),
         };
 
-        let result = inspect_json_with_keycode(
-            &combo,
-            bindings,
-            "default",
-            &[],
-            &[],
-            false,
-            Some(&physical),
-        )
-        .unwrap();
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], Some(&physical))
+                .unwrap();
 
         assert_eq!(result.status(), LayerStatus::Handled);
         assert_eq!(result.propagation(), Propagation::Stops);
@@ -700,16 +679,9 @@ mod tests {
             keycode: crate::xkb::EvdevKeycode::from(105),
         };
 
-        let result = inspect_json_with_keycode(
-            &combo,
-            bindings,
-            "default",
-            &[],
-            &[],
-            false,
-            Some(&physical),
-        )
-        .unwrap();
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], Some(&physical))
+                .unwrap();
 
         assert_eq!(result.status(), LayerStatus::NotHandled);
         assert_eq!(result.propagation(), Propagation::Continues);
@@ -729,16 +701,9 @@ mod tests {
             keycode: crate::xkb::EvdevKeycode::from(105),
         };
 
-        let result = inspect_json_with_keycode(
-            &combo,
-            bindings,
-            "default",
-            &[],
-            &[],
-            false,
-            Some(&physical),
-        )
-        .unwrap();
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &[], Some(&physical))
+                .unwrap();
 
         assert_eq!(result.status(), LayerStatus::NotHandled);
     }
@@ -1024,7 +989,7 @@ xkb_symbols "pc" {
             "default",
             &[crate::xkb::XkbKeycode::from(113)],
             &[],
-            false,
+            &[],
             None,
         )
         .unwrap();
@@ -1035,17 +1000,57 @@ xkb_symbols "pc" {
     #[test]
     fn parses_ignore_mods_from_declarative_bind_syntax() {
         let variables = HashMap::from([(String::from("mainMod"), String::from("SUPER"))]);
-        let hint = parse_config_bind_hint("bind[i] = $mainMod, Z, exec, test", &variables)
+        let hint = parse_config_bind_hint("bindi = $mainMod, Z, exec, test", &variables)
             .expect("bind hint");
-        assert_eq!(hint.key, "Z");
+        assert_eq!(hint.combo, "super+z".parse::<KeyCombo>().unwrap());
         assert!(hint.ignore_mods);
+    }
+
+    #[test]
+    fn reads_bind_flags_from_the_keyword_suffix() {
+        let variables = HashMap::new();
+        let parse = |line: &str| parse_config_bind_hint(line, &variables);
+        let described =
+            parse("bindd = SUPER, comma, Dismiss last notification, exec, makoctl dismiss")
+                .expect("bindd keeps the key in the second field");
+        assert_eq!(described.combo, "super+,".parse::<KeyCombo>().unwrap());
+        assert!(!described.ignore_mods);
+        assert!(parse("bindel = , XF86AudioRaiseVolume, exec, volume up").is_some());
+        assert!(parse("bindrli = SUPER, Z, exec, test").unwrap().ignore_mods);
+        // Not Hyprland syntax: brackets are not flags, and `binds:` is a
+        // config category, not a bind keyword.
+        assert!(parse("bind[i] = SUPER, Z, exec, test").is_none());
+        assert!(parse("binds:workspace_back_and_forth = true").is_none());
+        // Multi-key binds have no single combo.
+        assert!(parse("binds = SUPER, A&B, exec, test").is_none());
     }
 
     #[test]
     fn skips_unresolved_declarative_bind_variables() {
         assert!(
-            parse_config_bind_hint("bind[i] = $unknown, Z, exec, test", &HashMap::new()).is_none()
+            parse_config_bind_hint("bindi = $unknown, Z, exec, test", &HashMap::new()).is_none()
         );
+    }
+
+    #[test]
+    fn longest_variable_name_wins_regardless_of_map_order() {
+        // A fresh map per round gets a fresh iteration order; a prefix
+        // variable must never clobber the longer name.
+        for _ in 0..32 {
+            let variables = HashMap::from([
+                (String::from("mod"), String::from("ALT")),
+                (String::from("mainMod"), String::from("SUPER")),
+                (String::from("main"), String::from("CTRL")),
+            ]);
+            assert_eq!(
+                resolve_inline_variables("$mainMod SHIFT", &variables),
+                "SUPER SHIFT"
+            );
+            assert_eq!(resolve_inline_variables("$mod", &variables), "ALT");
+            let hint = parse_config_bind_hint("bindi = $mainMod, Z, exec, test", &variables)
+                .expect("bind hint");
+            assert_eq!(hint.combo, "super+z".parse::<KeyCombo>().unwrap());
+        }
     }
 
     #[test]
@@ -1066,13 +1071,27 @@ xkb_symbols "pc" {
         let root = base.join("hyprland.conf");
         let child = base.join("bindings.conf");
         fs::write(&root, "$mainMod = SUPER\nsource = bindings.conf\n").unwrap();
-        fs::write(&child, "bind[i] = $mainMod, Z, exec, test\n").unwrap();
+        fs::write(
+            &child,
+            "bindi = $mainMod, Z, exec, test\nbindi = ALT, X, exec, a\nunbind = ALT, X\n",
+        )
+        .unwrap();
 
         let mut visited = HashSet::new();
         let mut variables = HashMap::new();
         let mut hints = Vec::new();
         collect_config_hints(&root, &mut visited, &mut variables, &mut hints, 0);
-        assert!(hints.iter().any(|hint| hint.key == "Z" && hint.ignore_mods));
+        let super_z: KeyCombo = "super+z".parse().unwrap();
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint.combo == super_z && hint.ignore_mods)
+        );
+        let alt_x: KeyCombo = "alt+x".parse().unwrap();
+        assert!(
+            hints.iter().all(|hint| hint.combo != alt_x),
+            "a later unbind removes the declaration"
+        );
 
         let _ = fs::remove_dir_all(base);
     }
@@ -1085,8 +1104,12 @@ xkb_symbols "pc" {
             "key": "Z",
             "dispatcher": "exec"
         }]"#;
+        let hints = [ConfigBindHint {
+            combo: "super+z".parse().unwrap(),
+            ignore_mods: true,
+        }];
         let result =
-            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], true, None).unwrap();
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &hints, None).unwrap();
         assert_eq!(result.status(), LayerStatus::Handled);
         assert!(
             result
@@ -1094,6 +1117,39 @@ xkb_symbols "pc" {
                 .iter()
                 .any(|detail| detail.contains("ignore_mods"))
         );
+    }
+
+    #[test]
+    fn ignore_mods_of_another_binding_on_the_same_key_does_not_apply() {
+        let combo: KeyCombo = "ctrl+z".parse().unwrap();
+        let bindings = r#"[{
+            "modmask": 64,
+            "key": "Z",
+            "dispatcher": "exec",
+            "arg": "undo-tree"
+        }]"#;
+        // `bindi = , Z` says nothing about SUPER+Z.
+        let unrelated = [ConfigBindHint {
+            combo: "z".parse().unwrap(),
+            ignore_mods: true,
+        }];
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &unrelated, None)
+                .unwrap();
+        assert_ne!(result.status(), LayerStatus::Handled);
+
+        // The exact declaration without `i` rules the binding out.
+        let declared = [
+            unrelated[0].clone(),
+            ConfigBindHint {
+                combo: "super+z".parse().unwrap(),
+                ignore_mods: false,
+            },
+        ];
+        let result =
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[], &declared, None)
+                .unwrap();
+        assert_eq!(result.outcome, Outcome::Pass);
     }
 
     #[test]
@@ -1217,7 +1273,7 @@ o.bind("SUPER + E", "Real", "exec")
         )
         .expect("Lua binding hint");
         let result =
-            inspect_json_with_keycode(&combo, bindings, "default", &[], &[hint], false, None)
+            inspect_json_with_keycode(&combo, bindings, "default", &[], &[hint], &[], None)
                 .unwrap();
         assert_eq!(result.status(), LayerStatus::NotHandled);
         assert_eq!(result.propagation(), Propagation::Continues);
@@ -1269,6 +1325,71 @@ o.bind("SUPER + E", "Real", "exec")
         assert_eq!(hint.description.as_deref(), Some("Find\nHere"));
         assert!(lua_literal_argument(r#""CTRL + F"   "#).is_some());
         assert!(lua_literal_argument(r#""CTRL + F" .. suffix"#).is_none());
+    }
+
+    #[test]
+    fn lua_unbind_removes_earlier_hints_and_a_later_bind_restores_one() {
+        let defaults = Path::new("/usr/share/omarchy/default/hypr/bindings/tiling.lua");
+        let user = Path::new("/home/user/.config/hypr/bindings.lua");
+        let mut hints = Vec::new();
+        extend_lua_bind_hints(
+            &mut hints,
+            "o.bind(\"SUPER + BACKSPACE\", \"Close window\", \"close\")\n\
+             o.bind(\"SUPER + SHIFT + B\", \"Browser\", \"browser\")\n",
+            defaults,
+        );
+        extend_lua_bind_hints(
+            &mut hints,
+            "hl.unbind(\"SUPER + BACKSPACE\")\n\
+             o.bind(\"SUPER + BACKSPACE\", \"Toggle transparency\", \"toggle\")\n\
+             hl.unbind(\"SUPER + SHIFT + B\")\n\
+             hl.unbind(dynamic_combo)\n",
+            user,
+        );
+
+        let backspace: KeyCombo = "super+backspace".parse().unwrap();
+        let descriptions: Vec<_> = hints
+            .iter()
+            .filter(|hint| hint.combo == backspace)
+            .map(|hint| hint.description.as_deref())
+            .collect();
+        assert_eq!(descriptions, [Some("Toggle transparency")]);
+        let browser: KeyCombo = "super+shift+b".parse().unwrap();
+        assert!(hints.iter().all(|hint| hint.combo != browser));
+
+        // The removed default no longer links a runtime binding to a file.
+        let bindings = r#"[{"modmask": 64, "key": "BACKSPACE", "dispatcher": "__lua",
+            "arg": "9", "description": "Close window"}]"#;
+        let result =
+            inspect_json_with_keycode(&backspace, bindings, "default", &[], &hints, &[], None)
+                .unwrap();
+        assert!(result.binding.unwrap().source.is_none());
+
+        extend_lua_bind_hints(&mut hints, "hl.unbind(\"all\")\n", user);
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn inventory_never_reports_a_bare_modifier_prefix_as_a_key() {
+        let hints = parse_lua_bind_hints(
+            r#"o.bind("SUPER + code:20", "Expand window left", hl.dsp.window.resize({ x = -100 }))"#,
+            Path::new("/tmp/tiling.lua"),
+        );
+        let value = serde_json::json!([
+            {"modmask": 64, "key": "", "keycode": 0, "description": "Expand window left",
+             "dispatcher": "__lua", "arg": "169"},
+            {"modmask": 64, "key": "", "keycode": 0, "description": "Switch to workspace 1",
+             "dispatcher": "__lua", "arg": "71"},
+            {"modmask": 64, "key": "comma", "keycode": 0, "dispatcher": "__lua", "arg": "3"}
+        ]);
+        let records = collect_records(&value, &hints);
+        assert_eq!(records[0].key, "SUPER+CODE:20");
+        assert_eq!(
+            records[1].certainty,
+            crate::bindings::UNRESOLVED_KEY_CERTAINTY
+        );
+        assert_ne!(records[1].key, "SUPER+");
+        assert_eq!(records[2].key, "SUPER+COMMA");
     }
 
     #[test]

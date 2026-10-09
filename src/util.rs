@@ -70,7 +70,9 @@ pub struct ProcessSnapshot {
 }
 
 impl ProcessSnapshot {
-    /// One `/proc` walk. Reads comm + cmdline for each PID.
+    /// One `/proc` walk. Reads comm + cmdline for each PID. Callers share
+    /// one snapshot per inspection (`Environment::collect` hands it to the
+    /// remapper and IME detectors) rather than walking `/proc` per detector.
     pub fn collect() -> Self {
         let mut entries = Vec::new();
         let Ok(dir_entries) = fs::read_dir("/proc") else {
@@ -137,7 +139,7 @@ impl ProcessSnapshot {
         result
     }
 
-    /// Deduplicated sorted comm names. Replaces `util::process_names()`.
+    /// Deduplicated sorted comm names.
     pub fn comm_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         for entry in &self.entries {
@@ -149,11 +151,6 @@ impl ProcessSnapshot {
         names.dedup();
         names
     }
-}
-
-/// Names of currently running processes, read-only from `/proc`.
-pub fn process_names() -> Vec<String> {
-    ProcessSnapshot::collect().comm_names()
 }
 
 /// Ancestor process IDs starting at `start`, bounded to 16 generations.

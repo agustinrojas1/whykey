@@ -1,6 +1,9 @@
 {
   "id": "sway",
-  "bindings": [{"command": "exec foot", "keysym": "Return", "input_code": 36}],
+  "get_config": {
+    "config": "# Default config for sway\n#\n# Read `man 5 sway` for a complete reference.\n\n### Variables\nset $mod Mod4\nset $left h\nset $down j\nset $up k\nset $right l\nset $term foot\nset $menu wmenu-run\n\n### Key bindings\n    bindsym $mod+Return exec $term\n    bindsym $mod+Shift+q kill\n    bindsym $mod+d exec $menu\n    floating_modifier $mod normal\n    bindsym $mod+Shift+c reload\n    bindsym $mod+Shift+e exec swaynag -t warning -m 'You pressed the exit shortcut.' \\\n        -B 'Yes, exit sway' 'swaymsg exit'\n    bindsym $mod+$left focus left\n    bindsym $mod+1 workspace number 1\n    bindsym --release Print exec grim\n\nmode \"resize\" {\n    bindsym $left resize shrink width 10px\n    bindsym Return mode \"default\"\n    bindsym Escape mode \"default\"\n}\nbindsym $mod+r mode \"resize\"\n\nbar {\n    position top\n    status_command while date +'%Y-%m-%d %X'; do sleep 1; done\n}\n\ninclude /etc/sway/config.d/*\n"
+  },
+  "get_binding_state": {"name": "default"},
   "focused_tree": {"focused": true, "pid": 4242},
   "ipc_failure": "swaymsg exited non-zero"
 }

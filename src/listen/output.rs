@@ -23,11 +23,12 @@ fn print_capture_dry_run(environment: &crate::environment::Environment, options:
             session.display(),
             options.capture_policy
         )),
-        Err(error) => {
-            write_line(format!(
-                "capture backend: terminal fallback (dry-run; native unavailable: {error})"
-            ))
-        }
+        Err(error) if options.capture_policy == CapturePolicy::Suppress => write_line(format!(
+            "capture backend: none (dry-run; --suppress requires native compositor capture: {error})"
+        )),
+        Err(error) => write_line(format!(
+            "capture backend: terminal fallback (dry-run; native unavailable: {error})"
+        )),
     }
 }
 
@@ -167,8 +168,8 @@ fn run_native(
     options: Options,
     mut capture_session: Box<dyn NativeCaptureIo>,
     snapshot: ListenSession,
+    signals: &SignalGuard,
 ) -> Result<(), ListenError> {
-    let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
     if let Some(warning) = capture_session.pre_arm_warning(options.capture_policy) {
         eprintln!("{warning}");
@@ -186,7 +187,7 @@ fn run_native(
     // Keep one terminal raw-mode guard for the complete native listening session.
     let mut terminal = TerminalSession::open()?;
     let original_termios = terminal.original;
-    let tty_fd = terminal.tty.as_raw_fd();
+    let mut tty_fd = terminal.tty.as_raw_fd();
     let socket_fd = capture_session
         .transport()
         .poll_fd()
@@ -201,9 +202,9 @@ fn run_native(
                 capture_session.display()
             );
             eprintln!("No key was captured and no shortcut was executed.");
-            eprintln!("Use --pass-through to capture without suppression.");
+            eprintln!("Use --no-suppress to capture without suppression.");
             return Err(ListenError::Setup(format!(
-                "could not suppress {} shortcuts",
+                "could not suppress {} shortcuts: {err}",
                 capture_session.display()
             )));
         } else {
@@ -239,8 +240,29 @@ fn run_native(
                 capture_session.close().map_err(ListenError::Io)?;
                 return Err(ListenError::Message("capture timed out".into()));
             }
+            if signals.take_stop_request() {
+                // Job control (Ctrl+Z / SIGTSTP): remove the leased hook and
+                // leave raw/kitty mode before stopping, then re-enter both.
+                let rearm = capture_session.holds_lease();
+                if rearm {
+                    capture_session.close().map_err(ListenError::Io)?;
+                }
+                let _ = flush_input(tty_fd);
+                drop(terminal);
+                signals.stop_process()?;
+                terminal = TerminalSession::open()?;
+                tty_fd = terminal.tty.as_raw_fd();
+                if rearm {
+                    capture_session
+                        .arm_token(options.capture_policy)
+                        .map_err(ListenError::Setup)?;
+                    last_renewed = Instant::now();
+                }
+                continue;
+            }
 
-            if capture_session.is_suppressing() && last_renewed.elapsed() >= Duration::from_secs(2)
+            if capture_session.holds_lease()
+                && last_renewed.elapsed() >= crate::capture::CAPTURE_LEASE_RENEW_INTERVAL
             {
                 capture_session.transport().renew_lease().map_err(|e| {
                     ListenError::Message(format!("failed to renew capture lease: {e}"))
@@ -308,6 +330,7 @@ fn run_native(
             }
         };
 
+        let leased = capture_session.holds_lease();
         if capture_session.is_suppressing() {
             let Some(main_code) = observed.physical_keycode.and_then(|code| code.to_xkb()) else {
                 let _ = flush_input(tty_fd);
@@ -333,9 +356,12 @@ fn run_native(
                     return Err(ListenError::Message(error));
                 }
             }
+        }
+        if leased {
             // Remove the hook before running desktop discovery and rendering.
             // This prevents inspection output, signal handling, or queued key
-            // events from running while the capture submap is still active.
+            // events from running while the capture submap is still active,
+            // and keeps a slow report from outliving the hook's lease.
             if let Err(error) = capture_session.close() {
                 return Err(ListenError::Message(format!(
                     "could not restore {} state before reporting: {error}",
@@ -374,10 +400,11 @@ fn run_native(
         if !keep_listening || count_reached {
             break;
         }
-        if options.capture_policy == CapturePolicy::Suppress {
+        if leased {
             capture_session
-                .arm_token(CapturePolicy::Suppress)
+                .arm_token(options.capture_policy)
                 .map_err(ListenError::Message)?;
+            last_renewed = Instant::now();
         }
         if !options.json {
             println!("\n{}\n", crate::style::RenderOptions::cli(options.color, false).muted("--- next capture ---"));
@@ -397,6 +424,8 @@ fn run_native(_options: Options) -> Result<(), ListenError> {
 }
 
 fn run_terminal(options: Options) -> Result<(), ListenError> {
+    // Install first: the guard must outlive the raw-mode session it protects.
+    let signals = SignalGuard::install()?;
     let snapshot = ListenSession::capture();
     let mut backend = TerminalBackend::new();
     backend
@@ -405,7 +434,20 @@ fn run_terminal(options: Options) -> Result<(), ListenError> {
     let original_termios = backend
         .original_termios()
         .ok_or_else(|| ListenError::Setup("terminal capture failed to arm".into()))?;
-    run_observed_loop(options, backend, snapshot, Some(original_termios))
+    run_observed_loop(options, backend, snapshot, Some(original_termios), &signals)
+}
+
+/// Answer a SIGTSTP request: release the capture (restoring the terminal),
+/// stop the process, and re-enter capture once the job is continued.
+fn suspend_for_job_control<B: CaptureBackend + ?Sized>(
+    backend: &mut B,
+    stop: impl FnOnce() -> io::Result<()>,
+) -> Result<(), ListenError> {
+    backend.close()?;
+    stop()?;
+    backend
+        .arm(CapturePolicy::PassThrough)
+        .map_err(ListenError::Setup)
 }
 
 fn run_observed_loop<B: CaptureBackend>(
@@ -413,8 +455,8 @@ fn run_observed_loop<B: CaptureBackend>(
     mut backend: B,
     snapshot: ListenSession,
     terminal_termios: Option<libc::termios>,
+    signals: &SignalGuard,
 ) -> Result<(), ListenError> {
-    let signals = SignalGuard::install()?;
     let mut export = open_export(options.output.as_deref())?;
     let mut capture_stdout = io::BufWriter::new(io::stdout());
     print_waiting_message(
@@ -438,6 +480,10 @@ fn run_observed_loop<B: CaptureBackend>(
         if deadline.is_some_and(|value| Instant::now() >= value) {
             let _ = backend.close();
             return Err(ListenError::Message("capture timed out".into()));
+        }
+        if signals.take_stop_request() {
+            suspend_for_job_control(&mut backend, || signals.stop_process())?;
+            continue;
         }
         let Some(observed) = backend
             .next_event(options.events_all)

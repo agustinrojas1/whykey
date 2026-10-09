@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::process::Command;
 
 use crate::command;
@@ -7,118 +8,242 @@ use crate::layers::{
 };
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
-    inspect_with_byte_status(key, true)
+    inspect_with_byte_status(&[], key, true)
 }
 
-pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerResult {
+/// Inspect `key` as tmux receives it. `preceding` holds the earlier keys of
+/// the same sequence that reached tmux, so `ctrl+b ctrl+left` resolves
+/// `ctrl+left` in the prefix table while a bare `ctrl+left` only consults
+/// the client's current table (normally root).
+pub fn inspect_with_byte_status(
+    preceding: &[KeyCombo],
+    key: &KeyCombo,
+    bytes_verified: bool,
+) -> LayerResult {
     let active_table = tmux_active_table();
-    let root_output = match list_keys("root") {
-        Ok(output) => output,
-        Err(message) => return unavailable(message),
-    };
-
-    let mut details = vec!["table: root (direct terminal input)".into()];
-    if let Some(table) = &active_table {
-        details.push(format!("active client key table: {table}"));
-    } else {
-        details.push("active client key table: unknown".into());
-    }
     let prefixes = tmux_prefixes();
-    for prefix in &prefixes {
-        details.push(format!("prefix: {prefix}"));
-    }
+    let mut details = Vec::new();
     if let Some(pane) = std::env::var_os("TMUX_PANE") {
         details.push(format!("client pane: {}", pane.to_string_lossy()));
     }
+    let mut cache = HashMap::new();
+    let mut tables = |table: &str| {
+        cache
+            .entry(table.to_owned())
+            .or_insert_with(|| list_keys(table))
+            .clone()
+    };
+    let mut result = inspect_with_tables(
+        active_table.as_deref(),
+        &prefixes,
+        preceding,
+        key,
+        bytes_verified,
+        &mut tables,
+    );
+    result.details.splice(0..0, details);
+    result
+}
 
-    if let Some(table) = active_table.as_deref() {
-        if table != "root" {
-            match list_keys(table) {
-                Ok(output) => {
-                    if let Some(binding) = find_binding(&output, key, table) {
-                        let context = if matches!(table, "prefix" | "prefix2") {
-                            "active prefix table (prefix already pressed)"
-                        } else {
-                            "active client table"
-                        };
-                        details.push(format!("table: {table} ({context})"));
-                        details.push(format!("binding: {}", binding.description));
-                        return result_for_binding(&binding.action, details, bytes_verified);
-                    }
-                }
-                Err(message) => {
-                    details.push(format!("could not read active table {table}: {message}"));
-                    return LayerResult::new(
-                        "tmux",
-                        LayerId::Multiplexer,
-                        Outcome::Unknown,
-                        "active tmux table could not be inspected",
-                        details,
-                    );
-                }
-            }
-            details.push(format!("active table {table} has no binding for this key"));
+/// Key-table resolution over an injectable `list-keys` source. Mirrors
+/// tmux's client key handling: the prefix switches to the prefix table, a
+/// binding runs and returns the client to root (or the table named by
+/// `switch-client -T`), and an unbound key in a non-root table is retried in
+/// root and otherwise discarded.
+fn inspect_with_tables(
+    active_table: Option<&str>,
+    raw_prefixes: &[String],
+    preceding: &[KeyCombo],
+    key: &KeyCombo,
+    bytes_verified: bool,
+    tables: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> LayerResult {
+    let mut details = Vec::new();
+    match active_table {
+        Some(table) => details.push(format!("active client key table: {table}")),
+        None => details.push("active client key table: unknown; assuming root".into()),
+    }
+    for prefix in raw_prefixes {
+        details.push(format!("prefix: {prefix}"));
+    }
+    let prefixes = raw_prefixes
+        .iter()
+        .filter_map(|prefix| parse_tmux_key(prefix))
+        .collect::<Vec<_>>();
+
+    let mut table = active_table.unwrap_or("root").to_owned();
+    for earlier in preceding {
+        let resolution = resolve_key(&table, earlier, &prefixes, tables);
+        if let Resolution::TableUnavailable { table, message } = resolution {
+            details.push(format!("could not read tmux table {table}: {message}"));
             return LayerResult::new(
                 "tmux",
                 LayerId::Multiplexer,
-                Outcome::Pass,
-                "no binding in the active tmux table; forwarded to the pane",
+                Outcome::Unknown,
+                "tmux key-table state for this sequence could not be inspected",
                 details,
             );
         }
+        let next = resolution.next_table();
+        details.push(format!(
+            "sequence: {earlier} in table {table} -> table {next}"
+        ));
+        table = next;
     }
 
-    if let Some(binding) = find_binding(&root_output, key, "root") {
-        details.push(format!("binding: {}", binding.description));
-        return result_for_binding(&binding.action, details, bytes_verified);
-    }
-
-    if active_table.is_none() {
-        for table in ["prefix", "prefix2"] {
-            let Ok(output) = list_keys(table) else {
-                continue;
+    match resolve_key(&table, key, &prefixes, tables) {
+        Resolution::TableUnavailable { table, message } if table == "root" => unavailable(message),
+        Resolution::TableUnavailable { table, message } => {
+            details.push(format!("could not read tmux table {table}: {message}"));
+            LayerResult::new(
+                "tmux",
+                LayerId::Multiplexer,
+                Outcome::Unknown,
+                format!("tmux {table} table could not be inspected"),
+                details,
+            )
+        }
+        Resolution::PrefixEntered => {
+            details.push("the configured prefix switches the client to the prefix table".into());
+            let (outcome, summary) = if bytes_verified {
+                (
+                    Outcome::Consumed,
+                    "tmux prefix key; tmux waits for the next key",
+                )
+            } else {
+                (
+                    Outcome::HandledUncertain,
+                    "tmux prefix key; terminal byte delivery is unverified",
+                )
             };
-            if let Some(binding) = find_binding(&output, key, table) {
-                details.push(format!(
-                    "table: {table} (requires the configured prefix first)"
-                ));
-                details.push(format!("binding: {}", binding.description));
-                return result_for_binding(&binding.action, details, bytes_verified);
+            LayerResult::new("tmux", LayerId::Multiplexer, outcome, summary, details)
+        }
+        Resolution::Bound { table, binding } => {
+            details.push(format!("table: {table}"));
+            details.push(format!("binding: {}", binding.description));
+            result_for_binding(&binding.action, &table, details, bytes_verified)
+        }
+        Resolution::Discarded { table } => {
+            details.push(format!(
+                "no binding in tmux {table} table or root; tmux returns to root and drops the key"
+            ));
+            let (outcome, summary) = if bytes_verified {
+                (
+                    Outcome::Consumed,
+                    format!("no binding in the tmux {table} table; tmux discards the key"),
+                )
+            } else {
+                (
+                    Outcome::HandledUncertain,
+                    format!(
+                        "no binding in the tmux {table} table; terminal byte delivery is unverified"
+                    ),
+                )
+            };
+            LayerResult::new("tmux", LayerId::Multiplexer, outcome, summary, details)
+        }
+        Resolution::Forwarded => LayerResult::new(
+            "tmux",
+            LayerId::Multiplexer,
+            Outcome::Pass,
+            if bytes_verified {
+                format!("no binding in the tmux {table} table; forwarded to the pane")
+            } else {
+                format!(
+                    "no binding in the tmux {table} table; terminal byte delivery remains unverified"
+                )
+            },
+            details,
+        ),
+    }
+}
+
+enum Resolution {
+    /// The key is a configured prefix; the client enters the prefix table.
+    PrefixEntered,
+    Bound {
+        table: String,
+        binding: Binding,
+    },
+    /// No binding in a non-root table nor in root: tmux drops the key.
+    Discarded {
+        table: String,
+    },
+    /// No binding in the root table: the key goes to the pane.
+    Forwarded,
+    TableUnavailable {
+        table: String,
+        message: String,
+    },
+}
+
+impl Resolution {
+    /// The client key table after this key was handled.
+    fn next_table(&self) -> String {
+        match self {
+            Self::PrefixEntered => "prefix".into(),
+            Self::Bound { binding, .. } => switch_client_table(&binding.action)
+                .unwrap_or("root")
+                .to_owned(),
+            Self::Discarded { .. } | Self::Forwarded | Self::TableUnavailable { .. } => {
+                "root".into()
             }
         }
     }
+}
 
-    if active_table.is_none()
-        && prefixes
-            .iter()
-            .filter_map(|prefix| parse_tmux_key(prefix))
-            .any(|prefix| prefix == *key)
-    {
-        details.push("the configured prefix starts a tmux key sequence".into());
-        let outcome = if bytes_verified {
-            Outcome::Consumed
-        } else {
-            Outcome::HandledUncertain
-        };
-        let summary = if bytes_verified {
-            "prefix key is consumed by tmux".to_owned()
-        } else {
-            "configured prefix matches, but terminal byte delivery is unverified".to_owned()
-        };
-        return LayerResult::new("tmux", LayerId::Multiplexer, outcome, summary, details);
+fn resolve_key(
+    table: &str,
+    key: &KeyCombo,
+    prefixes: &[KeyCombo],
+    tables: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Resolution {
+    // The prefix takes precedence over every table except the prefix table.
+    if table != "prefix" && prefixes.contains(key) {
+        return Resolution::PrefixEntered;
     }
-
-    LayerResult::new(
-        "tmux",
-        LayerId::Multiplexer,
-        Outcome::Pass,
-        if bytes_verified {
-            "no direct tmux binding; forwarded to the shell".to_owned()
-        } else {
-            "no direct tmux binding; terminal byte delivery remains unverified".to_owned()
+    let output = match tables(table) {
+        Ok(output) => output,
+        Err(message) => {
+            return Resolution::TableUnavailable {
+                table: table.to_owned(),
+                message,
+            };
+        }
+    };
+    if let Some(binding) = find_binding(&output, key, table) {
+        return Resolution::Bound {
+            table: table.to_owned(),
+            binding,
+        };
+    }
+    if table == "root" {
+        return Resolution::Forwarded;
+    }
+    // tmux retries an unbound key from another table in root, then drops it.
+    match resolve_key("root", key, prefixes, tables) {
+        Resolution::Forwarded => Resolution::Discarded {
+            table: table.to_owned(),
         },
-        details,
-    )
+        resolution => resolution,
+    }
+}
+
+/// Target of the last `switch-client -T NAME` in a command list (tmux prints
+/// chained commands separated by `\;`), the action that enters a custom table.
+fn switch_client_table(action: &str) -> Option<&str> {
+    action
+        .split(" \\; ")
+        .flat_map(|command| command.split("; "))
+        .filter_map(|command| {
+            let command = command.trim().trim_end_matches([';', '\\']);
+            let mut tokens = command.split_whitespace();
+            if !matches!(tokens.next(), Some("switch-client" | "switchc")) {
+                return None;
+            }
+            tokens.skip_while(|token| *token != "-T").nth(1)
+        })
+        .last()
 }
 
 fn list_keys(table: &str) -> Result<Vec<u8>, String> {
@@ -147,12 +272,17 @@ fn tmux_active_table() -> Option<String> {
     (!table.is_empty()).then_some(table)
 }
 
-fn result_for_binding(action: &str, mut details: Vec<String>, bytes_verified: bool) -> LayerResult {
+fn result_for_binding(
+    action: &str,
+    table: &str,
+    mut details: Vec<String>,
+    bytes_verified: bool,
+) -> LayerResult {
     let binding = BindingEvidence {
         dispatcher: None,
         action: Some(action.to_owned()),
         description: None,
-        submap: None,
+        submap: (table != "root").then(|| table.to_owned()),
         scope: BindingScope::Unknown,
         source: None,
         has_universal_match: false,
@@ -170,7 +300,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>, bytes_verified: bo
             "tmux",
             LayerId::Multiplexer,
             Outcome::HandledUncertain,
-            "candidate binding matches in tmux root table; delivery is unverified",
+            format!("candidate binding matches in tmux {table} table; delivery is unverified"),
             details,
         )
         .with_binding(binding);
@@ -181,7 +311,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>, bytes_verified: bo
             "tmux",
             LayerId::Multiplexer,
             Outcome::HandledAndPassed,
-            "binding remaps the key and forwards generated input",
+            format!("binding in tmux {table} table remaps the key and forwards generated input"),
             details,
         )
         .with_binding(binding);
@@ -190,7 +320,7 @@ fn result_for_binding(action: &str, mut details: Vec<String>, bytes_verified: bo
         "tmux",
         LayerId::Multiplexer,
         Outcome::Consumed,
-        "binding consumes the key",
+        format!("binding in tmux {table} table consumes the key"),
         details,
     )
     .with_binding(binding)
@@ -336,5 +466,96 @@ mod tests {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
         let binding = find_binding(output, &key, "resize").unwrap();
         assert_eq!(binding.action, "resize-pane -L 5");
+    }
+
+    fn fake_tables(table: &str) -> Result<Vec<u8>, String> {
+        Ok(match table {
+            "root" => b"bind-key -T root M-r switch-client -T resize\n".to_vec(),
+            "prefix" => b"bind-key -T prefix C-Left select-pane -L\nbind-key -T prefix x select-pane -L \\; switch-client -T resize\n".to_vec(),
+            "resize" => b"bind-key -T resize C-Left resize-pane -L 5\nbind-key -T resize h resize-pane -L \\; switch-client -T resize\n".to_vec(),
+            _ => Vec::new(),
+        })
+    }
+
+    fn run(preceding: &[&str], key: &str) -> LayerResult {
+        let preceding = preceding
+            .iter()
+            .map(|key| key.parse().unwrap())
+            .collect::<Vec<KeyCombo>>();
+        inspect_with_tables(
+            Some("root"),
+            &["C-b".to_owned()],
+            &preceding,
+            &key.parse().unwrap(),
+            true,
+            &mut fake_tables,
+        )
+    }
+
+    #[test]
+    fn bare_key_bound_only_in_prefix_table_is_not_handled() {
+        let result = run(&[], "ctrl+left");
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(result.summary.contains("root table"), "{}", result.summary);
+    }
+
+    #[test]
+    fn bare_prefix_key_is_reported_as_the_tmux_prefix() {
+        let result = run(&[], "ctrl+b");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(result.summary.starts_with("tmux prefix key"));
+    }
+
+    #[test]
+    fn prefix_table_binding_matches_after_the_prefix() {
+        let result = run(&["ctrl+b"], "ctrl+left");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(
+            result.summary,
+            "binding in tmux prefix table consumes the key"
+        );
+        assert_eq!(
+            result.binding.and_then(|binding| binding.action).as_deref(),
+            Some("select-pane -L")
+        );
+    }
+
+    #[test]
+    fn unbound_key_after_the_prefix_is_discarded() {
+        let result = run(&["ctrl+b"], "ctrl+q");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(result.summary.contains("tmux prefix table"));
+        assert!(result.summary.contains("discards"));
+    }
+
+    #[test]
+    fn switch_client_enters_the_named_table_for_the_next_key() {
+        let result = run(&["alt+r"], "ctrl+left");
+        assert_eq!(
+            result.summary,
+            "binding in tmux resize table consumes the key"
+        );
+    }
+
+    #[test]
+    fn chained_switch_client_keeps_the_sticky_table() {
+        assert_eq!(
+            switch_client_table("select-pane -L \\; switch-client -T resize"),
+            Some("resize")
+        );
+        assert_eq!(
+            switch_client_table("switch-client -T a; switch-client -T b"),
+            Some("b")
+        );
+        let result = run(&["ctrl+b", "x", "h", "h"], "ctrl+left");
+        assert_eq!(
+            result.summary,
+            "binding in tmux resize table consumes the key"
+        );
+        let result = run(&["ctrl+b", "x", "h"], "h");
+        assert_eq!(
+            result.binding.and_then(|binding| binding.action).as_deref(),
+            Some("resize-pane -L \\; switch-client -T resize")
+        );
     }
 }

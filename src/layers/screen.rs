@@ -10,16 +10,68 @@ use crate::layers::{LayerId, LayerResult, Outcome, format_bytes};
 /// input table, so this adapter reads the same `.screenrc` directives that
 /// define custom prefixes and `bind`/`bindkey` entries.
 pub fn inspect(key: &KeyCombo) -> LayerResult {
-    let mut details = Vec::new();
+    inspect_after(&[], key)
+}
+
+/// Inspect `key` after the earlier sequence keys that reached Screen, so
+/// `ctrl+a c` resolves `c` as a command after the prefix.
+pub fn inspect_after(preceding: &[KeyCombo], key: &KeyCombo) -> LayerResult {
     let (prefix, config_lines, config_source) = load_config();
-    details.push(format!("command prefix: {}", display_bytes(&prefix)));
+    inspect_with_config(preceding, key, &prefix, &config_lines, config_source)
+}
+
+fn inspect_with_config(
+    preceding: &[KeyCombo],
+    key: &KeyCombo,
+    prefix: &[u8],
+    config_lines: &[(usize, String)],
+    config_source: Option<PathBuf>,
+) -> LayerResult {
+    let mut details = Vec::new();
+    details.push(format!("command prefix: {}", display_bytes(prefix)));
     if let Some(source) = config_source {
         details.push(format!("config: {}", source.display()));
     } else {
         details.push("config: no readable .screenrc; GNU Screen defaults assumed".into());
     }
+    let is_prefix = |key: &KeyCombo| screen_key_bytes(key).is_some_and(|bytes| bytes == prefix);
+    // The key after the prefix is read as a command, never as a new prefix.
+    let prefix_pending = preceding
+        .iter()
+        .fold(false, |pending, earlier| !pending && is_prefix(earlier));
 
-    if screen_key_bytes(key).is_some_and(|bytes| bytes == prefix) {
+    if prefix_pending {
+        details.push("the previous key was Screen's command prefix".into());
+        let command_bindings = parse_bindings(config_lines);
+        if let Some(binding) = command_bindings
+            .iter()
+            .find(|binding| screen_key_bytes(key).is_some_and(|bytes| bytes == binding.key))
+        {
+            details.push(format!(
+                "bind {} → {}",
+                display_bytes(&binding.key),
+                binding.action
+            ));
+            details.push(format!("binding source: {}", binding.source));
+            return LayerResult::new(
+                "GNU Screen",
+                LayerId::Multiplexer,
+                Outcome::Consumed,
+                format!("bound after Screen's command prefix to {}", binding.action),
+                details,
+            );
+        }
+        details.push("built-in default command bindings are not modeled".into());
+        return LayerResult::new(
+            "GNU Screen",
+            LayerId::Multiplexer,
+            Outcome::Consumed,
+            "Screen reads this key as a command after its prefix; no custom binding",
+            details,
+        );
+    }
+
+    if is_prefix(key) {
         details.push("this is Screen's command prefix; the next key is read by Screen".into());
         return LayerResult::new(
             "GNU Screen",
@@ -31,7 +83,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     }
 
     let candidates = screen_input_candidates(key);
-    let bindkeys = parse_bindkeys(&config_lines);
+    let bindkeys = parse_bindkeys(config_lines);
     if let Some(binding) = bindkeys.iter().find(|binding| {
         candidates
             .iter()
@@ -63,7 +115,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         );
     }
 
-    let command_bindings = parse_bindings(&config_lines);
+    let command_bindings = parse_bindings(config_lines);
     if let Some(binding) = command_bindings
         .iter()
         .find(|binding| screen_key_bytes(key).is_some_and(|bytes| bytes == binding.key))
@@ -410,5 +462,22 @@ mod tests {
     fn parses_common_screen_termcap_names() {
         assert_eq!(parse_screen_sequence("ku"), Some(b"\x1b[A".to_vec()));
         assert_eq!(parse_screen_sequence("k1"), Some(b"\x1bOP".to_vec()));
+    }
+
+    #[test]
+    fn command_binding_matches_only_after_the_prefix() {
+        let lines = vec![(1, "bind ^L windowlist".into())];
+        let ctrl_a: KeyCombo = "ctrl+a".parse().unwrap();
+        let ctrl_l: KeyCombo = "ctrl+l".parse().unwrap();
+        let bare = inspect_with_config(&[], &ctrl_l, &[1], &lines, None);
+        assert_eq!(bare.outcome, Outcome::UncertainContinues);
+        let after = inspect_with_config(std::slice::from_ref(&ctrl_a), &ctrl_l, &[1], &lines, None);
+        assert_eq!(after.outcome, Outcome::Consumed);
+        assert_eq!(
+            after.summary,
+            "bound after Screen's command prefix to windowlist"
+        );
+        let literal = inspect_with_config(&[ctrl_a.clone(), ctrl_a], &ctrl_l, &[1], &lines, None);
+        assert_eq!(literal.outcome, Outcome::UncertainContinues);
     }
 }

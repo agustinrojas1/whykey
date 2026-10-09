@@ -226,7 +226,7 @@ pub(crate) fn dispatch(
                 "--repeat" | "-r" => repeat = true,
                 "--suppress" => {
                     if explicit_policy == Some("pass-through") {
-                        eprintln!("error: --suppress and --pass-through cannot be used together");
+                        eprintln!("error: --suppress and --no-suppress cannot be used together");
                         return ExitCode::from(2);
                     }
                     capture_policy = whykey::listen::CapturePolicy::Suppress;
@@ -235,7 +235,7 @@ pub(crate) fn dispatch(
                 }
                 "--no-suppress" | "--pass-through" => {
                     if explicit_policy == Some("suppress") {
-                        eprintln!("error: --suppress and --pass-through cannot be used together");
+                        eprintln!("error: --suppress and --no-suppress cannot be used together");
                         return ExitCode::from(2);
                     }
                     capture_policy = whykey::listen::CapturePolicy::PassThrough;
@@ -247,7 +247,7 @@ pub(crate) fn dispatch(
                 "--explain-capture" => explain_capture = true,
                 "-h" | "--help" => {
                     println!(
-                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--dry-run] [--explain-capture] [--terminal] [--evdev] [--device PATH] [--verbose] [--color MODE] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression. It falls back to terminal capture when native capture is unavailable. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
+                        "Usage: whykey listen [--repeat] [--timeout SECONDS] [--count N] [--events all] [--suppress|--no-suppress|--pass-through] [--dry-run] [--explain-capture] [--terminal] [--evdev] [--device PATH] [--verbose] [--color MODE] [--json] [--ndjson] [--output PATH]\n\nCapture one key and explain its path. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression. Without native capture it falls back to terminal capture, except that --suppress fails instead; --suppress cannot be combined with --terminal, --evdev, or --device. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file."
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -328,6 +328,12 @@ pub(crate) fn dispatch(
         }
         if terminal && (evdev || device.is_some()) {
             eprintln!("error: --terminal and --evdev cannot be used together");
+            return ExitCode::from(2);
+        }
+        if let Some(conflict) =
+            whykey::listen::suppress_conflict(capture_policy, terminal, evdev || device.is_some())
+        {
+            eprintln!("error: {conflict}");
             return ExitCode::from(2);
         }
         if events_all && terminal {
@@ -457,7 +463,7 @@ pub(crate) fn dispatch(
         return ExitCode::from(2);
     }
 
-    let key: whykey::key::KeyCombo = match argument.parse() {
+    let key = match whykey::key::KeyCombo::parse_query(&argument) {
         Ok(key) => key,
         Err(error) => {
             eprintln!("error: {error}\n\nTry 'whykey --help'.");
@@ -829,7 +835,7 @@ pub(crate) mod help {
             .unwrap_or_else(|| "whykey".into());
         match shell {
             "bash" => format!(
-                "whykey() {{\n  local whykey_readline_bindings whykey_readline_macros whykey_readline_shell_bindings whykey_readline_variables whykey_readline_map\n  whykey_readline_bindings=\"$(builtin bind -P 2>/dev/null)\"\n  for whykey_readline_map in emacs emacs-standard emacs-meta vi vi-move vi-command vi-insertion; do\n    whykey_readline_bindings=\"$whykey_readline_bindings\n# WHYKEY_KEYMAP $whykey_readline_map\n$(builtin bind -m \"$whykey_readline_map\" -P 2>/dev/null)\"\ndone\n  whykey_readline_macros=\"$(builtin bind -S 2>/dev/null)\"\n  whykey_readline_shell_bindings=\"$(builtin bind -X 2>/dev/null)\"\n  whykey_readline_variables=\"$(builtin bind -V 2>/dev/null)\"\n  WHYKEY_READLINE_BINDINGS=\"$whykey_readline_bindings\" WHYKEY_READLINE_MACROS=\"$whykey_readline_macros\" WHYKEY_READLINE_SHELL_BINDINGS=\"$whykey_readline_shell_bindings\" WHYKEY_READLINE_VARIABLES=\"$whykey_readline_variables\" command {binary} \"$@\"\n}}"
+                "whykey() {{\n  local whykey_readline_bindings whykey_readline_macros whykey_readline_shell_bindings whykey_readline_variables whykey_readline_map\n  whykey_readline_bindings=\"$(builtin bind -p 2>/dev/null)\"\n  for whykey_readline_map in emacs emacs-standard emacs-meta vi vi-move vi-command vi-insertion; do\n    whykey_readline_bindings=\"$whykey_readline_bindings\n# WHYKEY_KEYMAP $whykey_readline_map\n$(builtin bind -m \"$whykey_readline_map\" -p 2>/dev/null)\"\ndone\n  whykey_readline_macros=\"$(builtin bind -S 2>/dev/null)\"\n  whykey_readline_shell_bindings=\"$(builtin bind -X 2>/dev/null)\"\n  whykey_readline_variables=\"$(builtin bind -V 2>/dev/null)\"\n  WHYKEY_READLINE_BINDINGS=\"$whykey_readline_bindings\" WHYKEY_READLINE_MACROS=\"$whykey_readline_macros\" WHYKEY_READLINE_SHELL_BINDINGS=\"$whykey_readline_shell_bindings\" WHYKEY_READLINE_VARIABLES=\"$whykey_readline_variables\" command {binary} \"$@\"\n}}"
             ),
             "zsh" => format!(
                 "whykey() {{\n  local whykey_zle_bindings\n  whykey_zle_bindings=\"$(bindkey -L 2>/dev/null)\"\n  WHYKEY_ZLE_BINDINGS=\"$whykey_zle_bindings\" command {binary} \"$@\"\n}}"
@@ -1025,5 +1031,27 @@ mod tests {
                 .unwrap_err()
                 .contains("expected auto, always, or never")
         );
+    }
+
+    #[test]
+    fn listen_rejects_suppress_with_backends_that_cannot_suppress() {
+        // Each case is refused during argument validation, before any capture
+        // backend (terminal, evdev, or compositor) is opened.
+        for arguments in [
+            vec!["--terminal", "--suppress"],
+            vec!["--suppress", "--evdev"],
+            vec!["--suppress", "--device", "/dev/input/event0"],
+        ] {
+            let code = dispatch(
+                "listen".into(),
+                arguments.iter().map(|value| (*value).to_owned()).collect(),
+                false,
+                false,
+                false,
+                ColorChoice::Never,
+                2,
+            );
+            assert_eq!(code, ExitCode::from(2), "{arguments:?}");
+        }
     }
 }

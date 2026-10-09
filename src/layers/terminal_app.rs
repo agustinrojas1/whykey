@@ -152,10 +152,26 @@ fn inspect_bindings(
 /// Analyze once: route finding plus normal input bytes from a single config
 /// load. Reused for the visible terminal layer and downstream TTY/shell
 /// analysis so the file is read once per static inspection.
-pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
+pub fn analyze(
+    key: &KeyCombo,
+    protocol_flags: Option<u32>,
+) -> (LayerResult, Option<TerminalInput>) {
     let Some(kind) = terminal_kind() else {
         return (not_applicable("terminal identity is not known"), None);
     };
+    let (layer, input) = analyze_kind(kind, key);
+    let input = input.or_else(|| {
+        // No binding intercepts the key, so the terminal emits its normal
+        // encoding (shared with the Ghostty/generic path).
+        (layer.outcome == Outcome::Pass)
+            .then(|| crate::layers::ghostty::default_encoding_for_protocol(key, protocol_flags))
+            .flatten()
+            .map(|bytes| TerminalInput::predicted(bytes, format!("{kind} default encoding")))
+    });
+    (layer, input)
+}
+
+fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
     if kind == TerminalKind::WezTerm {
         let (bindings, source) = match load_wezterm_bindings() {
             Ok(value) => value,
@@ -249,7 +265,7 @@ pub fn analyze(key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
 }
 
 pub fn normal_input(key: &KeyCombo) -> Option<TerminalInput> {
-    analyze(key).1
+    analyze(key, None).1
 }
 
 pub fn applicable() -> bool {
@@ -310,31 +326,39 @@ pub(crate) fn terminal_kind() -> Option<TerminalKind> {
     if env::var_os("ALACRITTY_SOCKET").is_some() {
         return Some(TerminalKind::Alacritty);
     }
-    let program = env::var("TERM_PROGRAM")
+    kind_from_program(&terminal_program()?)
+}
+
+fn kind_from_program(program: &str) -> Option<TerminalKind> {
+    match program.to_ascii_lowercase().as_str() {
+        "kitty" => Some(TerminalKind::Kitty),
+        "alacritty" | "alacritty-terminal" => Some(TerminalKind::Alacritty),
+        "foot" | "footclient" => Some(TerminalKind::Foot),
+        "wezterm" | "wezterm-gui" => Some(TerminalKind::WezTerm),
+        "konsole" => Some(TerminalKind::Konsole),
+        _ => None,
+    }
+}
+
+/// Terminal program named by `TERM_PROGRAM` / `LC_TERMINAL`, or inferred
+/// from a terminal-specific `TERM`. The single identity source shared by the
+/// Ghostty and generic terminal adapters.
+pub(crate) fn terminal_program() -> Option<String> {
+    env::var("TERM_PROGRAM")
         .ok()
         .or_else(|| env::var("LC_TERMINAL").ok())
-        .or_else(|| {
-            let term = env::var("TERM").ok()?;
-            let normalized = term.to_ascii_lowercase();
-            matches!(
-                normalized.as_str(),
-                "xterm-kitty" | "foot" | "foot-direct" | "alacritty" | "wezterm" | "konsole"
-            )
-            .then_some(term)
-        })?
-        .to_ascii_lowercase();
-    if program == "kitty" {
-        Some(TerminalKind::Kitty)
-    } else if matches!(program.as_str(), "alacritty" | "alacritty-terminal") {
-        Some(TerminalKind::Alacritty)
-    } else if matches!(program.as_str(), "foot" | "footclient") {
-        Some(TerminalKind::Foot)
-    } else if matches!(program.as_str(), "wezterm" | "wezterm-gui") {
-        Some(TerminalKind::WezTerm)
-    } else if program == "konsole" {
-        Some(TerminalKind::Konsole)
-    } else {
-        None
+        .or_else(|| program_from_term(&env::var("TERM").ok()?).map(str::to_owned))
+}
+
+fn program_from_term(term: &str) -> Option<&'static str> {
+    match term.to_ascii_lowercase().as_str() {
+        "xterm-kitty" => Some("kitty"),
+        "foot" | "foot-direct" => Some("foot"),
+        "alacritty" | "alacritty-direct" => Some("alacritty"),
+        "wezterm" => Some("wezterm"),
+        "konsole" | "konsole-direct" | "konsole-256color" => Some("konsole"),
+        "xterm-ghostty" | "ghostty" => Some("ghostty"),
+        _ => None,
     }
 }
 
@@ -1061,6 +1085,31 @@ fn decode_escape(value: &str) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::layers::LayerStatus;
+
+    #[test]
+    fn terminal_specific_term_values_resolve_to_one_identity() {
+        assert_eq!(program_from_term("xterm-kitty"), Some("kitty"));
+        assert_eq!(program_from_term("foot-direct"), Some("foot"));
+        assert_eq!(program_from_term("alacritty"), Some("alacritty"));
+        assert_eq!(program_from_term("wezterm"), Some("wezterm"));
+        assert_eq!(program_from_term("konsole"), Some("konsole"));
+        assert_eq!(program_from_term("xterm-ghostty"), Some("ghostty"));
+        assert_eq!(program_from_term("xterm-256color"), None);
+        // Every TERM-inferred program maps to its adapter; TERM=xterm-kitty
+        // used to yield "xterm-kitty", which no adapter matched.
+        for (term, kind) in [
+            ("xterm-kitty", TerminalKind::Kitty),
+            ("foot", TerminalKind::Foot),
+            ("alacritty", TerminalKind::Alacritty),
+            ("wezterm", TerminalKind::WezTerm),
+            ("konsole", TerminalKind::Konsole),
+        ] {
+            assert_eq!(
+                program_from_term(term).and_then(kind_from_program),
+                Some(kind)
+            );
+        }
+    }
 
     #[test]
     fn parses_kitty_send_text_binding() {

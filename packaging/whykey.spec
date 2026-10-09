@@ -8,11 +8,14 @@ Source0:        %{url}/releases/download/v%{version}/%{name}-%{version}-source.t
 BuildRequires:  cargo
 BuildRequires:  rust-packaging
 BuildRequires:  util-linux-script
+# The first-party editor extensions are Python 3 scripts; the main binary is not.
+Recommends:     python3
 
 %description
 Whykey diagnoses the path of a keyboard event through Linux desktops,
-terminals, TTYs, multiplexers, shells, and supported applications. It is
-read-only and never executes the shortcut under investigation.
+terminals, TTYs, multiplexers, shells, and supported applications. It never
+edits configuration files or executes the shortcut under investigation. The
+optional whykey-nvim, whykey-vscode, and whykey-emacs extensions need python3.
 
 %prep
 %autosetup -n %{name}-%{version}

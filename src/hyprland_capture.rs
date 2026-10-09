@@ -10,8 +10,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::capture::{
-    CaptureBackend, CaptureBackendId, CaptureToken, NativeBackendId, NativeCaptureIo,
-    NativeCaptureTransport,
+    CAPTURE_LEASE_MS, CAPTURE_LEASE_RENEW_INTERVAL, CaptureBackend, CaptureBackendId, CaptureToken,
+    NativeBackendId, NativeCaptureIo, NativeCaptureTransport,
 };
 pub use crate::capture::{CapturePolicy as HyprlandCapturePolicy, ChordReleaseStatus};
 use crate::command;
@@ -132,21 +132,57 @@ pub fn has_universal_bindings() -> bool {
     })
 }
 
+/// Every hook carries a failsafe lease ([`CAPTURE_LEASE_MS`]): the Lua timer
+/// removes it unless whykey renews it while listening.
 pub fn install_lua_code(token: &str, policy: HyprlandCapturePolicy, _saved_submap: &str) -> String {
+    let lease_ms = CAPTURE_LEASE_MS;
     match policy {
         HyprlandCapturePolicy::PassThrough => {
             format!(
                 r#"_G.__whykey_subs = _G.__whykey_subs or {{}}
-_G.__whykey_subs["{token}"] = hl.on("input.keyboard.key", function(kc, ts, state)
-    local mask = 0
-    if hl.is_key_down("Shift_L") or hl.is_key_down("Shift_R") then mask = mask + 1 end
-    if hl.is_key_down("Control_L") or hl.is_key_down("Control_R") then mask = mask + 4 end
-    if hl.is_key_down("Alt_L") or hl.is_key_down("Alt_R") then mask = mask + 8 end
-    if hl.is_key_down("Hyper_L") or hl.is_key_down("Hyper_R") then mask = mask + 32 end
-    if hl.is_key_down("Super_L") or hl.is_key_down("Super_R") then mask = mask + 64 end
-    if hl.is_key_down("ISO_Level3_Shift") or hl.is_key_down("Mode_switch") then mask = mask + 128 end
-    hl.dispatch(hl.dsp.event(string.format("whykey-probe,{token},%d,%d,%d", kc, state, mask)))
+local subs = _G.__whykey_subs
+local function remove_entry(entry)
+    if entry.timer then
+        pcall(function() entry.timer:set_enabled(false) end)
+    end
+    if entry.listener then
+        pcall(function() entry.listener:remove() end)
+        entry.listener = nil
+    end
+end
+
+if subs["{token}"] then
+    remove_entry(subs["{token}"])
+    subs["{token}"] = nil
+end
+
+local entry = {{}}
+local ok, err = pcall(function()
+    entry.listener = hl.on("input.keyboard.key", function(kc, ts, state)
+        local mask = 0
+        if hl.is_key_down("Shift_L") or hl.is_key_down("Shift_R") then mask = mask + 1 end
+        if hl.is_key_down("Control_L") or hl.is_key_down("Control_R") then mask = mask + 4 end
+        if hl.is_key_down("Alt_L") or hl.is_key_down("Alt_R") then mask = mask + 8 end
+        if hl.is_key_down("Hyper_L") or hl.is_key_down("Hyper_R") then mask = mask + 32 end
+        if hl.is_key_down("Super_L") or hl.is_key_down("Super_R") then mask = mask + 64 end
+        if hl.is_key_down("ISO_Level3_Shift") or hl.is_key_down("Mode_switch") then mask = mask + 128 end
+        hl.dispatch(hl.dsp.event(string.format("whykey-probe,{token},%d,%d,%d", kc, state, mask)))
+    end)
+    -- Failsafe lease: whykey renews it while listening; if renewals stop,
+    -- the listener removes itself.
+    entry.timer = hl.timer(function()
+        if subs["{token}"] == entry then
+            remove_entry(entry)
+            subs["{token}"] = nil
+        end
+    end, {{ timeout = {lease_ms}, type = "oneshot" }})
 end)
+
+if not ok then
+    remove_entry(entry)
+    error(tostring(err))
+end
+subs["{token}"] = entry
 hl.dispatch(hl.dsp.event("whykey-probe,{token},armed"))"#
             )
         }
@@ -205,7 +241,7 @@ local function do_cleanup(expected_owner)
         if not restored then
             if state.timer then
                 pcall(function()
-                    state.timer:set_timeout(5000)
+                    state.timer:set_timeout({lease_ms})
                     state.timer:set_enabled(true)
                 end)
             end
@@ -226,9 +262,9 @@ local ok, err = pcall(function()
             if _G.__whykey_capture and _G.__whykey_capture.on_timeout then
                 _G.__whykey_capture.on_timeout()
             end
-        end, {{ timeout = 5000, type = "oneshot" }})
+        end, {{ timeout = {lease_ms}, type = "oneshot" }})
     else
-        _G.__whykey_capture.timer:set_timeout(5000)
+        _G.__whykey_capture.timer:set_timeout({lease_ms})
         _G.__whykey_capture.timer:set_enabled(true)
     end
 
@@ -275,9 +311,17 @@ pub fn cleanup_lua_code(token: &str, policy: HyprlandCapturePolicy, _saved_subma
     match policy {
         HyprlandCapturePolicy::PassThrough => {
             format!(
-                r#"if _G.__whykey_subs and _G.__whykey_subs["{token}"] then
-    pcall(function() _G.__whykey_subs["{token}"]:remove() end)
-    _G.__whykey_subs["{token}"] = nil
+                r#"local subs = _G.__whykey_subs
+local entry = subs and subs["{token}"]
+if entry then
+    if entry.timer then
+        pcall(function() entry.timer:set_enabled(false) end)
+    end
+    if entry.listener then
+        pcall(function() entry.listener:remove() end)
+        entry.listener = nil
+    end
+    subs["{token}"] = nil
 end"#
             )
         }
@@ -367,17 +411,31 @@ end"#
     }
 }
 
-pub fn renew_lua_code(token: &str) -> String {
-    format!(
-        r#"local state = _G.__whykey_capture
+/// Owner-checked renewal of the hook's failsafe lease. An expired lease has
+/// already removed the hook, so renewal fails instead of resurrecting it.
+pub fn renew_lua_code(token: &str, policy: HyprlandCapturePolicy) -> String {
+    let lease_ms = CAPTURE_LEASE_MS;
+    match policy {
+        HyprlandCapturePolicy::PassThrough => format!(
+            r#"local subs = _G.__whykey_subs
+local entry = subs and subs["{token}"]
+if not (entry and entry.listener and entry.timer) then
+    error("lease not owned by {token}")
+end
+entry.timer:set_timeout({lease_ms})
+entry.timer:set_enabled(true)"#
+        ),
+        HyprlandCapturePolicy::Suppress => format!(
+            r#"local state = _G.__whykey_capture
 if not (state and state.owner == "{token}") then
     error("lease not owned by {token}")
 end
 if state.timer then
-    state.timer:set_timeout(5000)
+    state.timer:set_timeout({lease_ms})
     state.timer:set_enabled(true)
 end"#
-    )
+        ),
+    }
 }
 
 /// Explicit capture lifecycle. One [`HyprlandCaptureSession`] owns the
@@ -559,10 +617,7 @@ impl HyprlandHookGuard {
     }
 
     pub fn renew_lease(&self) -> io::Result<()> {
-        if self.policy != HyprlandCapturePolicy::Suppress {
-            return Ok(());
-        }
-        let code = renew_lua_code(&self.token);
+        let code = renew_lua_code(&self.token, self.policy);
         self.client.eval(&code).map_err(|error| {
             io::Error::other(format!(
                 "hyprctl eval lease renewal returned error: {error}"
@@ -851,6 +906,12 @@ impl HyprlandCaptureSession {
         self.policy == HyprlandCapturePolicy::Suppress && self.state == CaptureState::Armed
     }
 
+    /// Every armed hook, suppressing or pass-through, carries a lease that
+    /// expires unless renewed every [`CAPTURE_LEASE_RENEW_INTERVAL`].
+    pub fn holds_lease(&self) -> bool {
+        self.state == CaptureState::Armed
+    }
+
     pub fn saved_submap(&self) -> &str {
         &self.saved_submap
     }
@@ -1031,9 +1092,7 @@ impl HyprlandCaptureSession {
         }
 
         while Instant::now() < deadline {
-            if self.policy == HyprlandCapturePolicy::Suppress
-                && last_renew.elapsed() >= Duration::from_secs(2)
-            {
+            if self.holds_lease() && last_renew.elapsed() >= CAPTURE_LEASE_RENEW_INTERVAL {
                 self.renew_lease().map_err(|e| {
                     format!("failed to renew capture lease during chord release: {e}")
                 })?;
@@ -1299,6 +1358,10 @@ impl CaptureBackend for HyprlandCaptureSession {
 
     fn is_suppressing(&self) -> bool {
         Self::is_suppressing(self)
+    }
+
+    fn holds_lease(&self) -> bool {
+        Self::holds_lease(self)
     }
 
     fn close(&mut self) -> io::Result<()> {
@@ -1800,9 +1863,129 @@ xkb_symbols "pc" {
 
     #[test]
     fn renew_lua_code_checks_ownership_and_errors() {
-        let renew = renew_lua_code("test_token");
+        let renew = renew_lua_code("test_token", HyprlandCapturePolicy::Suppress);
         assert!(renew.contains("if not (state and state.owner == \"test_token\") then"));
         assert!(renew.contains("error(\"lease not owned by test_token\")"));
+    }
+
+    fn lua_binary() -> Option<std::ffi::OsString> {
+        std::env::var_os("WHYKEY_LUA").or_else(|| {
+            Command::new("sh")
+                .args(["-c", "command -v lua"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|path| path.trim().to_owned())
+                .filter(|path| !path.is_empty())
+                .map(std::ffi::OsString::from)
+        })
+    }
+
+    /// Run the generated pass-through Lua against a scripted `hl` double and
+    /// drive its failsafe timer the way Hyprland would after whykey dies.
+    #[test]
+    fn pass_through_hook_removes_itself_when_its_lease_expires() {
+        let Some(lua) = lua_binary() else {
+            return;
+        };
+        let policy = HyprlandCapturePolicy::PassThrough;
+        let script = r#"
+local listeners, timers, events = {}, {}, {}
+hl = {
+    dsp = { event = function(payload) return payload end },
+    dispatch = function(payload) table.insert(events, payload) return true end,
+    is_key_down = function() return false end,
+    on = function(name, callback)
+        local listener = { name = name, callback = callback, removed = false }
+        function listener:remove() self.removed = true end
+        table.insert(listeners, listener)
+        return listener
+    end,
+    timer = function(callback, options)
+        local timer = { callback = callback, timeout = options.timeout, kind = options.type, enabled = true }
+        function timer:set_timeout(ms) self.timeout = ms end
+        function timer:set_enabled(enabled) self.enabled = enabled end
+        table.insert(timers, timer)
+        return timer
+    end,
+}
+local function run(chunk) return pcall(assert(load(chunk))) end
+local install, renew, cleanup = [==[@INSTALL@]==], [==[@RENEW@]==], [==[@CLEANUP@]==]
+
+assert(run(install))
+assert(#listeners == 1 and #timers == 1, "one listener and one lease timer")
+local lease = timers[1]
+assert(lease.timeout == @LEASE@ and lease.kind == "oneshot" and lease.enabled)
+assert(events[#events] == "whykey-probe,tok,armed")
+
+lease.timeout = 1
+assert(run(renew))
+assert(lease.enabled and lease.timeout == @LEASE@, "renewal restarts the lease")
+
+lease.callback()
+assert(listeners[1].removed, "an expired lease removes the listener")
+assert(_G.__whykey_subs["tok"] == nil)
+local ok, err = run(renew)
+assert(not ok and tostring(err):find("lease not owned by tok"), "renewal after expiry fails")
+assert(run(cleanup), "cleanup after expiry is a no-op")
+
+assert(run(install))
+assert(run(cleanup))
+assert(listeners[2].removed and not timers[2].enabled, "cleanup disarms the lease")
+assert(run(install))
+timers[2].callback()
+assert(not listeners[3].removed, "a stale lease never removes a newer hook")
+print("lease-ok")
+"#
+        .replace("@INSTALL@", &install_lua_code("tok", policy, "default"))
+        .replace("@RENEW@", &renew_lua_code("tok", policy))
+        .replace("@CLEANUP@", &cleanup_lua_code("tok", policy, "default"))
+        .replace("@LEASE@", &CAPTURE_LEASE_MS.to_string());
+        let path = std::env::temp_dir().join(format!(
+            "whykey-lease-{}-{}.lua",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, script).unwrap();
+        let output = Command::new(lua).arg(&path).output();
+        let _ = std::fs::remove_file(&path);
+        let output = output.expect("lua must run");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("lease-ok"));
+    }
+
+    #[test]
+    fn armed_pass_through_hook_holds_and_renews_its_lease() {
+        let fake = FakeHyprctl::with_submap("default");
+        let (_peer, mut session) = fake_session("default", CaptureState::Connected, fake.clone());
+        assert!(!CaptureBackend::holds_lease(&session));
+        session.buffer.push_str("custom>>whykey-probe,tok,armed\n");
+        session
+            .arm(HyprlandCapturePolicy::PassThrough)
+            .expect("pass-through must arm");
+        assert!(CaptureBackend::holds_lease(&session));
+        assert!(!session.is_suppressing());
+
+        NativeCaptureTransport::renew_lease(&session).expect("renewal must succeed");
+        assert_eq!(
+            fake.eval_calls.borrow().last().unwrap(),
+            &renew_lua_code("tok", HyprlandCapturePolicy::PassThrough)
+        );
+        fake.eval_results
+            .borrow_mut()
+            .push_back(eval_err("lease not owned by tok"));
+        assert!(
+            NativeCaptureTransport::renew_lease(&session).is_err(),
+            "an expired pass-through lease must surface instead of passing silently"
+        );
+
+        session.close().expect("pass-through cleanup must close");
+        assert!(!CaptureBackend::holds_lease(&session));
     }
 
     #[test]

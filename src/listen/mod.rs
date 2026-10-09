@@ -5,9 +5,11 @@
 //! through a pass-through hook; `--suppress` opts into a temporary runtime
 //! hook that suppresses bound compositor actions during inspection.
 //! Pass-through-only native backends do not change compositor state. If native
-//! capture is unavailable, it falls back to terminal capture
-//! (`--terminal` explicitly forces terminal capture). The optional evdev backend
-//! observes physical input events before compositor processing.
+//! capture is unavailable, pass-through listening falls back to terminal
+//! capture (`--terminal` explicitly forces terminal capture), while
+//! `--suppress` fails instead of silently capturing without suppression. The
+//! optional evdev backend observes physical input events before compositor
+//! processing.
 
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
@@ -403,7 +405,35 @@ impl KeyEventType {
         }
     }
 }
+
+/// Why `--suppress` cannot be honoured for an explicitly forced backend.
+/// Terminal and evdev capture never hold compositor shortcuts, so the
+/// combination is refused instead of silently capturing without suppression.
+pub fn suppress_conflict(
+    policy: CapturePolicy,
+    terminal: bool,
+    evdev: bool,
+) -> Option<&'static str> {
+    if !policy.suppresses() {
+        None
+    } else if terminal {
+        Some(
+            "--suppress cannot be used with --terminal: terminal capture cannot suppress compositor shortcuts",
+        )
+    } else if evdev {
+        Some(
+            "--suppress cannot be used with --evdev or --device: evdev capture is read-only and cannot suppress compositor shortcuts",
+        )
+    } else {
+        None
+    }
+}
+
 pub fn run(options: Options) -> Result<(), ListenError> {
+    let evdev = options.evdev || options.device.is_some();
+    if let Some(conflict) = suppress_conflict(options.capture_policy, options.terminal, evdev) {
+        return Err(ListenError::Setup(conflict.into()));
+    }
     if options.dry_run || options.explain_capture {
         let discovery = ListenSession::capture();
         if options.explain_capture {
@@ -419,7 +449,7 @@ pub fn run(options: Options) -> Result<(), ListenError> {
             return Ok(());
         }
     }
-    if options.evdev || options.device.is_some() {
+    if evdev {
         return run_evdev(options);
     }
     if options.terminal {
@@ -428,24 +458,26 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     let discovery = ListenSession::capture();
     #[cfg(target_os = "linux")]
     match select_native_backend(&discovery.environment) {
-        Ok(session) => run_native(options, session, discovery),
+        Ok(session) => {
+            // The guard outlives the native session, which run_native drops.
+            let signals = SignalGuard::install()?;
+            run_native(options, session, discovery, &signals)
+        }
         Err(error) => {
-            if options.events_all {
-                return Err(ListenError::Message(format!(
-                    "Native compositor capture unavailable: {error}; --events all requires native compositor or evdev capture"
-                )));
-            }
-            if options.capture_policy == CapturePolicy::Suppress
-                && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
-            {
+            if options.capture_policy == CapturePolicy::Suppress {
                 let backend = error.backend_display();
                 eprintln!(
                     "whykey listen: could not suppress native compositor shortcuts ({backend})"
                 );
                 eprintln!("No key was captured and no shortcut was executed.");
-                eprintln!("Use --pass-through to capture without suppression.");
+                eprintln!("Use --no-suppress to capture without suppression.");
                 return Err(ListenError::Setup(format!(
-                    "native compositor capture unavailable: {error}"
+                    "--suppress requires native compositor capture, which is unavailable: {error}"
+                )));
+            }
+            if options.events_all {
+                return Err(ListenError::Message(format!(
+                    "Native compositor capture unavailable: {error}; --events all requires native compositor or evdev capture"
                 )));
             }
             eprintln!("Native compositor capture is unavailable: {error}");
@@ -457,6 +489,12 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        if options.capture_policy == CapturePolicy::Suppress {
+            return Err(ListenError::Setup(
+                "--suppress requires native compositor capture, which is only supported on Linux"
+                    .into(),
+            ));
+        }
         if options.events_all {
             return Err(ListenError::Message(
                 "--events all requires evdev capture on non-Linux platforms".into(),
@@ -1301,9 +1339,120 @@ xkb_symbols "pc" {
         let backend = EvdevBackend {
             session: None,
             requested: None,
+            events_all: false,
         };
         assert_eq!(backend.id(), CaptureBackendId::Evdev);
         assert!(!backend.is_suppressing());
+    }
+
+    #[test]
+    fn suppress_is_refused_for_backends_that_cannot_suppress() {
+        let suppress = CapturePolicy::Suppress;
+        assert!(
+            suppress_conflict(suppress, true, false)
+                .unwrap()
+                .contains("--terminal")
+        );
+        assert!(
+            suppress_conflict(suppress, false, true)
+                .unwrap()
+                .contains("--evdev")
+        );
+        assert_eq!(suppress_conflict(suppress, false, false), None);
+        assert_eq!(
+            suppress_conflict(CapturePolicy::PassThrough, true, true),
+            None
+        );
+
+        // The listener refuses before any capture is opened, so no terminal
+        // mode or compositor state is touched.
+        for (terminal, evdev, device) in [
+            (true, false, None),
+            (false, true, None),
+            (false, false, Some(PathBuf::from("/dev/input/event0"))),
+        ] {
+            let error = run(Options {
+                capture_policy: suppress,
+                explicit_suppress: true,
+                terminal,
+                evdev,
+                device,
+                ..Options::default()
+            })
+            .unwrap_err();
+            assert!(matches!(error, ListenError::Setup(_)));
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("--suppress cannot be used with")
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        calls: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+    }
+
+    impl CaptureBackend for RecordingBackend {
+        fn id(&self) -> CaptureBackendId {
+            CaptureBackendId::Terminal
+        }
+
+        fn display(&self) -> &'static str {
+            "recording"
+        }
+
+        fn arm(&mut self, _policy: CapturePolicy) -> Result<(), String> {
+            self.calls.borrow_mut().push("arm");
+            Ok(())
+        }
+
+        fn next_observed_event(
+            &mut self,
+            _events_all: bool,
+        ) -> Result<Option<ObservedKey>, String> {
+            Ok(None)
+        }
+
+        fn wait_for_chord_release(
+            &mut self,
+            _main: crate::xkb::XkbKeycode,
+            _timeout: Duration,
+        ) -> Result<crate::capture::ChordReleaseStatus, String> {
+            Ok(crate::capture::ChordReleaseStatus::Released)
+        }
+
+        fn is_suppressing(&self) -> bool {
+            false
+        }
+
+        fn close(&mut self) -> io::Result<()> {
+            self.calls.borrow_mut().push("close");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn job_control_stop_restores_capture_before_stopping_and_rearms_after() {
+        let mut backend = RecordingBackend::default();
+        let calls = backend.calls.clone();
+        suspend_for_job_control(&mut backend, || {
+            calls.borrow_mut().push("stop");
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(*backend.calls.borrow(), vec!["close", "stop", "arm"]);
+
+        let mut backend = RecordingBackend::default();
+        let error = suspend_for_job_control(&mut backend, || Err(io::Error::other("stop failed")))
+            .unwrap_err();
+        assert!(error.to_string().contains("stop failed"));
+        assert_eq!(
+            *backend.calls.borrow(),
+            vec!["close"],
+            "a failed stop must not re-enter raw mode"
+        );
     }
 
     #[test]

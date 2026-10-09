@@ -1,4 +1,4 @@
-{ lib, rustPlatform, util-linux }:
+{ lib, rustPlatform, util-linux, python3 }:
 
 rustPlatform.buildRustPackage {
   pname = "whykey";
@@ -8,6 +8,9 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../Cargo.lock;
 
   nativeCheckInputs = [ util-linux ];
+  # The editor extensions are `#!/usr/bin/env python3` scripts; having python3
+  # in buildInputs lets the fixup phase patch their shebangs to the store path.
+  buildInputs = [ python3 ];
 
   postInstall = ''
     install -Dm755 extensions/whykey-nvim $out/bin/whykey-nvim

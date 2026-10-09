@@ -1,6 +1,21 @@
 {
   "id": "i3",
-  "bindings": [{"command": "exec foot", "symbol": "Return", "input_code": 36}],
+  "get_config": {
+    "config": "# i3 config file (v4)\nset $mod Mod4\nfont pango:monospace 8\nfloating_modifier $mod\ninclude /home/user/.config/i3/keys.conf\n\nmode \"resize\" {\n        bindsym j resize shrink width 10 px or 10 ppt\n        bindsym Escape mode \"default\"\n}\nbindsym $mod+r mode \"resize\"\n",
+    "included_configs": [
+      {
+        "path": "/home/user/.config/i3/config",
+        "raw_contents": "# i3 config file (v4)\nset $mod Mod4\nfont pango:monospace 8\nfloating_modifier $mod\ninclude /home/user/.config/i3/keys.conf\n\nmode \"resize\" {\n        bindsym j resize shrink width 10 px or 10 ppt\n        bindsym Escape mode \"default\"\n}\nbindsym $mod+r mode \"resize\"\n",
+        "variable_replaced_contents": "# i3 config file (v4)\nset Mod4 Mod4\nfont pango:monospace 8\nfloating_modifier Mod4\ninclude /home/user/.config/i3/keys.conf\n\nmode \"resize\" {\n        bindsym j resize shrink width 10 px or 10 ppt\n        bindsym Escape mode \"default\"\n}\nbindsym Mod4+r mode \"resize\"\n"
+      },
+      {
+        "path": "/home/user/.config/i3/keys.conf",
+        "raw_contents": "bindsym $mod+Return exec i3-sensible-terminal\nbindsym $mod+Shift+q kill\nbindsym --release $mod+x exec --no-startup-id xdotool key --clearmodifiers ctrl+v\n",
+        "variable_replaced_contents": "bindsym Mod4+Return exec i3-sensible-terminal\nbindsym Mod4+Shift+q kill\nbindsym --release Mod4+x exec --no-startup-id xdotool key --clearmodifiers ctrl+v\n"
+      }
+    ]
+  },
+  "get_binding_state": {"name": "default"},
   "focused_tree": {"focused": true, "pid": 4343},
   "ipc_failure": "i3-msg exited non-zero"
 }

@@ -36,79 +36,6 @@ pub mod zellij;
 pub use inspection::*;
 pub use model::*;
 
-/// Shared Sway/i3 IPC binding conversion: both compositors expose the same
-/// event-mask/key JSON shape, so both inventory functions build records here
-/// instead of duplicating the walk.
-pub(crate) fn collect_ipc_json_bindings(
-    value: &serde_json::Value,
-    source: &str,
-) -> Vec<BindingRecord> {
-    let mut records = Vec::new();
-    let Some(bindings) = value.as_array() else {
-        return records;
-    };
-    for binding in bindings {
-        let mask = binding.get("event_state_mask").and_then(json_u32);
-        let action = binding
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown command")
-            .to_owned();
-        let mut keys = Vec::new();
-        for field in ["keysym", "symbols", "symbol"] {
-            if let Some(value) = binding.get(field) {
-                match value {
-                    serde_json::Value::String(value) => keys.push(value.clone()),
-                    serde_json::Value::Array(values) => keys.extend(
-                        values
-                            .iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .map(str::to_owned),
-                    ),
-                    _ => {}
-                }
-            }
-        }
-        if let Some(code) = binding.get("input_code").and_then(json_u32) {
-            keys.push(format!("code:{code}"));
-        }
-        if let Some(values) = binding
-            .get("keycodes")
-            .and_then(serde_json::Value::as_array)
-        {
-            keys.extend(
-                values
-                    .iter()
-                    .filter_map(json_u32)
-                    .map(|code| format!("code:{code}")),
-            );
-        }
-        if keys.is_empty() {
-            continue;
-        }
-        let certainty = if mask.is_some() {
-            "runtime effective binding"
-        } else {
-            "runtime binding; modifier mask unknown"
-        };
-        for key in keys {
-            records.push(BindingRecord {
-                device: None,
-                submap: None,
-                source: source.into(),
-                key: mask.map_or_else(
-                    || key.to_ascii_uppercase(),
-                    |mask| combo_display(mask, &key),
-                ),
-                action: action.clone(),
-                context: None,
-                certainty: certainty.into(),
-            });
-        }
-    }
-    records
-}
-
 pub(crate) fn json_u32(value: &serde_json::Value) -> Option<u32> {
     value
         .as_u64()
@@ -233,23 +160,27 @@ mod tests {
     }
 
     #[test]
-    fn ime_result_is_placed_before_the_tty_stage() {
-        let tty = LayerResult::new("TTY driver", LayerId::Tty, Outcome::Pass, "tty", Vec::new());
-        let ime = LayerResult::new(
-            "IME",
-            LayerId::Ime,
-            Outcome::HandledAndPassed,
-            "ime",
-            Vec::new(),
-        );
-        let mut results = vec![tty];
-        let insert_at = results
-            .iter()
-            .position(|result| result.id == LayerId::Tty)
-            .unwrap_or(results.len());
-        results.insert(insert_at, ime);
+    fn ime_result_follows_the_terminal_and_precedes_the_tty_stage() {
+        let key: KeyCombo = "ctrl+f".parse().unwrap();
+        let mut request = InspectRequest::new(&key);
+        request.force_continue = true;
+        let mut session = crate::environment::Environment::collect();
+        session.ime = vec![crate::ime::Detection {
+            engine: "fcitx5".into(),
+            sources: vec!["test".into()],
+            processes: Vec::new(),
+            active_engine: None,
+            state: None,
+            query_error: None,
+            text_reconstruction: Default::default(),
+        }];
+        let results = inspect_with_environment(&request, &session);
         let ids: Vec<LayerId> = results.iter().map(|result| result.id).collect();
-        assert_eq!(ids, vec![LayerId::Ime, LayerId::Tty]);
+        let terminal = ids.iter().position(|id| *id == LayerId::Terminal);
+        let ime = ids.iter().position(|id| *id == LayerId::Ime);
+        let tty = ids.iter().position(|id| *id == LayerId::Tty);
+        assert_eq!(ime, terminal.map(|index| index + 1), "{ids:?}");
+        assert!(ime < tty, "{ids:?}");
     }
 
     #[test]

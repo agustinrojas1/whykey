@@ -4,7 +4,7 @@ pub(crate) fn analyze(
     active_submap: &str,
     keycodes: &[crate::xkb::XkbKeycode],
     lua_hints: &[LuaBindHint],
-    config_ignore_mods: bool,
+    config_hints: &[ConfigBindHint],
     physical_input: Option<&PhysicalInput>,
 ) -> Result<LayerResult, String> {
     inspect_json_with_keycode(
@@ -13,7 +13,7 @@ pub(crate) fn analyze(
         active_submap,
         keycodes,
         lua_hints,
-        config_ignore_mods,
+        config_hints,
         physical_input,
     )
 }
@@ -24,7 +24,7 @@ fn inspect_json(
     bindings_json: &str,
     active_submap: &str,
 ) -> Result<LayerResult, String> {
-    inspect_json_with_keycode(key, bindings_json, active_submap, &[], &[], false, None)
+    inspect_json_with_keycode(key, bindings_json, active_submap, &[], &[], &[], None)
 }
 
 pub(crate) fn inspect_json_with_keycode(
@@ -33,72 +33,66 @@ pub(crate) fn inspect_json_with_keycode(
     active_submap: &str,
     keycodes: &[crate::xkb::XkbKeycode],
     lua_hints: &[LuaBindHint],
-    config_ignore_mods: bool,
+    config_hints: &[ConfigBindHint],
     physical_input: Option<&PhysicalInput>,
 ) -> Result<LayerResult, String> {
     let (bindings, skipped_bindings) = parse_bindings(bindings_json)?;
     let active_submap = normalize_submap(active_submap);
-
-    let active_bindings: Vec<_> = bindings
+    let keyed_bindings: Vec<_> = bindings
         .iter()
-        .filter(|binding| binding_is_active(binding, active_submap))
+        .map(|binding| (binding, BindingKey::of(binding, lua_hints)))
         .collect();
 
     // Keep same-key bindings from other submaps visible. They do not handle
     // the current event, but hiding them makes mode-dependent configurations
     // look as if the key is unbound everywhere.
-    let inactive_bindings: Vec<_> = bindings
+    let inactive_bindings: Vec<_> = keyed_bindings
         .iter()
-        .filter(|binding| !binding_is_active(binding, active_submap))
-        .filter(|binding| binding_matches_key(binding, key, keycodes, physical_input))
-        .filter(|binding| {
+        .filter(|(binding, _)| !binding_is_active(binding, active_submap))
+        .filter(|(_, binding_key)| binding_key.matches(key, keycodes, physical_input) == Some(true))
+        .filter(|(binding, _)| {
             physical_device_match(&binding.device, physical_input) != DeviceMatch::NoMatch
         })
+        .map(|(binding, _)| *binding)
         .collect();
 
-    let matches: Vec<_> = active_bindings
+    let matches: Vec<_> = keyed_bindings
         .iter()
-        .copied()
-        .filter_map(|binding| {
-            if !binding_matches_key(binding, key, keycodes, physical_input) {
-                None
-            } else {
-                let device_scoped = has_device_scope(&binding.device);
-                let device_match = physical_device_match(&binding.device, physical_input);
-                if device_match == DeviceMatch::NoMatch {
-                    return None;
-                }
-                let certainty = if binding.modmask == key.modmask() {
-                    MatchCertainty::Exact
-                } else if boolish_value(&binding.ignore_mods) == Some(true) {
-                    MatchCertainty::ModifierInsensitive
-                } else if boolish_value(&binding.ignore_mods) == Some(false) {
-                    return None;
-                } else if let Some(ignore_mods) = lua_ignore_mods_for_binding(binding, lua_hints) {
-                    if ignore_mods {
-                        MatchCertainty::ModifierInsensitive
-                    } else {
-                        return None;
-                    }
-                } else if config_ignore_mods {
-                    MatchCertainty::ModifierInsensitive
-                } else {
-                    MatchCertainty::PossibleIgnoreMods
-                };
-                Some(BindingMatch {
-                    binding,
-                    // Without a physical capture we cannot know whether a
-                    // per-device binding applies. A captured evdev device has
-                    // already passed that filter, so retain modifier certainty.
-                    certainty: if device_scoped
-                        && (physical_input.is_none() || device_match == DeviceMatch::Unknown)
-                    {
-                        MatchCertainty::PossibleDevice
-                    } else {
-                        certainty
-                    },
-                })
+        .filter(|(binding, _)| binding_is_active(binding, active_submap))
+        .filter_map(|(binding, binding_key)| {
+            let device_match = physical_device_match(&binding.device, physical_input);
+            if device_match == DeviceMatch::NoMatch {
+                return None;
             }
+            let certainty = match binding_key.matches(key, keycodes, physical_input) {
+                Some(false) => return None,
+                // Only the modifiers of an unresolved-key binding are known,
+                // so it remains a candidate for exactly those modifiers.
+                None if binding.modmask == key.modmask() => MatchCertainty::PossibleUnresolvedKey,
+                None => return None,
+                Some(true) if binding.modmask == key.modmask() => MatchCertainty::Exact,
+                Some(true) => {
+                    match binding_ignore_mods(binding, binding_key, lua_hints, config_hints) {
+                        Some(true) => MatchCertainty::ModifierInsensitive,
+                        Some(false) => return None,
+                        None => MatchCertainty::PossibleIgnoreMods,
+                    }
+                }
+            };
+            // Without a physical capture we cannot know whether a per-device
+            // binding applies. A captured evdev device has already passed
+            // that filter, so retain modifier certainty.
+            let device_unproven = has_device_scope(&binding.device)
+                && (physical_input.is_none() || device_match == DeviceMatch::Unknown);
+            Some(BindingMatch {
+                binding,
+                certainty: if device_unproven && certainty != MatchCertainty::PossibleUnresolvedKey
+                {
+                    MatchCertainty::PossibleDevice
+                } else {
+                    certainty
+                },
+            })
         })
         .collect();
 
@@ -164,13 +158,13 @@ pub(crate) fn inspect_json_with_keycode(
     if has_possible_match {
         details.push("Hyprland does not expose the ignore_mods flag through hyprctl.".into());
     }
-    if config_ignore_mods
-        && matches
-            .iter()
-            .any(|matched| matched.certainty == MatchCertainty::ModifierInsensitive)
-    {
+    if matches.iter().any(|matched| {
+        matched.certainty == MatchCertainty::ModifierInsensitive
+            && boolish_value(&matched.binding.ignore_mods).is_none()
+    }) {
         details.push(
-            "the loaded declarative config contains an ignore_mods binding for this key".into(),
+            "the static config declares ignore_mods for this exact binding; hyprctl does not report it"
+                .into(),
         );
     }
     if has_possible_device {
@@ -206,12 +200,18 @@ pub(crate) fn inspect_json_with_keycode(
         details.push(format!("no exact binding for {key}"));
     }
 
-    for matched in &matches {
+    let resolved_matches = || {
+        matches
+            .iter()
+            .filter(|matched| matched.certainty != MatchCertainty::PossibleUnresolvedKey)
+    };
+    for matched in resolved_matches() {
         let label = match matched.certainty {
             MatchCertainty::Exact => "binding",
             MatchCertainty::PossibleIgnoreMods => "possible modifier-insensitive binding",
             MatchCertainty::ModifierInsensitive => "modifier-insensitive binding",
             MatchCertainty::PossibleDevice => "possible device-specific binding",
+            MatchCertainty::PossibleUnresolvedKey => continue,
         };
         details.push(format!(
             "{label}: {} ({})",
@@ -219,6 +219,12 @@ pub(crate) fn inspect_json_with_keycode(
             binding_scope(matched.binding, active_submap)
         ));
     }
+    let unresolved: Vec<_> = matches
+        .iter()
+        .filter(|matched| matched.certainty == MatchCertainty::PossibleUnresolvedKey)
+        .map(|matched| matched.binding)
+        .collect();
+    let only_unresolved = resolved_matches().next().is_none();
 
     let exact_matches = matches.iter().filter(|matched| {
         matches!(
@@ -243,20 +249,22 @@ pub(crate) fn inspect_json_with_keycode(
             .push("matching binding remains active while client input capture is enabled".into());
     }
 
-    if matches.iter().any(|matched| {
+    if resolved_matches().any(|matched| {
         matches!(
             matched.certainty,
             MatchCertainty::Exact | MatchCertainty::ModifierInsensitive
         ) && dispatcher_is_opaque(matched.binding)
             && !matched.binding.non_consuming
+            && !matched.binding.auto_consuming
     }) {
-        details
-            .push("hyprctl does not expose the forwarding result of an opaque dispatcher.".into());
+        // Hyprland suppresses the key for every matching bind that is not
+        // non-consuming; only a callback returning `pass_event` forwards it.
+        details.push(
+            "Hyprland consumes the key for this binding unless its callback explicitly returns pass_event."
+                .into(),
+        );
     }
-    if matches
-        .iter()
-        .any(|matched| matched.binding.dispatcher == "__lua")
-    {
+    if resolved_matches().any(|matched| dispatcher_is_opaque(matched.binding)) {
         details.push(
             "Lua/plugin dispatcher is active; its runtime action is not executed by whykey.".into(),
         );
@@ -267,6 +275,36 @@ pub(crate) fn inspect_json_with_keycode(
     } else {
         binding_propagation(&matches)
     };
+    if !unresolved.is_empty() {
+        let example = unresolved
+            .iter()
+            .find_map(|binding| none_if_empty(&binding.description))
+            .map(|description| format!(" (e.g. '{description}')"))
+            .unwrap_or_default();
+        let count = format!(
+            "Hyprland reports {} binding{} with unresolved keys for these modifiers{example}",
+            unresolved.len(),
+            if unresolved.len() == 1 { "" } else { "s" }
+        );
+        // A consuming exact match already decides the route; the unresolved
+        // bindings then only matter as possible extra actions.
+        if has_exact_match && propagation == Propagation::Stops {
+            verbose_details.push(format!("{count}; they may also fire"));
+        } else {
+            details.push(count);
+            details.push(
+                "hyprctl reports neither a key name nor a keycode for them (for example Lua binds whose key is built at runtime), so whykey cannot tell which key they use"
+                    .into(),
+            );
+        }
+        verbose_details.extend(unresolved.iter().map(|binding| {
+            format!(
+                "binding with unresolved key: {} ({})",
+                binding_action(binding),
+                binding_scope(binding, active_submap)
+            )
+        }));
+    }
     let status = if skipped_bindings > 0 {
         LayerStatus::Indeterminate
     } else if has_exact_match {
@@ -289,6 +327,9 @@ pub(crate) fn inspect_json_with_keycode(
             (LayerStatus::Handled, Propagation::Indeterminate) => {
                 "active binding found; forwarding cannot be determined"
             }
+            (LayerStatus::Indeterminate, _) if only_unresolved => {
+                "bindings with unresolved keys may handle this key"
+            }
             (LayerStatus::Indeterminate, Propagation::Continues) if has_possible_device => {
                 "no device-independent exact binding found; the active keyboard is unknown"
             }
@@ -305,14 +346,67 @@ pub(crate) fn inspect_json_with_keycode(
     let has_universal_match = matches
         .iter()
         .any(|matched| matched.binding.submap_universal);
-    let binding = primary_match(&matches).map(|matched| {
-        let mut evidence = binding_evidence(matched.binding, lua_hints, has_universal_match);
-        if evidence.uncertainty.is_none() && matched.certainty == MatchCertainty::PossibleIgnoreMods
-        {
-            evidence.uncertainty = Some(crate::layers::UncertaintyReason::ModifierAmbiguity);
+    let binding = match primary_match(&matches) {
+        Some(matched) => {
+            let mut evidence = binding_evidence(matched.binding, lua_hints, has_universal_match);
+            if evidence.uncertainty.is_none()
+                && matched.certainty == MatchCertainty::PossibleIgnoreMods
+            {
+                evidence.uncertainty = Some(crate::layers::UncertaintyReason::ModifierAmbiguity);
+            }
+            Some(evidence)
         }
-        evidence
-    });
+        // Name no single unresolved binding: any of them may be the one
+        // bound to this key, so the evidence only states the candidate count.
+        None => {
+            let consumes_if_matched = unresolved.iter().all(|binding| {
+                binding_propagation(&[BindingMatch {
+                    binding,
+                    certainty: MatchCertainty::Exact,
+                }]) == Propagation::Stops
+            });
+            Some(
+                BindingEvidence::action(
+                    format!(
+                        "one of {} binding{} whose key Hyprland does not report",
+                        unresolved.len(),
+                        if unresolved.len() == 1 { "" } else { "s" }
+                    ),
+                    BindingScope::Submap(active_submap.to_owned()),
+                    None,
+                )
+                .with_uncertainty(
+                    crate::layers::UncertaintyReason::UnresolvedBindingKey {
+                        candidates: unresolved.len(),
+                        consumes_if_matched,
+                    },
+                ),
+            )
+        }
+    };
+    // With only unresolved candidates, the summary states what is unknown:
+    // which of these bindings (if any) uses the requested key.
+    let summary = if only_unresolved && skipped_bindings == 0 {
+        let modifiers = crate::style::human_modifiers(key.modmask());
+        let example = unresolved
+            .iter()
+            .find_map(|binding| none_if_empty(&binding.description))
+            .map(|description| format!(" (e.g. '{description}')"))
+            .unwrap_or_default();
+        format!(
+            "{} {}binding{} {} keys hyprctl does not report{example}",
+            unresolved.len(),
+            if modifiers.is_empty() {
+                String::new()
+            } else {
+                format!("{} ", modifiers.join("+"))
+            },
+            if unresolved.len() == 1 { "" } else { "s" },
+            if unresolved.len() == 1 { "has" } else { "have" },
+        )
+    } else {
+        summary.to_owned()
+    };
 
     Ok({
         let mut result =
@@ -324,7 +418,8 @@ pub(crate) fn inspect_json_with_keycode(
 }
 
 /// The match the conclusion describes: an exact binding when one exists,
-/// otherwise the first candidate. Evidence never invents a stronger match.
+/// otherwise the first candidate whose key is known. Evidence never invents
+/// a stronger match, so an unresolved-key binding is never named alone.
 fn primary_match<'a>(matches: &'a [BindingMatch<'a>]) -> Option<BindingMatch<'a>> {
     matches
         .iter()
@@ -334,7 +429,11 @@ fn primary_match<'a>(matches: &'a [BindingMatch<'a>]) -> Option<BindingMatch<'a>
                 MatchCertainty::Exact | MatchCertainty::ModifierInsensitive
             )
         })
-        .or_else(|| matches.first())
+        .or_else(|| {
+            matches
+                .iter()
+                .find(|matched| matched.certainty != MatchCertainty::PossibleUnresolvedKey)
+        })
         .copied()
 }
 
@@ -372,12 +471,14 @@ fn none_if_empty(value: &str) -> Option<String> {
 }
 
 /// Link a runtime binding to its static config hint only on an exact
-/// description match. Anything weaker would be a guessed file hint.
+/// description and modifier match. Anything weaker would be a guessed file
+/// hint; the last declaration wins, as it does in the config itself.
 fn hint_source(binding: &Binding, lua_hints: &[LuaBindHint]) -> Option<SourceLocation> {
     let description = none_if_empty(&binding.description)?;
-    let hint = lua_hints
-        .iter()
-        .find(|hint| hint.description.as_deref() == Some(&description))?;
+    let hint = lua_hints.iter().rev().find(|hint| {
+        hint.combo.modmask() == binding.modmask
+            && hint.description.as_deref() == Some(description.as_str())
+    })?;
     Some(SourceLocation {
         file: hint.source.display().to_string(),
         line: u32::try_from(hint.line_number).ok(),
@@ -407,6 +508,8 @@ enum MatchCertainty {
     PossibleIgnoreMods,
     ModifierInsensitive,
     PossibleDevice,
+    /// Same modifiers, but hyprctl reports no key and no config hint names it.
+    PossibleUnresolvedKey,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -454,28 +557,86 @@ fn inactive_submap_details(bindings: &[&Binding]) -> Vec<String> {
         .collect()
 }
 
-fn binding_matches_key(
+/// The key a runtime binding listens for, normalized like a parsed query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BindingKey {
+    Code(crate::xkb::XkbKeycode),
+    /// Normalized key name: hyprctl reports XKB keysym names such as
+    /// `comma` or `SLASH`, which must compare equal to `,` and `/`.
+    Name(String),
+    CatchAll,
+    /// hyprctl reports neither a key name nor a keycode (Lua binds whose
+    /// `code:` key is built at runtime) and no literal config hint names it.
+    Unresolved,
+}
+
+impl BindingKey {
+    fn of(binding: &Binding, lua_hints: &[LuaBindHint]) -> Self {
+        if binding.keycode != crate::xkb::XkbKeycode::from(0) {
+            Self::Code(binding.keycode)
+        } else if binding.catch_all {
+            Self::CatchAll
+        } else if !binding.key.is_empty() {
+            Self::from_name(&binding.key)
+        } else {
+            lua_hint_key(binding.modmask, &binding.description, lua_hints)
+                .map_or(Self::Unresolved, Self::from_name)
+        }
+    }
+
+    fn from_name(name: &str) -> Self {
+        let normalized = crate::key::normalize_key_str(name);
+        match normalized
+            .strip_prefix("CODE:")
+            .and_then(|code| code.parse::<u32>().ok())
+        {
+            Some(code) => Self::Code(crate::xkb::XkbKeycode::from(code)),
+            None => Self::Name(normalized),
+        }
+    }
+
+    /// Whether this binding fires for `combo`; `None` when the binding's key
+    /// is unknown.
+    fn matches(
+        &self,
+        combo: &KeyCombo,
+        keycodes: &[crate::xkb::XkbKeycode],
+        physical_input: Option<&PhysicalInput>,
+    ) -> Option<bool> {
+        let query_code = combo
+            .key()
+            .strip_prefix("CODE:")
+            .and_then(|code| code.parse::<u32>().ok())
+            .map(crate::xkb::XkbKeycode::from);
+        Some(match (self, query_code) {
+            (Self::Unresolved, _) => return None,
+            (Self::CatchAll, _) => true,
+            // An explicit numeric query is already an assertion about the
+            // binding's code; do not let a separately captured physical
+            // event broaden it to another code.
+            (Self::Code(code), Some(query)) => *code == query,
+            (Self::Name(_), Some(_)) => false,
+            (Self::Code(code), None) => {
+                keycodes.contains(code)
+                    || physical_input
+                        .is_some_and(|input| physical_keycode_matches(*code, input.keycode))
+            }
+            (Self::Name(name), None) => name == combo.key(),
+        })
+    }
+}
+
+/// `ignore_mods` for one binding: the runtime value when hyprctl reports it,
+/// otherwise the static declaration of exactly this binding.
+fn binding_ignore_mods(
     binding: &Binding,
-    combo: &KeyCombo,
-    keycodes: &[crate::xkb::XkbKeycode],
-    physical_input: Option<&PhysicalInput>,
-) -> bool {
-    if let Some(keycode) = combo.key().strip_prefix("CODE:") {
-        // An explicit numeric query is already an assertion about the
-        // binding's code; do not let a separately captured physical event
-        // broaden it to another code.
-        return keycode
-            .parse::<u32>()
-            .ok()
-            .map(crate::xkb::XkbKeycode::from)
-            == Some(binding.keycode);
-    }
-    if binding.keycode != crate::xkb::XkbKeycode::from(0) {
-        return keycodes.contains(&binding.keycode)
-            || physical_input
-                .is_some_and(|input| physical_keycode_matches(binding.keycode, input.keycode));
-    }
-    binding.catch_all || binding.key.eq_ignore_ascii_case(combo.key())
+    key: &BindingKey,
+    lua_hints: &[LuaBindHint],
+    config_hints: &[ConfigBindHint],
+) -> Option<bool> {
+    boolish_value(&binding.ignore_mods)
+        .or_else(|| lua_ignore_mods_for_binding(binding, key, lua_hints))
+        .or_else(|| config_ignore_mods_for_binding(binding, key, config_hints))
 }
 
 fn physical_keycode_matches(
@@ -504,7 +665,9 @@ fn binding_propagation(matches: &[BindingMatch<'_>]) -> Propagation {
 
         if matches!(
             matched.certainty,
-            MatchCertainty::PossibleIgnoreMods | MatchCertainty::PossibleDevice
+            MatchCertainty::PossibleIgnoreMods
+                | MatchCertainty::PossibleDevice
+                | MatchCertainty::PossibleUnresolvedKey
         ) {
             next.extend(previous.iter().copied());
         }
@@ -621,31 +784,6 @@ fn dispatcher_outcomes(binding: &Binding) -> Vec<DispatcherOutcome> {
         }];
     }
 
-    if dispatcher_is_opaque(binding) {
-        return vec![
-            DispatcherOutcome {
-                success: true,
-                passes: false,
-                redirects: false,
-            },
-            DispatcherOutcome {
-                success: true,
-                passes: true,
-                redirects: false,
-            },
-            DispatcherOutcome {
-                success: false,
-                passes: false,
-                redirects: false,
-            },
-            DispatcherOutcome {
-                success: false,
-                passes: true,
-                redirects: false,
-            },
-        ];
-    }
-
     if binding.auto_consuming {
         return vec![
             DispatcherOutcome {
@@ -661,12 +799,16 @@ fn dispatcher_outcomes(binding: &Binding) -> Vec<DispatcherOutcome> {
         ];
     }
 
+    // Opaque Lua/plugin dispatchers included: Hyprland suppresses the key for
+    // every consuming bind; only a callback returning `pass_event` (never
+    // executed by whykey) would forward it.
     vec![DispatcherOutcome {
         success: true,
         passes: false,
         redirects: false,
     }]
 }
+
 fn dispatcher_is_opaque(binding: &Binding) -> bool {
     BindingEvidence::dispatcher_is_opaque(&binding.dispatcher)
 }
@@ -888,11 +1030,164 @@ mod matching_tests {
             "default",
             &[],
             &[],
-            false,
+            &[],
             None,
         )
         .unwrap();
         assert!(result.summary.contains("active binding found"));
+    }
+
+    fn inspect(key: &str, bindings: &str, keycodes: &[u32], hints: &[LuaBindHint]) -> LayerResult {
+        let key: KeyCombo = key.parse().unwrap();
+        let keycodes: Vec<_> = keycodes
+            .iter()
+            .copied()
+            .map(crate::xkb::XkbKeycode::from)
+            .collect();
+        inspect_json_with_keycode(&key, bindings, "default", &keycodes, hints, &[], None).unwrap()
+    }
+
+    #[test]
+    fn consuming_lua_binding_consumes_the_key() {
+        let consuming = r#"[{"modmask": 64, "key": "RETURN", "dispatcher": "__lua",
+            "arg": "268", "description": "Terminal", "non_consuming": false}]"#;
+        let result = inspect("super+return", consuming, &[], &[]);
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(
+            result
+                .binding
+                .as_ref()
+                .and_then(|binding| binding.description.as_deref()),
+            Some("Terminal")
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("not executed by whykey"))
+        );
+
+        let non_consuming =
+            consuming.replace(r#""non_consuming": false"#, r#""non_consuming": true"#);
+        assert_eq!(
+            inspect("super+return", &non_consuming, &[], &[]).outcome,
+            Outcome::HandledAndPassed
+        );
+        // Auto-consuming depends on the callback's success, which whykey
+        // cannot observe.
+        let auto = consuming.replace(r#""non_consuming": false"#, r#""auto_consuming": true"#);
+        assert_eq!(
+            inspect("super+return", &auto, &[], &[]).outcome,
+            Outcome::HandledUncertain
+        );
+    }
+
+    #[test]
+    fn keysym_named_binding_keys_match_normalized_queries() {
+        let bindings = r#"[
+            {"modmask": 64, "key": "comma", "dispatcher": "__lua", "arg": "1",
+             "description": "Dismiss last notification"},
+            {"modmask": 64, "key": "SLASH", "dispatcher": "__lua", "arg": "2",
+             "description": "Monitor scaling up"},
+            {"modmask": 64, "key": "minus", "dispatcher": "__lua", "arg": "3",
+             "description": "Shrink"},
+            {"modmask": 0, "key": "Prior", "dispatcher": "__lua", "arg": "4",
+             "description": "Page"}
+        ]"#;
+        for (key, description) in [
+            ("super+comma", "Dismiss last notification"),
+            ("super+,", "Dismiss last notification"),
+            ("super+slash", "Monitor scaling up"),
+            ("super+minus", "Shrink"),
+            ("pageup", "Page"),
+        ] {
+            let result = inspect(key, bindings, &[], &[]);
+            assert_eq!(result.outcome, Outcome::Consumed, "{key}");
+            assert_eq!(
+                result.binding.and_then(|binding| binding.description),
+                Some(description.to_owned()),
+                "{key}"
+            );
+        }
+    }
+
+    const WORKSPACE_BINDS: &str = r#"[
+        {"modmask": 64, "key": "", "keycode": 0, "dispatcher": "__lua", "arg": "71",
+         "description": "Switch to workspace 1"},
+        {"modmask": 64, "key": "", "keycode": 0, "dispatcher": "__lua", "arg": "77",
+         "description": "Switch to workspace 2"},
+        {"modmask": 64, "key": "", "keycode": 0, "dispatcher": "__lua", "arg": "169",
+         "description": "Expand window left"}
+    ]"#;
+
+    fn tiling_hints() -> Vec<LuaBindHint> {
+        parse_lua_bind_hints(
+            "o.bind(\"SUPER + code:20\", \"Expand window left\", hl.dsp.window.resize({ x = -100 }))\n\
+             for workspace = 1, 10 do\n\
+               local key = \"code:\" .. tostring(workspace + 9)\n\
+               o.bind(\"SUPER + \" .. key, \"Switch to workspace \" .. workspace, hl.dsp.focus({}))\n\
+             end\n",
+            Path::new("/usr/share/omarchy/default/hypr/bindings/tiling.lua"),
+        )
+    }
+
+    #[test]
+    fn empty_key_binding_uses_a_literal_lua_code_hint() {
+        // XKB keycode 20 is the minus key on the active layout.
+        let result = inspect("super+minus", WORKSPACE_BINDS, &[20], &tiling_hints());
+        assert_eq!(result.outcome, Outcome::Consumed);
+        let binding = result
+            .binding
+            .expect("the resolved binding is the evidence");
+        assert_eq!(binding.description.as_deref(), Some("Expand window left"));
+        assert!(binding.source.is_some());
+    }
+
+    #[test]
+    fn unresolved_empty_key_bindings_keep_the_compositor_uncertain() {
+        // Keycode 10 is `1`: the resolved `code:20` bind does not match, the
+        // dynamic workspace binds cannot be ruled out.
+        let result = inspect("super+1", WORKSPACE_BINDS, &[10], &tiling_hints());
+        assert_eq!(result.outcome, Outcome::Unknown);
+        assert_eq!(
+            result.summary,
+            "2 Super bindings have keys hyprctl does not report (e.g. 'Switch to workspace 1')"
+        );
+        assert!(result.details.iter().any(|detail| detail
+            == "Hyprland reports 2 bindings with unresolved keys for these modifiers (e.g. 'Switch to workspace 1')"));
+        let evidence = result
+            .binding
+            .expect("the candidate is reported so the route stops being blamed downstream");
+        assert!(evidence.description.is_none(), "no single binding is named");
+        assert_eq!(
+            evidence.uncertainty,
+            Some(crate::layers::UncertaintyReason::UnresolvedBindingKey {
+                candidates: 2,
+                consumes_if_matched: true,
+            })
+        );
+
+        // Other modifiers cannot be one of them.
+        assert_eq!(
+            inspect("alt+1", WORKSPACE_BINDS, &[10], &tiling_hints()).outcome,
+            Outcome::Pass
+        );
+
+        // A consuming exact bind still decides the route.
+        let mut with_exact: Vec<serde_json::Value> = serde_json::from_str(WORKSPACE_BINDS).unwrap();
+        with_exact.push(serde_json::json!({"modmask": 64, "key": "RETURN",
+            "dispatcher": "__lua", "arg": "268", "description": "Terminal"}));
+        let result = inspect(
+            "super+return",
+            &serde_json::to_string(&with_exact).unwrap(),
+            &[36],
+            &tiling_hints(),
+        );
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(
+            result.binding.and_then(|binding| binding.description),
+            Some("Terminal".to_owned())
+        );
     }
 
     #[test]
