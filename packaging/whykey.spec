@@ -1,5 +1,5 @@
 Name:           whykey
-Version:        1.3.0
+Version:        1.4.0
 Release:        1%{?dist}
 Summary:        Explain where a Linux key combination is handled
 License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3.0
@@ -62,6 +62,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %doc %{_docdir}/%{name}/support-matrix.json
 
 %changelog
+* Fri Oct 09 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 1.4.0-1
+- Stop confident wrong answers across adapters; evaluate keyd, kanata, and xremap remaps; predict AltGr text; recommend python3 for extensions
+
 * Fri Sep 11 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 1.3.0-1
 - Redesign human-readable CLI reports with concise diagnoses, explicit uncertainty, and verbose technical evidence
 

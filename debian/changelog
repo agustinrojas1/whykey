@@ -1,3 +1,11 @@
+whykey (1.4.0) unstable; urgency=medium
+
+  * Stop confident wrong answers: Hyprland __lua consumption, keysym-named and code:N keys, Readline live snapshots and defaults, Sway/i3 config parsing, strict key validation and AltGr.
+  * Evaluate keyd, kanata, and xremap remaps; predict AltGr level-3 text and dead keys; enforce the diagnostic budget per command.
+  * Declare python3 for the editor extensions.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Fri, 09 Oct 2026 12:00:00 -0300
+
 whykey (1.3.0) unstable; urgency=medium
 
   * Redesign human-readable CLI reports, terminal styling, listen status messages, and verbose evidence presentation.
