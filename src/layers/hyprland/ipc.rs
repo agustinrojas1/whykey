@@ -32,16 +32,234 @@ pub(crate) const INVENTORY_SOURCE: &str = "Hyprland (hyprctl binds -j)";
 /// malformed entries can be reported here without changing inspection.
 pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
     let value = binding_inventory_json().map_err(|error| format!("Hyprland: {error}"))?;
-    Ok(collect_records(&value, &CONFIG_HINTS.lua))
+    // Runtime `code:N` keys are shown as the active layout's key so the
+    // inventory can be filtered and compared by the key a user types.
+    let devices = run_hyprctl(&["devices", "-j"]).ok();
+    let keymap = devices.as_deref().and_then(|devices| {
+        Some((
+            compile_main_xkb_keymap(devices)?,
+            main_keyboard_active_layout_index(devices)?,
+        ))
+    });
+    let keymap = keymap
+        .as_ref()
+        .map(|(keymap, group)| (keymap.as_str(), *group));
+    Ok(collect_records(&value, &CONFIG_HINTS.lua, keymap))
 }
 
 fn binding_inventory_json() -> Result<serde_json::Value, String> {
-    let output = run_hyprctl(&["binds", "-j"])?;
+    let output = query_bindings(run_hyprctl)?;
     serde_json::from_str(&output)
         .map_err(|error| format!("hyprctl returned invalid binding data: {error}"))
 }
 
-fn collect_records(value: &serde_json::Value, lua_hints: &[LuaBindHint]) -> Vec<BindingRecord> {
+/// Run `hyprctl binds -j` and fill in keys it leaves empty (D-041).
+/// Hyprland's JSON reports `key: ""` and `keycode: 0` for Lua binds whose
+/// keys are only `code:N`, while the plain-text listing prints the bind's
+/// display key, so the text form is queried only when JSON has such entries.
+fn query_bindings(run: impl Fn(&[&str]) -> Result<String, String>) -> Result<String, String> {
+    let json = run(&["binds", "-j"])?;
+    Ok(recover_unreported_keys(&json, || run(&["binds"]).ok()).unwrap_or(json))
+}
+
+/// Whether a `hyprctl binds -j` entry names neither a key nor a keycode.
+fn key_unreported(entry: &serde_json::Value) -> bool {
+    entry.get("key").and_then(serde_json::Value::as_str) == Some("")
+        && entry
+            .get("keycode")
+            .and_then(super::json_u32)
+            .is_none_or(|keycode| keycode == 0)
+        && !entry
+            .get("catch_all")
+            .and_then(boolish_value)
+            .unwrap_or(false)
+}
+
+/// Fields both `hyprctl binds` formats print for one bind; Lua binds carry a
+/// unique `__lua` registry reference in `arg`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct BindIdentity {
+    dispatcher: String,
+    arg: String,
+    modmask: u32,
+    submap: String,
+    description: String,
+}
+
+impl BindIdentity {
+    fn of_json(entry: &serde_json::Value) -> Option<Self> {
+        let text = |name: &str| {
+            entry
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        Some(Self {
+            dispatcher: text("dispatcher")?,
+            arg: text("arg").unwrap_or_default(),
+            modmask: entry.get("modmask").and_then(super::json_u32)?,
+            submap: text("submap").unwrap_or_default(),
+            description: text("description").unwrap_or_default(),
+        })
+    }
+}
+
+/// Return `bindings_json` with keys recovered from the text listing, or
+/// `None` when nothing was recovered. A key is filled in only when every
+/// text block with the same identity agrees on one single-key display.
+fn recover_unreported_keys(
+    bindings_json: &str,
+    text: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(bindings_json).ok()?;
+    let entries = value.as_array_mut()?;
+    if !entries.iter().any(key_unreported) {
+        return None;
+    }
+    let text = text()?;
+    let mut candidates = text_bind_keys(&text);
+    // The text listing prints a reported key verbatim; drop those so an
+    // identity shared with a resolved bind cannot lend it its key.
+    for entry in entries.iter().filter(|entry| !key_unreported(entry)) {
+        let (Some(identity), Some(key)) = (
+            BindIdentity::of_json(entry),
+            entry.get("key").and_then(serde_json::Value::as_str),
+        ) else {
+            continue;
+        };
+        let Some(keys) = candidates.get_mut(&identity) else {
+            continue;
+        };
+        if let Some(position) = keys.iter().position(|display| display == key) {
+            keys.swap_remove(position);
+        }
+    }
+    let mut recovered = false;
+    for entry in entries.iter_mut().filter(|entry| key_unreported(entry)) {
+        let Some(identity) = BindIdentity::of_json(entry) else {
+            continue;
+        };
+        let Some(displays) = candidates.get(&identity) else {
+            continue;
+        };
+        let mut keys = displays
+            .iter()
+            .map(|display| display_key(display, identity.modmask));
+        let Some(Some(key)) = keys.next() else {
+            continue;
+        };
+        if keys.all(|other| other == Some(key)) {
+            entry["key"] = key.into();
+            recovered = true;
+        }
+    }
+    recovered.then(|| value.to_string())
+}
+
+/// Group the `key:` lines of plain-text `hyprctl binds` by bind identity.
+/// Hyprland v0.56.2 `bindsRequest` prints `bind<flags>` followed by tab-
+/// indented `modmask`, `submap`, `key`, `keycode`, `catchall`,
+/// `description`, `dispatcher`, and `arg` lines.
+fn text_bind_keys(text: &str) -> HashMap<BindIdentity, Vec<String>> {
+    let mut blocks: Vec<Vec<(&str, &str)>> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("bind") {
+            blocks.push(Vec::new());
+            continue;
+        }
+        let Some((name, value)) = line
+            .strip_prefix('\t')
+            .and_then(|field| field.split_once(':'))
+        else {
+            continue;
+        };
+        if let Some(block) = blocks.last_mut() {
+            block.push((name, value.strip_prefix(' ').unwrap_or(value)));
+        }
+    }
+    let mut groups: HashMap<BindIdentity, Vec<String>> = HashMap::new();
+    for block in blocks {
+        let field = |name: &str| {
+            block
+                .iter()
+                .find(|(field, _)| *field == name)
+                .map(|(_, value)| *value)
+        };
+        let (
+            Some(modmask),
+            Some(key),
+            Some(dispatcher),
+            Some(arg),
+            Some(submap),
+            Some(description),
+        ) = (
+            field("modmask").and_then(|mask| mask.parse().ok()),
+            field("key"),
+            field("dispatcher"),
+            field("arg"),
+            field("submap"),
+            field("description"),
+        )
+        else {
+            continue;
+        };
+        groups
+            .entry(BindIdentity {
+                dispatcher: dispatcher.to_owned(),
+                arg: arg.to_owned(),
+                modmask,
+                submap: submap.to_owned(),
+                description: description.to_owned(),
+            })
+            .or_default()
+            .push(key.to_owned());
+    }
+    groups
+}
+
+/// The key of a Lua bind display string such as `SUPER + SHIFT + code:10`.
+/// Hyprland requires modifiers first; a display naming several keys (a
+/// multi-key bind) or whose modifiers disagree with `modmask` yields `None`.
+fn display_key(display: &str, modmask: u32) -> Option<&str> {
+    let mut mask = 0;
+    let mut key = None;
+    for segment in display.split('+').map(str::trim) {
+        if key.is_none() {
+            if let Some(bit) = lua_modifier_bit(segment) {
+                mask |= bit;
+                continue;
+            }
+        }
+        if key.replace(segment).is_some() {
+            return None;
+        }
+    }
+    key.filter(|key| !key.is_empty() && *key != "catchall" && mask == modmask)
+}
+
+/// Modifier names accepted by Hyprland v0.56.2 Lua `modFromSv`
+/// (case-sensitive).
+fn lua_modifier_bit(name: &str) -> Option<u32> {
+    Some(match name {
+        "SHIFT" => 1,
+        "CAPS" => 2,
+        "CTRL" | "CONTROL" => 4,
+        "ALT" | "MOD1" => 8,
+        "MOD2" => 16,
+        "MOD3" => 32,
+        "SUPER" | "WIN" | "LOGO" | "MOD4" | "META" => 64,
+        "MOD5" => 128,
+        _ => return None,
+    })
+}
+
+/// `keymap` is the main keyboard's compiled keymap and active layout group;
+/// with it, `code:N` keys are displayed as the key that layout produces.
+fn collect_records(
+    value: &serde_json::Value,
+    lua_hints: &[LuaBindHint],
+    keymap: Option<(&str, usize)>,
+) -> Vec<BindingRecord> {
     let mut records = Vec::new();
     let Some(bindings) = value.as_array() else {
         return records;
@@ -67,27 +285,35 @@ fn collect_records(value: &serde_json::Value, lua_hints: &[LuaBindHint]) -> Vec<
             .and_then(boolish_value)
             .unwrap_or(false);
         // Lua binds with `code:` keys come back with neither a key nor a
-        // keycode; recover a literal config key or mark the record so it is
-        // never grouped under a bare modifier prefix.
-        let (key, certainty) = if !key.is_empty() || catch_all {
-            (super::combo_display(mask, key), "runtime effective binding")
+        // keycode unless the text listing recovered it; fall back to a
+        // literal config key or mark the record so it is never grouped under
+        // a bare modifier prefix.
+        let (raw_key, certainty) = if !key.is_empty() || catch_all {
+            (Some(key.to_owned()), "runtime effective binding")
         } else if let Some(keycode) = keycode {
-            (
-                super::combo_display(mask, &format!("code:{keycode}")),
-                "runtime effective binding",
-            )
+            (Some(format!("code:{keycode}")), "runtime effective binding")
         } else if let Some(hint_key) =
             description.and_then(|description| lua_hint_key(mask, description, lua_hints))
         {
             (
-                super::combo_display(mask, hint_key),
+                Some(hint_key.to_owned()),
                 "runtime effective binding; key from static config",
             )
         } else {
-            (
-                format!("{}<key not reported>", super::combo_display(mask, "")),
-                crate::bindings::UNRESOLVED_KEY_CERTAINTY,
-            )
+            (None, crate::bindings::UNRESOLVED_KEY_CERTAINTY)
+        };
+        let mut certainty = certainty.to_owned();
+        let key = match raw_key {
+            None => format!("{}<key not reported>", super::combo_display(mask, "")),
+            Some(raw_key) => match code_key_symbol(&raw_key, keymap) {
+                Some((code, symbol)) => {
+                    certainty.push_str(&format!(
+                        "; code:{code} shown as its key in the active XKB layout"
+                    ));
+                    super::combo_display(mask, &symbol)
+                }
+                None => super::combo_display(mask, &raw_key),
+            },
         };
         let action = binding
             .get("dispatcher")
@@ -125,10 +351,26 @@ fn collect_records(value: &serde_json::Value, lua_hints: &[LuaBindHint]) -> Vec<
             key,
             action,
             context: Some(submap),
-            certainty: certainty.into(),
+            certainty,
         });
     }
     records
+}
+
+/// The active-layout key name of a `code:N` binding key, with `N`.
+fn code_key_symbol(raw_key: &str, keymap: Option<(&str, usize)>) -> Option<(u32, String)> {
+    let (keymap, group) = keymap?;
+    let code = crate::key::normalize_key_str(raw_key)
+        .strip_prefix("CODE:")?
+        .parse::<u32>()
+        .ok()?;
+    let symbol = crate::xkb::preferred_symbol_for_xkb_keycode(
+        keymap,
+        crate::xkb::XkbKeycode::from(code),
+        group,
+        0,
+    )?;
+    Some((code, symbol))
 }
 
 pub fn focused_pid() -> Result<u32, String> {
@@ -173,7 +415,7 @@ pub(crate) fn collect_probe() -> Option<Probe> {
             .flatten()
     });
     let instance = instance.as_deref();
-    let binds = run_hyprctl_with_instance(&["binds", "-j"], instance);
+    let binds = query_bindings(|arguments| run_hyprctl_with_instance(arguments, instance));
     let submap = run_hyprctl_with_instance(&["submap", "-j"], instance);
     let devices = if binds.is_ok() && submap.is_ok() {
         run_hyprctl_with_instance(&["devices", "-j"], instance).ok()
@@ -191,7 +433,7 @@ fn inspect_system(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
 ) -> Result<LayerResult, String> {
-    let bindings_raw = run_hyprctl(&["binds", "-j"])?;
+    let bindings_raw = query_bindings(run_hyprctl)?;
     let active_submap_json = run_hyprctl(&["submap", "-j"])?;
     let devices_json = run_hyprctl(&["devices", "-j"]).ok();
     inspect_system_with_values(

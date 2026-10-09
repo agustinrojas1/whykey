@@ -108,16 +108,20 @@ Screen prefix applies to the key that follows it.
 
 `whykey doctor --json` includes a cause taxonomy (`not-installed`,
 `permission-missing`, `ipc-unreachable`, or `api-does-not-expose`) and a safe
-next check for unavailable integrations. It never repairs permissions or
-changes compositor configuration.
+next check for unavailable integrations. For evdev it tells apart a missing
+`/dev/input` (`not-installed`), no keyboard devices (`api-does-not-expose`),
+and keyboards or a `/dev/input` it cannot read (`permission-missing`), and
+adds an `evdev.detail` sentence. It never repairs permissions or changes
+compositor configuration.
 
 Normal reports lead with a compact shortcut/operation header, a plain-English
 diagnosis, its practical effect, relevant layers, and a specific uncertainty
 statement when one matters. Use `--verbose` for the full route with raw events,
 probe bytes, encoding internals, full modifier state, XKB candidates, keyboard
 inventory, inactive submaps, and alternate keys. Use `--json` for stable schema-v1 output
-or `--json-v2` for structured context and evidence; JSON always carries the
-full evidence including verbose-only lines. `snapshot` saves a
+or `--json-v2` (`--schema-version 2`) for structured context and evidence;
+selecting two different schema versions is a usage error (exit status 2).
+JSON always carries the full evidence including verbose-only lines. `snapshot` saves a
 versioned static report for later offline replay; it never captures or injects
 input. New snapshots redact shell identity, private paths, and secret-bearing
 assignments in captured evidence. They preserve the observed conclusion for
@@ -143,6 +147,20 @@ remapper → compositor → terminal → input method → TTY
 Each adapter uses read-only IPC or parses a small, known part of the relevant
 configuration. Missing tools and dynamic configuration are reported as
 uncertain evidence instead of guessed answers.
+
+keyd, kanata, and xremap configurations are evaluated for the queried key.
+A remap sends the target key through the later layers ("keyd remaps Caps Lock
+to Esc. …"), and a layer switch, macro, or command consumes it. Tap-hold,
+one-shot, application-specific, and other timing- or state-dependent actions
+stay conditional. kmonad and input-remapper are detected but not evaluated.
+Remapper rules name physical keys, so letters, digits, and punctuation are
+mapped by their US position and stay uncertain unless `WHYKEY_XKB_LAYOUT` or
+`XKB_DEFAULT_LAYOUT` is `us` with no variant.
+
+An `altgr+…` query predicts the text of the active layout's third level
+(fourth with Shift), for example `ä` for `altgr+q` on `us altgr-intl`. A dead
+key is reported as starting dead-key composition with no bytes sent. When
+the layout or level is unknown, the report says why the encoding is unknown.
 
 `whykey listen` captures the next deliberate shortcut to explain its path.
 When native compositor capture is available (Hyprland, or Sway IPC), it
@@ -196,7 +214,8 @@ Whykey includes adapters for:
 - Ghostty, Kitty, Alacritty, Foot, WezTerm, Konsole, and generic terminals
 - Bash with Readline, Zsh with ZLE, Fish, tmux, GNU Screen, and Zellij
 - Neovim, Vim, Emacs, Helix, Kakoune, Micro, VS Code, and JetBrains IDEs
-- Fcitx5, IBus, keyd, Kanata, KMonad, input-remapper, and xremap
+- Fcitx5 and IBus; keyd, Kanata, and xremap (evaluated for the queried key);
+  KMonad and input-remapper (detected, not evaluated)
 
 Support is best effort where a program does not expose its live keymap.
 Generated configuration, plugins, firmware mappings, browser shortcuts, and
@@ -225,6 +244,17 @@ limits. It never scans `PATH` for adapters or evaluates a configuration file.
 T4 adapters do not capture input. `listen` still uses native Hyprland or Sway,
 terminal, or evdev capture. See [the compositor manifest reference](docs/compositor-extensions.md).
 
+### Editor extensions
+
+`whykey-nvim`, `whykey-vscode`, and `whykey-emacs` run only when named with
+`whykey extension`. They report a key as uncertain when the part of the
+editor that could handle it is not inspected: VS Code's default keybindings
+and unevaluated `when` clauses, Neovim built-in commands and `vim.on_key`
+handlers, and Emacs translation maps and hooks. Neovim Lua-callback mappings,
+`<Plug>` chains, and prefix keys, VS Code chord prefixes and `-command`
+removals, and the Emacs winning keymap in the selected window are reported
+as found.
+
 See the [support matrix](SUPPORT_MATRIX.md) and
 [adapter inventory](ADAPTER_INVENTORY.md) for exact coverage.
 
@@ -246,7 +276,8 @@ files, plugins, and tools like fzf can rebind keys at runtime. The report
 then tells you which `shell-init` command to load.
 
 Whykey does not edit shell startup files. Completion scripts are available
-through `whykey completions bash|zsh|fish`.
+through `whykey completions bash|zsh|fish`; they are generated from the same
+command table as `--help`, so each command completes only its own options.
 
 ## Development
 
@@ -258,6 +289,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt --all -- --check
 python3 extensions/tests/run_all.py
 python3 tools/generate_support_matrix.py --check
+python3 tools/generate_dependency_provenance.py --check
 tools/check_package_versions.sh
 ```
 

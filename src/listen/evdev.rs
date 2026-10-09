@@ -486,9 +486,13 @@ fn evdev_keyboard_capability(path: &Path) -> Option<bool> {
     Some(parse_evdev_keyboard_capability(&contents))
 }
 
+/// sysfs prints the capability bitmap most-significant word first
+/// (`input_print_bitmap` in drivers/input/input.c walks from the highest
+/// non-zero `unsigned long` down), so the last word holds bits 0-63.
 fn parse_evdev_keyboard_capability(contents: &str) -> bool {
     let words = contents
         .split_whitespace()
+        .rev()
         .filter_map(|word| u64::from_str_radix(word, 16).ok())
         .collect::<Vec<_>>();
     let has_key = |code: usize| {

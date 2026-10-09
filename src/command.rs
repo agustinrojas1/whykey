@@ -70,6 +70,11 @@ pub enum CommandError {
         program: String,
         timeout: Duration,
     },
+    /// The shared diagnostic budget was already spent, so the command was
+    /// not started.
+    BudgetExhausted {
+        program: String,
+    },
     OutputLimit {
         program: String,
         stream: &'static str,
@@ -112,6 +117,12 @@ impl fmt::Display for CommandError {
                     timeout.as_millis()
                 )
             }
+            Self::BudgetExhausted { program } => {
+                write!(
+                    formatter,
+                    "{program} was not run: the diagnostic time budget was spent"
+                )
+            }
             Self::OutputLimit {
                 program,
                 stream,
@@ -135,11 +146,7 @@ struct ReadResult {
 
 /// Run a command with the standard diagnostic timeout and output cap.
 pub fn output(command: &mut Command) -> Result<Output, CommandError> {
-    let timeout = match deadline_remaining() {
-        Some(remaining) => configured_timeout().min(remaining),
-        None => configured_timeout(),
-    };
-    output_with_limits(command, timeout, configured_max_output())
+    output_with_limits(command, configured_timeout(), configured_max_output())
 }
 
 /// Run a diagnostic operation with one shared wall-clock budget.
@@ -201,6 +208,7 @@ fn configured_max_output() -> usize {
 
 /// Run a command with explicit limits. Both stdout and stderr are drained in
 /// parallel so a noisy child cannot deadlock while the parent waits for it.
+/// The timeout is further clamped to the active diagnostic budget.
 pub fn output_with_limits(
     command: &mut Command,
     timeout: Duration,
@@ -215,11 +223,12 @@ pub fn output_with_limits(
 /// before waiting for the child and stdin is then closed, so an extension
 /// cannot inherit an interactive input stream or wait for unrelated input.
 pub fn output_with_input(command: &mut Command, input: &[u8]) -> Result<Output, CommandError> {
-    let timeout = match deadline_remaining() {
-        Some(remaining) => configured_timeout().min(remaining),
-        None => configured_timeout(),
-    };
-    output_with_limits_and_input(command, Some(input), timeout, configured_max_output())
+    output_with_limits_and_input(
+        command,
+        Some(input),
+        configured_timeout(),
+        configured_max_output(),
+    )
 }
 
 fn output_with_limits_and_input(
@@ -229,6 +238,15 @@ fn output_with_limits_and_input(
     max_output: usize,
 ) -> Result<Output, CommandError> {
     let program = command.get_program().to_string_lossy().into_owned();
+    // One slow query must not overrun the shared budget: never start a
+    // command once it is spent, and never wait past what remains of it.
+    let timeout = match deadline_remaining() {
+        Some(remaining) if remaining.is_zero() => {
+            return Err(CommandError::BudgetExhausted { program });
+        }
+        Some(remaining) => timeout.min(remaining),
+        None => timeout,
+    };
     if input.is_some() {
         command.stdin(Stdio::piped());
     }
@@ -517,11 +535,55 @@ mod tests {
     fn clamps_a_query_to_the_active_diagnostic_deadline() {
         let started = Instant::now();
         let result = with_deadline(Duration::from_millis(40), || {
-            output(Command::new("sh").arg("-c").arg("sleep 1"))
+            output(Command::new("sh").arg("-c").arg("sleep 5"))
         });
 
         assert!(matches!(result, Err(CommandError::TimedOut { .. })));
         assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn explicit_command_timeouts_cannot_outlast_the_diagnostic_budget() {
+        let started = Instant::now();
+        let result = with_deadline(Duration::from_millis(40), || {
+            output_with_limits(
+                Command::new("sh").arg("-c").arg("sleep 5"),
+                Duration::from_secs(5),
+                64,
+            )
+        });
+
+        match result {
+            Err(CommandError::TimedOut { timeout, .. }) => {
+                assert!(timeout <= Duration::from_millis(40));
+            }
+            other => panic!("expected a budget-clamped timeout, got {other:?}"),
+        }
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn spent_budget_returns_immediately_without_starting_the_command() {
+        let marker = std::env::temp_dir().join(format!(
+            "whykey-budget-marker-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let started = Instant::now();
+        let result = with_deadline(Duration::ZERO, || {
+            output(
+                Command::new("sh")
+                    .arg("-c")
+                    .arg("touch \"$1\"; sleep 5")
+                    .arg("sh")
+                    .arg(&marker),
+            )
+        });
+
+        assert!(matches!(result, Err(CommandError::BudgetExhausted { .. })));
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(!marker.exists(), "the command must not be started");
     }
 
     #[test]

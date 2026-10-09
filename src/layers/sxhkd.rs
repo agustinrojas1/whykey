@@ -1,19 +1,24 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::key::KeyCombo;
 use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
 
+const MAX_CONFIG_BYTES: usize = 256 * 1024;
+
 /// Read-only sxhkd binding adapter for bspwm-style sessions.
 pub struct Sxhkd;
 
 pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
-    let path = config_path().ok_or_else(|| {
+    let config = load_config().ok_or_else(|| {
         "sxhkd: sxhkdrc was not found; runtime sxhkd state remains unknown".to_owned()
     })?;
-    let content = resolved_config(&path)
-        .map_err(|error| format!("sxhkd: config: {}: {error}", path.display()))?;
-    Ok(parse_bindings(&content)
+    if config.files.is_empty() {
+        return Err(format!("sxhkd: config: {}", config.unreadable.join("; ")));
+    }
+    Ok(config
+        .bindings
         .into_iter()
         .map(|binding| {
             BindingRecord::new(
@@ -49,7 +54,7 @@ pub fn ipc_available() -> bool {
 
 impl Sxhkd {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        let Some(path) = config_path() else {
+        let Some(config) = load_config() else {
             return LayerResult::new(
                 "sxhkd",
                 LayerId::Compositor,
@@ -58,23 +63,31 @@ impl Sxhkd {
                 vec!["set SXHKD_CONFIG or provide ~/.config/sxhkd/sxhkdrc".into()],
             );
         };
-        let content = match resolved_config(&path) {
-            Ok(content) => content,
-            Err(error) => {
-                return LayerResult::new(
-                    "sxhkd",
-                    LayerId::Compositor,
-                    Outcome::Unavailable,
-                    "could not read sxhkd configuration",
-                    vec![format!("config: {}: {error}", path.display())],
-                );
-            }
-        };
-        let matches = parse_bindings(&content)
+        let mut details: Vec<String> = config
+            .files
+            .iter()
+            .map(|path| format!("config: {}", path.display()))
+            .chain(
+                config
+                    .unreadable
+                    .iter()
+                    .map(|error| format!("config: {error}")),
+            )
+            .collect();
+        if config.files.is_empty() {
+            return LayerResult::new(
+                "sxhkd",
+                LayerId::Compositor,
+                Outcome::Unavailable,
+                "could not read sxhkd configuration",
+                details,
+            );
+        }
+        let matches = config
+            .bindings
             .into_iter()
             .filter(|binding| binding.combo == *key)
             .collect::<Vec<_>>();
-        let mut details = vec![format!("config: {}", path.display())];
         if matches.is_empty() {
             details.push(
                 "no matching static sxhkd binding found; runtime reload state remains unknown"
@@ -107,16 +120,137 @@ struct Binding {
     command: String,
 }
 
-fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("SXHKD_CONFIG") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Some(path);
+/// Bindings from every file sxhkd loads, in its load order.
+struct LoadedConfig {
+    files: Vec<PathBuf>,
+    unreadable: Vec<String>,
+    bindings: Vec<Binding>,
+}
+
+/// sxhkd has no include directive: it reads its main config and then each
+/// EXTRA_CONFIG operand, each file parsed on its own. `None` when no config
+/// file is known.
+fn load_config() -> Option<LoadedConfig> {
+    let files = config_files();
+    (!files.is_empty()).then(|| load_files(files))
+}
+
+fn load_files(files: Vec<PathBuf>) -> LoadedConfig {
+    let mut config = LoadedConfig {
+        files: Vec::new(),
+        unreadable: Vec::new(),
+        bindings: Vec::new(),
+    };
+    for path in files {
+        match crate::util::read_bounded(&path, MAX_CONFIG_BYTES) {
+            Some(content) => {
+                config.bindings.extend(parse_bindings(&content));
+                config.files.push(path);
+            }
+            None => config
+                .unreadable
+                .push(format!("{}: unreadable or too large", path.display())),
         }
     }
-    let base = crate::util::config_base()?;
-    let path = base.join("sxhkd/sxhkdrc");
-    path.is_file().then_some(path)
+    config
+}
+
+/// The files to read: `SXHKD_CONFIG` when set, else the files a running
+/// sxhkd was started with, else the default sxhkdrc.
+fn config_files() -> Vec<PathBuf> {
+    if let Some(path) = override_path() {
+        return vec![path];
+    }
+    crate::util::ProcessSnapshot::collect()
+        .matching_pids(&["sxhkd"])
+        .into_iter()
+        .find_map(running_config_files)
+        .unwrap_or_else(|| config_path().into_iter().collect())
+}
+
+/// The configured sxhkdrc, without looking at running processes.
+fn config_path() -> Option<PathBuf> {
+    override_path().or_else(|| default_config_path().filter(|path| path.is_file()))
+}
+
+fn override_path() -> Option<PathBuf> {
+    env::var_os("SXHKD_CONFIG")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+fn default_config_path() -> Option<PathBuf> {
+    crate::util::config_base().map(|base| base.join("sxhkd/sxhkdrc"))
+}
+
+/// Config files of the sxhkd process `pid`, read from its command line.
+/// Relative paths are resolved against that process's working directory.
+fn running_config_files(pid: u32) -> Option<Vec<PathBuf>> {
+    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let cmdline = String::from_utf8_lossy(&cmdline);
+    let arguments: Vec<&str> = cmdline
+        .strip_suffix('\0')
+        .unwrap_or(&cmdline)
+        .split('\0')
+        .skip(1)
+        .collect();
+    let (config, extras) = sxhkd_config_arguments(&arguments);
+    let cwd = fs::read_link(format!("/proc/{pid}/cwd")).ok();
+    let resolve = |path: &str| match &cwd {
+        Some(cwd) if Path::new(path).is_relative() => cwd.join(path),
+        _ => PathBuf::from(path),
+    };
+    let main = match config {
+        Some(path) => Some(resolve(path)),
+        None => default_config_path(),
+    };
+    Some(
+        main.into_iter()
+            .chain(extras.into_iter().map(resolve))
+            .collect(),
+    )
+}
+
+/// Split sxhkd's arguments (without argv[0]) as its getopt string
+/// `hvm:t:c:r:s:a:` does: returns the `-c CONFIG_FILE` value and the
+/// EXTRA_CONFIG operands. Like glibc getopt, operands may appear anywhere
+/// and `--` ends option parsing.
+fn sxhkd_config_arguments<'a>(arguments: &[&'a str]) -> (Option<&'a str>, Vec<&'a str>) {
+    let mut config = None;
+    let mut extras = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = arguments[index];
+        index += 1;
+        if argument == "--" {
+            extras.extend_from_slice(&arguments[index..]);
+            break;
+        }
+        let Some(cluster) = argument
+            .strip_prefix('-')
+            .filter(|cluster| !cluster.is_empty())
+        else {
+            extras.push(argument);
+            continue;
+        };
+        for (offset, option) in cluster.char_indices() {
+            if !"mtcrsa".contains(option) {
+                continue;
+            }
+            let attached = &cluster[offset + option.len_utf8()..];
+            let value = if attached.is_empty() {
+                index += 1;
+                arguments.get(index - 1).copied()
+            } else {
+                Some(attached)
+            };
+            if option == 'c' && value.is_some() {
+                config = value;
+            }
+            break;
+        }
+    }
+    (config, extras)
 }
 
 fn parse_bindings(content: &str) -> Vec<Binding> {
@@ -153,10 +287,6 @@ fn parse_bindings(content: &str) -> Vec<Binding> {
     bindings
 }
 
-fn resolved_config(root: &Path) -> Result<String, std::io::Error> {
-    Ok(crate::config_resolver::resolve(root, &["include", "source"])?.text())
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -180,17 +310,62 @@ mod tests {
     }
 
     #[test]
-    fn resolves_nested_includes_and_cycles_without_repeating_files() {
+    fn reads_the_config_and_extra_configs_from_sxhkd_arguments() {
+        assert_eq!(
+            sxhkd_config_arguments(&["-m", "1", "-c", "main", "extra1", "-t5", "extra2"]),
+            (Some("main"), vec!["extra1", "extra2"])
+        );
+        assert_eq!(
+            sxhkd_config_arguments(&["-vcmain", "--", "-extra"]),
+            (Some("main"), vec!["-extra"])
+        );
+        assert_eq!(sxhkd_config_arguments(&[]), (None, Vec::new()));
+    }
+
+    #[test]
+    fn loads_each_file_on_its_own_and_never_follows_include_lines() {
         let root = std::env::temp_dir().join(format!("whykey-sxhkd-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("root"), "include child\nsuper + Return\n  root\n").unwrap();
-        fs::write(root.join("child"), "source root\nctrl + x\n  child\n").unwrap();
-        let content = resolved_config(&root.join("root")).unwrap();
-        let bindings = parse_bindings(&content);
-        assert_eq!(bindings.len(), 2);
-        assert!(bindings.iter().any(|binding| binding.command == "root"));
-        assert!(bindings.iter().any(|binding| binding.command == "child"));
+        // sxhkd has no include directive, so `include child` is not followed.
+        // A chain left dangling at the end of one file must not borrow the
+        // first command of the next one.
+        fs::write(
+            root.join("main"),
+            "include child\nsuper + Return\n  root\nctrl + q\n",
+        )
+        .unwrap();
+        fs::write(root.join("child"), "alt + c\n  included\n").unwrap();
+        fs::write(root.join("extra"), "\n  stray\nctrl + x\n  extra\n").unwrap();
+        let config = load_files(vec![
+            root.join("main"),
+            root.join("missing"),
+            root.join("extra"),
+        ]);
+        assert_eq!(
+            config
+                .bindings
+                .iter()
+                .map(|binding| binding.command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["root", "extra"]
+        );
+        assert_eq!(config.files.len(), 2);
+        assert_eq!(config.unreadable.len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn non_regular_config_operands_are_reported_unreadable() {
+        let root = std::env::temp_dir().join(format!("whykey-sxhkd-fifo-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let fifo = root.join("fifo");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let config = load_files(vec![fifo, root.clone()]);
+        assert!(config.files.is_empty());
+        assert_eq!(config.unreadable.len(), 2);
         let _ = fs::remove_dir_all(root);
     }
 }

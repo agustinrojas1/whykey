@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generate or check the dependency provenance document from Cargo metadata."""
+"""Generate or check the dependency provenance document from Cargo metadata
+and the vendored keysym table."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import pathlib
 import tomllib
 
@@ -12,6 +14,85 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "Cargo.toml"
 LOCKFILE = ROOT / "Cargo.lock"
 OUTPUT = ROOT / "DEPENDENCY_PROVENANCE.md"
+KEYSYM_TABLE = ROOT / "src" / "xkb_keysyms.txt"
+
+# keysymdef.h ships these two notices; they must accompany the derived table.
+KEYSYMDEF_NOTICES = """\
+Copyright 1987, 1994, 1998  The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall
+not be used in advertising or otherwise to promote the sale, use or
+other dealings in this Software without prior written authorization
+from The Open Group.
+
+
+Copyright 1987 by Digital Equipment Corporation, Maynard, Massachusetts
+
+                        All Rights Reserved
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appear in all copies and that
+both that copyright notice and this permission notice appear in
+supporting documentation, and that the name of Digital not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+DIGITAL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
+DIGITAL BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
+SOFTWARE.
+"""
+
+
+def keysym_table_section() -> list[str]:
+    data = KEYSYM_TABLE.read_bytes()
+    entries = sum(
+        1
+        for line in data.decode("utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    )
+    return [
+        "## Vendored data",
+        "",
+        "`src/xkb_keysyms.txt` is compiled into the binary with `include_str!` and",
+        "maps X11 keysym names to Unicode code points for XKB text prediction.",
+        "",
+        "- Source: `keysymdef.h` from X.Org xorgproto 2025.1",
+        "  (`include/X11/keysymdef.h`)",
+        "- Derivation: every `#define XK_<name> 0x… /* U+XXXX` or `// U+XXXX`",
+        "  line, in file order; the `<U+…>` and `(U+…)` annotations, which",
+        "  keysymdef.h uses for duplicate or inexact correspondences, are excluded",
+        f"- Entries: {entries}",
+        f"- SHA-256: `{hashlib.sha256(data).hexdigest()}`",
+        "- License: the X11-style permission notices of `keysymdef.h`, reproduced",
+        "  below",
+        "",
+        "```text",
+        *KEYSYMDEF_NOTICES.rstrip("\n").split("\n"),
+        "```",
+        "",
+    ]
 
 
 def load_metadata() -> tuple[dict, dict]:
@@ -37,7 +118,8 @@ def render() -> str:
     lines = [
         "# Dependency provenance and tested versions",
         "",
-        "This file is generated from `Cargo.toml` and `Cargo.lock` by",
+        "This file is generated from `Cargo.toml`, `Cargo.lock`, and",
+        "`src/xkb_keysyms.txt` by",
         "[`tools/generate_dependency_provenance.py`](tools/generate_dependency_provenance.py).",
         "Do not edit it by hand; CI checks that it is current.",
         "",
@@ -73,6 +155,7 @@ def render() -> str:
             "has been executed. Release archives carry a separate SHA-256 checksum",
             "for the assembled archive.",
             "",
+            *keysym_table_section(),
         ]
     )
     return "\n".join(lines)

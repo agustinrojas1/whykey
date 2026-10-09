@@ -7,6 +7,69 @@ use std::process::Command;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput};
+use crate::xkb::{self, KeyboardLayout, LevelText, XkbState};
+
+const SHIFT_MASK: u32 = 1;
+const CAPS_MASK: u32 = 2;
+const NUM_MASK: u32 = 16;
+/// AltGr (ISO_Level3_Shift on Mod5): an XKB level shift, not a modifier the
+/// terminal reports.
+const ALTGR_MASK: u32 = 128;
+
+/// A terminal's normal output for a key, or why it cannot be predicted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyEncoding {
+    Bytes(Vec<u8>),
+    /// A dead keysym starts composition in the terminal; nothing is sent
+    /// until the next key completes it.
+    DeadKey(String),
+    /// The bytes cannot be predicted; the reason names the missing evidence.
+    Unknown(String),
+    /// No default encoding is modeled for this key.
+    Unmodeled,
+}
+
+impl KeyEncoding {
+    fn into_bytes(self) -> Option<Vec<u8>> {
+        match self {
+            Self::Bytes(bytes) => Some(bytes),
+            Self::DeadKey(_) | Self::Unknown(_) | Self::Unmodeled => None,
+        }
+    }
+}
+
+/// Attach a pass-through key's default encoding to the terminal finding.
+/// `composes` says whether this finding describes the terminal that would
+/// compose a dead key; it then consumes the key, since no byte reaches the
+/// PTY until composition completes.
+pub(crate) fn with_default_encoding(
+    mut layer: LayerResult,
+    encoding: KeyEncoding,
+    description: impl Into<String>,
+    composes: bool,
+) -> (LayerResult, Option<TerminalInput>) {
+    match encoding {
+        KeyEncoding::Bytes(bytes) => (layer, Some(TerminalInput::predicted(bytes, description))),
+        KeyEncoding::DeadKey(keysym) => {
+            if composes && layer.outcome == Outcome::Pass {
+                layer.outcome = Outcome::Consumed;
+                layer.summary =
+                    "starts dead-key composition; no bytes are sent until the next key".into();
+            }
+            layer.details.push(format!(
+                "dead key {keysym}: composition sends no bytes until the next key"
+            ));
+            (layer, None)
+        }
+        KeyEncoding::Unknown(reason) => {
+            layer
+                .details
+                .push(format!("normal encoding is unknown: {reason}"));
+            (layer, None)
+        }
+        KeyEncoding::Unmodeled => (layer, None),
+    }
+}
 
 pub struct Ghostty {
     config_path: PathBuf,
@@ -42,7 +105,7 @@ struct ConfigState {
 
 impl Ghostty {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        self.analyze(key, None).0
+        self.analyze(key, None, None).0
     }
 }
 /// Whether Ghostty is the active terminal. Used by the unified terminal
@@ -54,36 +117,16 @@ pub fn is_active() -> bool {
 impl Ghostty {
     /// Analyze once: route finding plus normal input bytes from a single
     /// config load. The listener's probe protocol only affects the byte
-    /// prediction, never the binding layer itself.
+    /// prediction, never the binding layer itself. `layout` resolves the
+    /// text of AltGr (level-3) keys.
     pub fn analyze(
         &self,
         key: &KeyCombo,
         protocol_flags: Option<u32>,
+        layout: Option<&KeyboardLayout>,
     ) -> (LayerResult, Option<TerminalInput>) {
         if let Some(program) = known_non_ghostty_terminal() {
-            let detail = if program == "terminal identity unknown" {
-                "terminal identity is unavailable; Ghostty bindings were skipped".into()
-            } else {
-                format!("TERM_PROGRAM={program}; Ghostty bindings were skipped")
-            };
-            let layer = LayerResult::new(
-                "Ghostty",
-                LayerId::Terminal,
-                Outcome::Pass,
-                "not applicable to the current terminal",
-                vec![detail],
-            );
-            let input = default_encoding_for_protocol(key, protocol_flags).map(|bytes| {
-                TerminalInput::predicted(
-                    bytes,
-                    if program == "terminal identity unknown" {
-                        "generic terminal fallback; terminal identity is unknown".into()
-                    } else {
-                        format!("generic terminal fallback; {program} is not Ghostty")
-                    },
-                )
-            });
-            return (layer, input);
+            return generic_fallback(&program, key, protocol_flags, layout);
         }
         let config = match self.load_config() {
             Ok(config) => config,
@@ -100,26 +143,28 @@ impl Ghostty {
                 );
             }
         };
-        let layer = inspect_config(key, &self.config_path, &config);
+        let layer = inspect_config(key, &self.config_path, &config, layout);
         let has_binding = config
             .bindings
             .iter()
             .any(|binding| &binding.trigger == key);
-        let input = Self::input_from_config(&config, key, protocol_flags).or_else(|| {
-            if has_binding {
-                None
-            } else {
-                default_encoding_for_protocol(key, protocol_flags)
-                    .map(|bytes| TerminalInput::predicted(bytes, "Ghostty default encoding"))
-            }
-        });
-        (layer, input)
+        if has_binding {
+            let input = Self::input_from_config(&config, key, protocol_flags, layout);
+            return (layer, input);
+        }
+        with_default_encoding(
+            layer,
+            default_encoding_for_protocol(key, protocol_flags, layout),
+            "Ghostty default encoding",
+            true,
+        )
     }
 
     fn input_from_config(
         config: &ConfigState,
         key: &KeyCombo,
         protocol_flags: Option<u32>,
+        layout: Option<&KeyboardLayout>,
     ) -> Option<TerminalInput> {
         let binding = config
             .bindings
@@ -128,8 +173,9 @@ impl Ghostty {
         if binding.global || binding.all || binding.action == "ignore" {
             return None;
         }
+        let default = || default_encoding_for_protocol(key, protocol_flags, layout).into_bytes();
         if binding.performable {
-            return default_encoding_for_protocol(key, protocol_flags).map(|bytes| {
+            return default().map(|bytes| {
                 TerminalInput::predicted(
                     bytes,
                     "default encoding when the action is not performable",
@@ -139,7 +185,7 @@ impl Ghostty {
         if let Some(bytes) = action_encoding(&binding.action) {
             if binding.unconsumed {
                 let mut combined = bytes.clone();
-                if let Some(default) = default_encoding_for_protocol(key, protocol_flags) {
+                if let Some(default) = default() {
                     combined.extend(default);
                     return Some(TerminalInput::configured(
                         combined,
@@ -153,7 +199,7 @@ impl Ghostty {
             ));
         }
         if binding.unconsumed {
-            return default_encoding_for_protocol(key, protocol_flags).map(|bytes| {
+            return default().map(|bytes| {
                 TerminalInput::predicted(bytes, "default encoding from an unconsumed binding")
             });
         }
@@ -169,7 +215,7 @@ impl Ghostty {
         key: &KeyCombo,
         protocol_flags: Option<u32>,
     ) -> Option<TerminalInput> {
-        self.analyze(key, protocol_flags).1
+        self.analyze(key, protocol_flags, None).1
     }
 
     fn load_config(&self) -> Result<ConfigState, String> {
@@ -180,6 +226,46 @@ impl Ghostty {
         }
         load_config_file(&self.config_path)
     }
+}
+
+/// Analysis for a terminal that is not Ghostty: no bindings to inspect, but
+/// the terminal still emits its normal encoding, including AltGr level-3
+/// text and dead-key composition.
+fn generic_fallback(
+    program: &str,
+    key: &KeyCombo,
+    protocol_flags: Option<u32>,
+    layout: Option<&KeyboardLayout>,
+) -> (LayerResult, Option<TerminalInput>) {
+    let detail = if program == "terminal identity unknown" {
+        "terminal identity is unavailable; Ghostty bindings were skipped".into()
+    } else {
+        format!("TERM_PROGRAM={program}; Ghostty bindings were skipped")
+    };
+    let layer = LayerResult::new(
+        "Ghostty",
+        LayerId::Terminal,
+        Outcome::Pass,
+        "not applicable to the current terminal",
+        vec![detail],
+    );
+    let description = if program == "terminal identity unknown" {
+        "generic terminal fallback; terminal identity is unknown".into()
+    } else {
+        format!("generic terminal fallback; {program} is not Ghostty")
+    };
+    // The generic fallback models the active terminal itself, so a
+    // dead key composes there exactly as in a named terminal.
+    let encoding = default_encoding_for_protocol(key, protocol_flags, layout);
+    let layer = if matches!(encoding, KeyEncoding::DeadKey(_)) {
+        LayerResult {
+            layer: "Terminal",
+            ..layer
+        }
+    } else {
+        layer
+    };
+    with_default_encoding(layer, encoding, description, true)
 }
 
 fn known_non_ghostty_terminal() -> Option<String> {
@@ -193,7 +279,12 @@ fn known_non_ghostty_terminal() -> Option<String> {
     Some(program)
 }
 
-fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> LayerResult {
+fn inspect_config(
+    key: &KeyCombo,
+    config_path: &Path,
+    config: &ConfigState,
+    layout: Option<&KeyboardLayout>,
+) -> LayerResult {
     let Some(binding) = config
         .bindings
         .iter()
@@ -232,18 +323,23 @@ fn inspect_config(key: &KeyCombo, config_path: &Path, config: &ConfigState) -> L
                 details,
             );
         }
-        if let Some(encoding) = default_encoding(key) {
-            details.push(format_encoding_detail(&encoding));
-            return LayerResult::new(
-                "Ghostty",
-                LayerId::Terminal,
-                Outcome::Pass,
-                "no Ghostty binding; forwarded to terminal",
-                details,
-            );
+        match default_encoding_for_protocol(key, None, layout) {
+            KeyEncoding::Bytes(encoding) => {
+                details.push(format_encoding_detail(&encoding));
+                return LayerResult::new(
+                    "Ghostty",
+                    LayerId::Terminal,
+                    Outcome::Pass,
+                    "no Ghostty binding; forwarded to terminal",
+                    details,
+                );
+            }
+            // The analysis records the specific reason with the input.
+            KeyEncoding::DeadKey(_) | KeyEncoding::Unknown(_) => {}
+            KeyEncoding::Unmodeled => {
+                details.push("default key encoding is layout-dependent or unsupported".into());
+            }
         }
-
-        details.push("default key encoding is layout-dependent or unsupported".into());
         return LayerResult::new(
             "Ghostty",
             LayerId::Terminal,
@@ -578,14 +674,67 @@ fn decode_text(value: &str) -> Vec<u8> {
     bytes
 }
 
-fn default_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
-    default_encoding_for_protocol(key, None)
-}
-
+/// The terminal's normal encoding for `key`. AltGr is a level shift: XKB
+/// consumes it into the level-3 (level-4 with Shift) keysym and the
+/// terminal sends that symbol's text, so it is resolved through `layout`
+/// rather than encoded as a modifier.
 pub(crate) fn default_encoding_for_protocol(
     key: &KeyCombo,
     protocol_flags: Option<u32>,
-) -> Option<Vec<u8>> {
+    layout: Option<&KeyboardLayout>,
+) -> KeyEncoding {
+    if key.modmask() & ALTGR_MASK != 0 {
+        return altgr_encoding(key, protocol_flags, layout);
+    }
+    modifier_encoding(key, protocol_flags).map_or(KeyEncoding::Unmodeled, KeyEncoding::Bytes)
+}
+
+fn altgr_encoding(
+    key: &KeyCombo,
+    protocol_flags: Option<u32>,
+    layout: Option<&KeyboardLayout>,
+) -> KeyEncoding {
+    let mask = key.modmask();
+    if mask & !(ALTGR_MASK | SHIFT_MASK | CAPS_MASK | NUM_MASK) != 0 {
+        return KeyEncoding::Unknown(
+            "AltGr combined with Ctrl, Alt, Super, or another modifier is not modeled; \
+             the terminal's handling of the remaining modifiers is terminal-specific"
+                .into(),
+        );
+    }
+    if protocol_flags.is_some_and(|flags| flags & 8 != 0) {
+        return KeyEncoding::Unknown(
+            "the Kitty report-all-keys mode sends AltGr text as an escape code whose key \
+             and modifier fields are terminal-specific"
+                .into(),
+        );
+    }
+    let Some(layout) = layout else {
+        return KeyEncoding::Unknown(
+            "the active XKB keymap is unavailable, so the AltGr (level 3) symbol cannot be \
+             resolved"
+                .into(),
+        );
+    };
+    let state = XkbState::from_modifier_mask(
+        mask,
+        Some(layout.group),
+        mask & CAPS_MASK != 0,
+        mask & NUM_MASK != 0,
+        false,
+    );
+    match xkb::resolve_text(layout, key.key(), &state) {
+        LevelText::Text { text, .. } => {
+            let mut encoded = [0; 4];
+            KeyEncoding::Bytes(text.encode_utf8(&mut encoded).as_bytes().to_vec())
+        }
+        LevelText::Dead { keysym } => KeyEncoding::DeadKey(keysym),
+        LevelText::Unresolved(reason) => KeyEncoding::Unknown(reason),
+    }
+}
+
+/// Encoding of a key whose modifiers the terminal reports itself.
+fn modifier_encoding(key: &KeyCombo, protocol_flags: Option<u32>) -> Option<Vec<u8>> {
     if let Some(flags) = protocol_flags {
         if flags & (1 | 8) != 0 {
             if let Some(bytes) = kitty_encoding(key) {
@@ -743,6 +892,8 @@ fn function_key_encoding(key: &str, modifier: u32) -> Option<Vec<u8>> {
     Some(format!("\x1b[{code};{modifier}~").into_bytes())
 }
 
+/// Kitty/xterm modifier parameter. Mod5 (AltGr) is absent on purpose: it is
+/// a level shift resolved by [`altgr_encoding`], not the Kitty Meta bit.
 fn key_modifier_parameter(mask: u32) -> u32 {
     let mut parameter = 1;
     if mask & 1 != 0 {
@@ -759,9 +910,6 @@ fn key_modifier_parameter(mask: u32) -> u32 {
     }
     if mask & 32 != 0 {
         parameter += 16;
-    }
-    if mask & 128 != 0 {
-        parameter += 32;
     }
     if mask & 2 != 0 {
         parameter += 64;
@@ -803,7 +951,11 @@ mod tests {
                 parse_keybind(value.trim(), &mut state).unwrap();
             }
         }
-        inspect_config(&key, Path::new("/tmp/ghostty/config"), &state)
+        inspect_config(&key, Path::new("/tmp/ghostty/config"), &state, None)
+    }
+
+    fn default_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
+        default_encoding_for_protocol(key, None, None).into_bytes()
     }
 
     #[test]
@@ -953,18 +1105,95 @@ mod tests {
     fn encodes_unicode_text_as_utf8_without_kitty_protocol() {
         let key: KeyCombo = "é".parse().unwrap();
         assert_eq!(
-            default_encoding_for_protocol(&key, Some(0)),
-            Some("é".as_bytes().to_vec())
+            default_encoding_for_protocol(&key, Some(0), None),
+            KeyEncoding::Bytes("é".as_bytes().to_vec())
         );
     }
 
     #[test]
     fn encodes_extended_modifier_bits_for_kitty() {
-        let key: KeyCombo = "caps+num+hyper+meta-key+x".parse().unwrap();
+        let key: KeyCombo = "caps+num+hyper+x".parse().unwrap();
+        assert_eq!(key_modifier_parameter(key.modmask()), 1 + 64 + 128 + 16);
+    }
+
+    const ALTGR_KEYMAP: &str = r#"
+xkb_keymap {
+xkb_keycodes "evdev" {
+    <AE02> = 11;
+    <AD01> = 24;
+    <RTRN> = 36;
+};
+xkb_symbols "pc" {
+    key <AE02> { [ 2, at, twosuperior, dead_doubleacute ] };
+    key <AD01> { [ q, Q, adiaeresis, Adiaeresis ] };
+    key <RTRN> { [ Return ] };
+};
+};
+"#;
+
+    #[test]
+    fn altgr_sends_level_three_text_instead_of_a_meta_modifier() {
+        let layout = KeyboardLayout {
+            keymap: ALTGR_KEYMAP.into(),
+            group: 0,
+            physical_keycode: None,
+        };
+        let encode = |key: &str, flags: Option<u32>, layout: Option<&KeyboardLayout>| {
+            default_encoding_for_protocol(&key.parse().unwrap(), flags, layout)
+        };
+        let text = |value: &str| KeyEncoding::Bytes(value.as_bytes().to_vec());
+        assert_eq!(encode("altgr+q", None, Some(&layout)), text("ä"));
+        assert_eq!(encode("altgr+q", Some(1), Some(&layout)), text("ä"));
+        assert_eq!(encode("altgr+shift+q", None, Some(&layout)), text("Ä"));
         assert_eq!(
-            key_modifier_parameter(key.modmask()),
-            1 + 64 + 128 + 16 + 32
+            encode("altgr+shift+2", None, Some(&layout)),
+            KeyEncoding::DeadKey("dead_doubleacute".into())
         );
+        // No level 3, no keymap, or an unmodeled protocol: honest unknowns.
+        for (key, flags, layout) in [
+            ("altgr+return", None, Some(&layout)),
+            ("altgr+q", None, None),
+            ("altgr+q", Some(8), Some(&layout)),
+            ("altgr+ctrl+q", None, Some(&layout)),
+        ] {
+            assert!(
+                matches!(encode(key, flags, layout), KeyEncoding::Unknown(_)),
+                "{key} {flags:?}"
+            );
+        }
+        // A dead key is consumed by the terminal's composition.
+        let pass = LayerResult::new("Ghostty", LayerId::Terminal, Outcome::Pass, "", vec![]);
+        let (layer, input) = with_default_encoding(
+            pass,
+            KeyEncoding::DeadKey("dead_doubleacute".into()),
+            "Ghostty default encoding",
+            true,
+        );
+        assert_eq!(layer.outcome, Outcome::Consumed);
+        assert!(input.is_none());
+    }
+
+    #[test]
+    fn generic_terminal_fallback_resolves_altgr_level_three() {
+        let layout = KeyboardLayout {
+            keymap: ALTGR_KEYMAP.into(),
+            group: 0,
+            physical_keycode: None,
+        };
+        let (layer, input) =
+            generic_fallback("tern", &"altgr+q".parse().unwrap(), None, Some(&layout));
+        assert_eq!(layer.outcome, Outcome::Pass);
+        assert_eq!(input.expect("level-3 text bytes").bytes, "ä".as_bytes());
+
+        let (layer, input) = generic_fallback(
+            "tern",
+            &"altgr+shift+2".parse().unwrap(),
+            None,
+            Some(&layout),
+        );
+        assert_eq!(layer.outcome, Outcome::Consumed);
+        assert_eq!(layer.layer, "Terminal");
+        assert!(input.is_none(), "a dead key sends no bytes");
     }
 
     #[test]
@@ -1000,7 +1229,7 @@ mod tests {
 
         let config = load_config_file(&parent).unwrap();
         let key: KeyCombo = "ctrl+left".parse().unwrap();
-        let result = inspect_config(&key, &parent, &config);
+        let result = inspect_config(&key, &parent, &config, None);
 
         assert!(result.details.iter().any(|detail| detail.contains("csi:B")));
         let _ = std::fs::remove_dir_all(directory);
@@ -1024,7 +1253,7 @@ mod tests {
         )
         .unwrap();
         let key: KeyCombo = "ctrl+left".parse().unwrap();
-        let result = inspect_config(&key, Path::new("/tmp/config"), &config);
+        let result = inspect_config(&key, Path::new("/tmp/config"), &config, None);
         assert_eq!(result.status(), LayerStatus::Indeterminate);
         assert_eq!(result.propagation(), Propagation::Indeterminate);
         assert!(result.summary.contains("physical binding"));

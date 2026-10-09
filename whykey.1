@@ -3,44 +3,56 @@
 whykey \- explain which layer handles a keyboard shortcut
 .SH SYNOPSIS
 .B whykey
-.RB [ --verbose ] [ --json ] [ --schema-version\ 2 ]
 .I combination
+.RB \%[ --verbose "] \%[" --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey inspect
-.RB [ --pid pid ] [ --focused ] [ --instance id ] [ --verbose ] [ --json ] [ --schema-version\ 2 ]
 .I combination-or-sequence
+.RB \%[ --pid\ pid "] \%[" --focused "] \%[" --instance\ id "] \%[" --verbose ]
+.RB \%[ --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey listen
-.RB [ --json ] [ --ndjson ] [ --repeat ] [ --timeout seconds ] [ --count n ]
-.RB [ --events all ] [ --suppress | --no-suppress | --pass-through ]
-.RB [ --dry-run ] [ --explain-capture ] [ --terminal ]
-.RB [ --evdev ] [ --device path ] [ --output path ] [ --verbose ]
+.RB \%[ --repeat "] \%[" --timeout\ seconds "] \%[" --count\ n "] \%[" --events\ all ]
+.RB \%[ --suppress " | \%" --no-suppress " | \%" --pass-through ]
+.RB \%[ --dry-run "] \%[" --explain-capture "] \%[" --terminal "] \%[" --evdev "] \%[" --device\ path ]
+.RB \%[ --output\ path "] \%[" --verbose "] \%[" --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 ]
+.RB \%[ --schema-version\ 1|2 "] \%[" --ndjson ]
 .br
 .B whykey doctor
-.RB [ --json ] [ --schema-version\ 2 ]
+.RB \%[ --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey capabilities
-.RB [ --all ] [ --json ] [ --schema-version\ 2 ]
+.RB \%[ --all "] \%[" --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey bindings
-.RB [ --key\ text ] [ --action\ text ] [ --source\ text ] [ --device\ text ] [ --submap\ text ] [ --json ]
+.RB \%[ --key\ text "] \%[" --action\ text "] \%[" --source\ text "] \%[" --device\ text "] \%[" --submap\ text ]
+.RB \%[ --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey conflicts
-.RB [ --key\ text ] [ --action\ text ] [ --source\ text ] [ --device\ text ] [ --submap\ text ] [ --json ]
+.RB \%[ --key\ text "] \%[" --action\ text "] \%[" --source\ text "] \%[" --device\ text "] \%[" --submap\ text ]
+.RB \%[ --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey extension
 .I program combination
-.RB [ --json ]
+.RB \%[ --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey replay
 .I file
-.RB [ --json ]
+.RB \%[ --verbose "] \%[" --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
+.br
+.B whykey snapshot
+.I combination
+.RB \%[ --output\ path ]
+.br
+.B whykey diff
+.I before after
+.RB \%[ --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
 .B whykey shell-init
-.RB { bash | zsh | fish }
+.RB { bash " | " zsh " | " fish }
 .br
 .B whykey completions
-.RB { bash | zsh | fish }
+.RB { bash " | " zsh " | " fish }
 .SH DESCRIPTION
 Whykey is a Linux-only diagnostic utility. Non-Linux targets are not supported
 and fail with an explicit build-time platform message.
@@ -70,7 +82,12 @@ processing.
 .B doctor
 also lists candidate keyboard event paths, device names, and read errors so
 that input-group permission problems can be diagnosed without changing device
-state.
+state. When evdev is unavailable it names the cause: no
+.I /dev/input
+(not-installed), no keyboard event devices (api-does-not-expose), or
+keyboards or a
+.I /dev/input
+that cannot be read (permission-missing).
 In an SSH session without local Hyprland IPC, Hyprland is reported as not
 applicable and the remote terminal path remains a valid doctor target.
 .PP
@@ -83,7 +100,16 @@ and matching the mode reported by
 .BR get_binding_state .
 KDE Plasma and the Niri, dwl, River, Wayfire, labwc, sxhkd, Openbox,
 xbindkeys, AwesomeWM, Qtile, and XMonad adapters parse configuration files
-only and cannot observe runtime activation.
+only and cannot observe runtime activation. sxhkd has no include directive;
+whykey reads
+.BR SXHKD_CONFIG ,
+otherwise the
+.B -c
+file and extra configuration files of the running sxhkd, otherwise the
+default sxhkdrc. An i3
+.B --release
+binding is reported as consuming the key press, as i3's source shows; a Sway
+one forwards the press.
 Xfce is queried through the live
 .B xfce4-keyboard-shortcuts
 channel; Cinnamon and MATE are queried through their GSettings schemas. These
@@ -102,24 +128,52 @@ or
 .B WHYKEY_COMMAND_MAX_OUTPUT
 to override those limits for one session.
 Static inspections also share a ten-second wall-clock budget across all
-layers and sequence steps. Set
+layers and sequence steps; each command's timeout is cut to the remaining
+budget, and no command starts once it is spent. Set
 .B WHYKEY_DIAGNOSTIC_TIMEOUT_MS
 to override it.
+.PP
+keyd, kanata, and xremap configurations are evaluated for the queried key. A
+remap re-runs the later layers on the target key, and the report reads, for
+example, "keyd remaps Caps Lock to Esc." A layer switch, macro, or command
+consumes the key. Tap-hold, one-shot, application-specific, and other timing-
+or state-dependent actions stay conditional, as does a configuration found
+without a running process. An unreadable configuration is reported as
+unavailable. Printable keys are mapped by their US position and stay
+conditional unless
+.B WHYKEY_XKB_LAYOUT
+or
+.B XKB_DEFAULT_LAYOUT
+is us with no variant. kmonad and input-remapper are detected but not
+evaluated.
 .PP
 Literal Hyprland Lua helper calls provide source evidence and can resolve a
 literal modifier-insensitivity option; Lua is never executed. A
 .B __lua
 or plugin dispatcher consumes the key unless its callback returns
 .BR pass_event ,
-which whykey cannot observe. Bindings that Hyprland reports with an empty
-key are matched through a literal Lua
+which whykey cannot observe. Bindings that
+.B hyprctl binds -j
+reports with an empty key take their key from the text
+.B hyprctl binds
+listing, so Lua-built workspace binds such as super+1 match exactly, then
+from a literal Lua
 .B code:
-hint, or are otherwise reported as possible matches for their modifiers.
+hint, and are otherwise reported as possible matches for their modifiers.
+.B bindings
+and
+.B conflicts
+show a
+.B code:N
+bind as its key in the active XKB layout, and literal
+.B source
+paths with * and ? globs are followed.
 Same-key bindings in inactive submaps are listed as inactive,
 while dynamic configuration, unknown application modes, and
 device-specific physical origins remain conditional unless an evdev capture
 provides a matching device and keycode; evdev keycodes are converted to the
-XKB namespace exactly once. If the active layout is not exposed, Whykey does
+XKB namespace exactly once, and the native Lua hook already reports XKB
+keycodes. If the active layout is not exposed, Whykey does
 not invent a US layout. Malformed individual
 Hyprland binding entries are reported and lower confidence rather than
 discarding valid entries.
@@ -136,6 +190,10 @@ character, a named key such as return, left, comma, or f1, an XF86 media
 key, or
 .BR code:N .
 An unknown key name exits with status 2 and suggests the closest valid name.
+An altgr combination predicts the text of the active layout's third level
+(fourth with shift), sent as UTF-8; a dead key is reported as starting
+dead-key composition with no bytes sent. When the keymap or level is
+unknown, the report says why the encoding is unknown.
 .TP
 .B inspect combination-or-sequence
 Inspect one or more whitespace-separated combinations, such as
@@ -240,8 +298,10 @@ emits a versioned list of before/after values.
 .B doctor
 Check read-only prerequisites and report which integrations are available.
 It also reports detected keyd, kanata, kmonad, input-remapper, and xremap
-processes or configuration files; transformations that cannot be observed
-remain conditional.
+processes or configuration files and their literal mappings; transformations
+that cannot be observed remain conditional. For evdev it reports a cause
+(not-installed, permission-missing, or api-does-not-expose), a detail, and a
+matching next check.
 .TP
 .B capabilities
 Report the versioned support matrix for the current binary and environment.
@@ -288,7 +348,13 @@ timeout. First-party extensions include
 .B extensions/whykey-vscode
 (user VS Code keybindings), and
 .B extensions/whykey-emacs
-(live Emacs keymap stack via emacsclient).
+(live Emacs keymap stack via emacsclient). They report an answer as
+indeterminate when the part of the editor that could handle the key is not
+inspected: VS Code default keybindings and unevaluated
+.B when
+clauses, Neovim built-in commands and
+.B vim.on_key
+handlers, and Emacs translation maps and hooks.
 .TP
 .B compositor extension manifests
 Place a validated manifest in
@@ -315,7 +381,10 @@ Zsh and Fish answers come from literal configuration and common defaults.
 Answers based on defaults are reported as unverified.
 .TP
 .B completions bash|zsh|fish
-Print a completion script for the selected shell.
+Print a completion script for the selected shell. The scripts are generated
+from the same command and option table as
+.BR --help ,
+so each command completes only its own options.
 .SH OPTIONS
 .TP
 .B --json
@@ -329,10 +398,18 @@ Emit one compact schema-v2 JSON record per captured event on stdout. This
 implies
 .BR --json ;
 .TP
-.BI --schema-version 2
-Select the opt-in JSON v2 shape. Version 1 remains the default for compatibility;
+.B --schema-version 1|2
+Select the JSON shape. Version 1 remains the default for compatibility;
+version 2 is opt-in.
+.TP
 .B --json-v2
-is an equivalent shorthand.
+Shorthand for
+.BR "--json --schema-version 2" .
+Selecting two different schema versions, such as
+.B --json-v2
+with
+.BR "--schema-version 1" ,
+is a usage error.
 .TP
 .B --verbose
 Show every route layer and all diagnostic evidence in human-readable reports.
@@ -341,6 +418,19 @@ shown, with the conclusion first, and raw events, probe bytes, encoding
 internals, full modifier state, XKB candidates, keyboard inventory, inactive
 submaps, and alternate keys are hidden; JSON output always keeps full
 structured evidence.
+.TP
+.B --color auto|always|never
+Control terminal styling of human-readable output. The default,
+.BR auto ,
+disables color when
+.B NO_COLOR
+is set, stdout is not a terminal, or
+.BR TERM=dumb ;
+.B always
+and
+.B never
+override those checks. JSON, NDJSON, shell-init, and completion output are
+always plain.
 .TP
 .B --all
 List the complete adapter inventory with
@@ -392,8 +482,8 @@ all required prerequisites were available.
 An unavailable prerequisite or inspection error.
 .TP
 .B 2
-Invalid command-line usage or key combination, including an unknown key name
-and a
+Invalid command-line usage or key combination, including an unknown key name,
+two different JSON schema selections, and a
 .B --suppress
 combination that cannot suppress.
 .SH EXAMPLES

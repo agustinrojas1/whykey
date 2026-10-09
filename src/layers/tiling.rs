@@ -962,7 +962,19 @@ pub(crate) fn inspect(
                     mode_uncertainty.then_some(UncertaintyReason::UnresolvedMode),
                 )
             }
-            _ => {
+            Some(false) => {
+                details.push(format!(
+                    "--release: {} grabs the key, so the focused client receives neither the press nor the release; the command runs on release",
+                    family.layer
+                ));
+                (
+                    Outcome::Consumed,
+                    "active --release binding found".to_owned(),
+                    Some(binding),
+                    mode_uncertainty.then_some(UncertaintyReason::UnresolvedMode),
+                )
+            }
+            None => {
                 details.push(format!(
                     "--release: the command runs on release; whether {} withholds the press from the focused client is not verified",
                     family.layer
@@ -1084,14 +1096,8 @@ mod tests {
         config_candidates: Vec::new,
     };
 
-    const I3: Family = Family {
-        layer: "i3",
-        source: "i3",
-        msg: "i3-msg",
-        msg_args: &[],
-        release_press_forwarded: None,
-        config_candidates: Vec::new,
-    };
+    /// The production i3 family, so the test pins the shipped constant.
+    const I3: Family = super::super::i3::FAMILY;
 
     fn main_config(contents: &str) -> ConfigSource {
         ConfigSource {
@@ -1311,8 +1317,9 @@ bar {
                 .any(|line| line.contains("forwards the key press"))
         );
         let i3 = inspect(&I3, loaded(SWAY_CONFIG, Some("default")), &query("print"));
-        assert_eq!(i3.outcome, Outcome::HandledUncertain);
-        assert!(i3.details.iter().any(|line| line.contains("not verified")));
+        assert_eq!(i3.outcome, Outcome::Consumed);
+        assert_eq!(i3.binding.and_then(|binding| binding.uncertainty), None);
+        assert!(!i3.details.iter().any(|line| line.contains("not verified")));
     }
 
     #[test]

@@ -9,14 +9,19 @@ use super::tiling::Family;
 /// Read-only i3 compositor adapter.
 pub struct I3;
 
-/// i3 grabs `--release` keys through X11; whether the press still reaches
-/// the focused client is not verified, so it stays conditional.
-const FAMILY: Family = Family {
+/// i3 withholds the press of a `--release` binding from the focused client:
+/// `grab_all_keys` (i3 src/bindings.c) installs the same passive
+/// `xcb_grab_key(conn, 0, root, mods, keycode, XCB_GRAB_MODE_ASYNC,
+/// XCB_GRAB_MODE_ASYNC)` for every keyboard binding regardless of
+/// `bind->release`, so the X server delivers both the KeyPress and the
+/// KeyRelease to i3 alone, and i3 never replays them (`handle_key_press` in
+/// src/key_press.c only runs the matched binding).
+pub(super) const FAMILY: Family = Family {
     layer: "i3",
     source: "i3",
     msg: "i3-msg",
     msg_args: &[],
-    release_press_forwarded: None,
+    release_press_forwarded: Some(false),
     config_candidates,
 };
 

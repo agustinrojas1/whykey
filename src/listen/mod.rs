@@ -879,6 +879,21 @@ mod tests {
         assert!(!parse_evdev_keyboard_capability("not-a-capability"));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn evdev_capability_words_are_most_significant_first() {
+        // A real keyboard as sysfs prints it: bits 0-63 are the last word.
+        assert!(parse_evdev_keyboard_capability(
+            "a00000000 0 40007 ff80000000004400 ee80ffde25cfffff fffffffffffffffe\n"
+        ));
+        // A lone short word is bits 0-63 (sysfs omits leading zero digits).
+        assert!(parse_evdev_keyboard_capability("40000000\n"));
+        // The same short word followed by a zero low word is bit 94, not KEY_A.
+        assert!(!parse_evdev_keyboard_capability("40000000 0\n"));
+        // Button-only device: high bits set, low word empty.
+        assert!(!parse_evdev_keyboard_capability("ff0000 0 0 0 0\n"));
+    }
+
     #[test]
     fn overlong_decoder_input_is_bounded_and_deterministic() {
         let overlong = vec![0x1bu8; MAX_TERMINAL_SEQUENCE_BYTES + 16];

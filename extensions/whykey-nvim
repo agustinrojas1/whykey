@@ -1,137 +1,368 @@
 #!/usr/bin/env python3
-"""Neovim runtime key query extension for whykey (schema v1)."""
+"""Neovim runtime key query extension for whykey (schema v1).
 
+Asks a running Neovim server, in one `--remote-expr`, for its current mode,
+the mapping `maparg()` resolves for the key (buffer-local first, Lua
+callbacks included), the `<Plug>` chain behind it, and how many longer
+mappings start with the key. Neovim's built-in commands and plugin key
+handlers (`vim.on_key`, `getchar()` loops) are not inspectable, so a key
+without a mapping is reported as uncertain rather than unhandled.
+"""
+
+import glob
 import json
 import os
 import subprocess
 import sys
 
+SHIFT, CTRL, ALT, MOD3, SUPER, MOD5 = 1, 4, 8, 32, 64, 128
+QUERY_TIMEOUT = 1.5
+
+NAMED = {
+    "LEFT": "Left", "RIGHT": "Right", "UP": "Up", "DOWN": "Down",
+    "RETURN": "CR", "ESCAPE": "Esc", "SPACE": "Space", "TAB": "Tab",
+    "BACKSPACE": "BS", "DELETE": "Del", "INSERT": "Insert",
+    "HOME": "Home", "END": "End", "PAGE_UP": "PageUp", "PAGE_DOWN": "PageDown",
+    "<": "lt", "\\": "Bslash", "|": "Bar",
+}
+
+# Evaluated by the server. Kept on one line (joined below) because it is
+# embedded in a single-quoted Vimscript string; it must not contain `--`
+# comments or single quotes.
+LUA_QUERY = [
+    "(function(lhs)",
+    "local api, fn = vim.api, vim.fn",
+    "local full = api.nvim_get_mode().mode",
+    "local c = full:sub(1, 1)",
+    "local mm = \"\"",
+    "if full:sub(1, 2) == \"no\" then mm = \"o\"",
+    "elseif c == \"n\" then mm = \"n\"",
+    "elseif c == \"v\" or c == \"V\" or c == \"\\22\" then mm = \"x\"",
+    "elseif c == \"s\" or c == \"S\" or c == \"\\19\" then mm = \"s\"",
+    "elseif c == \"i\" or c == \"R\" then mm = \"i\"",
+    "elseif c == \"c\" then mm = \"c\"",
+    "elseif c == \"t\" then mm = \"t\" end",
+    "local out = {mode = full, map_mode = mm, timeout = vim.o.timeout,",
+    "timeoutlen = vim.o.timeoutlen, longer = {}, longer_count = 0, chain = {}}",
+    "if mm == \"\" then return vim.json.encode(out) end",
+    "local function info(d) return {lhs = d.lhs, rhs = d.rhs or \"\",",
+    "callback = d.callback ~= nil, desc = d.desc or \"\", expr = d.expr == 1,",
+    "noremap = d.noremap == 1, buffer = d.buffer == 1, nowait = d.nowait == 1} end",
+    "local d = fn.maparg(lhs, mm, false, true)",
+    "if next(d) ~= nil then out.map = info(d) local cur = d",
+    "for _ = 1, 5 do local r = cur.rhs or \"\"",
+    "if cur.noremap == 1 or not r:match(\"^<Plug>\") then break end",
+    "local nxt = fn.maparg(r, mm, false, true)",
+    "if next(nxt) == nil then table.insert(out.chain, {lhs = r, missing = true}) break end",
+    "table.insert(out.chain, info(nxt)) cur = nxt end end",
+    "local key = api.nvim_replace_termcodes(lhs, true, true, true)",
+    "local function scan(maps) for _, mp in ipairs(maps) do",
+    "local raw = api.nvim_replace_termcodes(mp.lhs, true, true, true)",
+    "if #raw > #key and raw:sub(1, #key) == key then",
+    "out.longer_count = out.longer_count + 1",
+    "if #out.longer < 3 then table.insert(out.longer,",
+    "fn.exists(\"*keytrans\") == 1 and fn.keytrans(raw) or mp.lhs) end end end end",
+    "scan(api.nvim_buf_get_keymap(0, mm))",
+    "scan(api.nvim_get_keymap(mm))",
+    "return vim.json.encode(out)",
+    "end)(_A)",
+]
+
+
+def result(status, propagation, summary, details):
+    return {"status": status, "propagation": propagation, "summary": summary, "details": details}
+
 
 def to_nvim_notation(key_obj):
-    mods = key_obj.get("modifiers", 0) if isinstance(key_obj, dict) else 0
-    raw_key = key_obj.get("key", "") if isinstance(key_obj, dict) else str(key_obj)
+    """Neovim key notation for whykey's key object, or None if not expressible."""
+    if not isinstance(key_obj, dict):
+        return None
+    mods = key_obj.get("modifiers", 0)
+    raw_key = str(key_obj.get("key", ""))
+    if not isinstance(mods, int) or not raw_key:
+        return None
+    if raw_key.lower().startswith("code:") or mods & (MOD3 | MOD5):
+        return None
+    upper = raw_key.upper()
+    named = NAMED.get(upper) or NAMED.get(raw_key)
+    if named is None and len(upper) > 1 and upper[0] == "F" and upper[1:].isdigit():
+        named = upper
+    if named is None and len(raw_key) != 1:
+        return None
+
     prefix = ""
-    if mods & 4:
+    if mods & CTRL:
         prefix += "C-"
-    if mods & 8:
+    if mods & ALT:
         prefix += "M-"
-    if mods & 1:
+    if mods & SUPER:
+        prefix += "D-"
+    if named is None:
+        letter = raw_key.isalpha()
+        name = raw_key.upper() if letter and mods & SHIFT else raw_key.lower()
+        if mods & SHIFT and not (letter and not prefix):
+            prefix += "S-"
+        return f"<{prefix}{name}>" if prefix else name
+    if mods & SHIFT:
         prefix += "S-"
-    named = {
-        "LEFT": "Left",
-        "RIGHT": "Right",
-        "UP": "Up",
-        "DOWN": "Down",
-        "RETURN": "CR",
-        "ESCAPE": "Esc",
-        "SPACE": "Space",
-        "TAB": "Tab",
-        "BACKSPACE": "BS",
-        "DELETE": "Del",
-    }
-    name = named.get(raw_key.upper(), raw_key)
-    if len(name) == 1 and not (mods & 1):
-        name = name.lower()
-    return f"<{prefix}{name}>" if (prefix or raw_key.upper() in named) else name
+    return f"<{prefix}{named}>"
 
 
-def find_server():
+def find_servers():
+    """Neovim server addresses; the bool is True when the caller's environment names one."""
     for var in ("NVIM_LISTEN_ADDRESS", "NVIM"):
         val = os.environ.get(var)
         if val:
-            return val
+            return [val], True
+    servers = []
     try:
-        for pid in os.listdir("/proc"):
-            if not pid.isdigit():
-                continue
-            try:
-                with open(f"/proc/{pid}/cmdline", "rb") as f:
-                    cmd = f.read().decode("utf-8", errors="replace").split("\0")
-                if not cmd or not (cmd[0] == "nvim" or cmd[0].endswith("/nvim")):
-                    continue
-                for i, arg in enumerate(cmd):
-                    if arg in ("--listen", "--server") and i + 1 < len(cmd) and cmd[i + 1]:
-                        return cmd[i + 1]
-                    if arg.startswith(("--listen=", "--server=")):
-                        return arg.split("=", 1)[1]
-            except (OSError, PermissionError):
-                continue
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
-        pass
-    return None
+        pids = []
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmd = f.read().decode("utf-8", errors="replace").split("\0")
+        except OSError:
+            continue
+        if not cmd or not (cmd[0] == "nvim" or cmd[0].endswith("/nvim")):
+            continue
+        for i, arg in enumerate(cmd):
+            if arg == "--listen" and i + 1 < len(cmd) and cmd[i + 1]:
+                servers.append(cmd[i + 1])
+            elif arg.startswith("--listen="):
+                servers.append(arg.split("=", 1)[1])
+    # Every Neovim (0.9+) listens on $XDG_RUNTIME_DIR/nvim.<pid>.0 by default.
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    sockets = []
+    for path in glob.glob(os.path.join(runtime, "nvim.*.0")):
+        pid = os.path.basename(path).split(".")[1]
+        if pid.isdigit() and os.path.exists(f"/proc/{pid}"):
+            try:
+                sockets.append((os.path.getmtime(path), path))
+            except OSError:
+                continue
+    servers.extend(path for _, path in sorted(sockets, reverse=True))
+    unique = []
+    for server in servers:
+        if server not in unique:
+            unique.append(server)
+    return unique, False
+
+
+def build_expr(notation):
+    lua = " ".join(LUA_QUERY).replace("'", "''")
+    return f"luaeval('{lua}', '{notation.replace(chr(39), chr(39) * 2)}')"
 
 
 def query_nvim(server, notation):
-    safe_notation = notation.replace("'", "''")
-    expr = (
-        f"join([mode(), (empty(maparg('{safe_notation}', mode(), 0, 1)) ? '' : "
-        f"join([maparg('{safe_notation}', mode(), 0, 1).rhs, "
-        f"string(maparg('{safe_notation}', mode(), 0, 1).noremap)], '\t'))], '\t')"
-    )
-    cmd = ["nvim", "--headless", "--server", server, "--remote-expr", expr]
-    res = subprocess.run(cmd, capture_output=True, timeout=1.5)
+    cmd = ["nvim", "--headless", "--server", server, "--remote-expr", build_expr(notation)]
+    res = subprocess.run(cmd, capture_output=True, timeout=QUERY_TIMEOUT)
     if res.returncode != 0:
         err = res.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(err or f"nvim exited with {res.returncode}")
-    parts = res.stdout.decode("utf-8", errors="replace").strip().split("\t")
-    mode = parts[0] if parts else "n"
-    rhs = parts[1] if len(parts) > 1 else ""
-    noremap = parts[2] if len(parts) > 2 else "0"
-    return mode, rhs, noremap
+    return json.loads(res.stdout.decode("utf-8", errors="replace").strip())
 
 
-def inspect_key(req):
-    notation = to_nvim_notation(req.get("key", {}))
-    server = find_server()
-    if not server:
-        return {
-            "status": "unavailable",
-            "propagation": "indeterminate",
-            "summary": "No running Neovim server found (start nvim with --listen <address>)",
-            "details": ["NVIM_LISTEN_ADDRESS unset and no active nvim --listen process found"],
-        }
+def describe_map(m):
+    if m.get("callback"):
+        action = f"a Lua callback ({m['desc']})" if m.get("desc") else "a Lua callback"
+    else:
+        action = m.get("rhs") or "<Nop>"
+        if m.get("desc"):
+            action += f" ({m['desc']})"
+    return action
+
+
+def interpret(notation, data, server):
+    mode = data.get("mode", "?")
+    mm = data.get("map_mode", "")
+    details = [f"mode: {mode}", f"lhs: {notation}"]
+    longer = data.get("longer") or []
+    count = data.get("longer_count", 0)
+    wait = (
+        f"'timeoutlen' ({data.get('timeoutlen')} ms)" if data.get("timeout", True)
+        else "an unlimited time ('notimeout')"
+    )
+    tail = [f"server: {server}"]
+
+    if not mm:
+        return result(
+            "indeterminate", "indeterminate",
+            f"Neovim is in mode '{mode}' (a prompt or pending state); key mappings do not apply there",
+            details + tail,
+        )
+
+    m = data.get("map")
+    if m:
+        action = describe_map(m)
+        details.append(f"action: {action}")
+        details.append(f"scope: {'buffer-local' if m.get('buffer') else 'global'}")
+        details.append(f"noremap: {int(bool(m.get('noremap')))}")
+        if m.get("expr"):
+            details.append("expr: the mapping's keys come from evaluating the expression at runtime")
+        for link in data.get("chain") or []:
+            if link.get("missing"):
+                details.append(f"plug: {link['lhs']} is not mapped in this mode, so the mapping does nothing")
+            else:
+                details.append(f"plug: {link['lhs']} -> {describe_map(link)}")
+        if count and not m.get("nowait"):
+            details.append(
+                f"ambiguity: also a prefix of {count} longer mapping(s) (e.g. {', '.join(longer)}); "
+                f"Neovim waits {wait} for another key before running this mapping"
+            )
+        scope = "buffer-local " if m.get("buffer") else ""
+        return result(
+            "handled", "stops",
+            f"Neovim mode '{mm}' {scope}maps {notation} to {action}",
+            details + tail,
+        )
+
+    if count:
+        details.append(f"longer mappings: {', '.join(longer)}")
+        details.append(
+            f"timeout: if no further key arrives within {wait}, Neovim runs its built-in command for {notation}"
+        )
+        return result(
+            "handled", "stops",
+            f"{notation} starts {count} Neovim mapping(s) in mode '{mm}'; Neovim waits for the next key",
+            details + tail,
+        )
+
+    unseen = (
+        "not inspected: Neovim built-in commands (:help index) and plugin key handlers "
+        "(vim.on_key, getchar() loops)"
+    )
+    if mm == "t":
+        if notation == "<C-Bslash>":
+            return result(
+                "handled", "stops",
+                "<C-Bslash> starts Neovim's built-in terminal-mode escape (<C-\\><C-N>)",
+                details + tail,
+            )
+        return result(
+            "indeterminate", "continues",
+            f"No terminal-mode mapping for {notation}; Neovim normally sends it to the terminal job",
+            details + [unseen] + tail,
+        )
+    return result(
+        "indeterminate", "indeterminate",
+        f"No user mapping for {notation} in Neovim mode '{mm}'; built-in commands not inspected",
+        details + [unseen] + tail,
+    )
+
+
+def inspect_key(req, query=query_nvim, servers=None):
+    key_obj = req.get("key", {})
+    notation = to_nvim_notation(key_obj)
+    if notation is None:
+        return result(
+            "indeterminate", "indeterminate",
+            "key cannot be expressed in Neovim key notation (keycode or AltGr/Mod3 modifier)",
+            [f"key: {key_obj}"],
+        )
+    candidates, named_by_env = servers if servers is not None else find_servers()
+    if not candidates:
+        return result(
+            "unavailable", "indeterminate",
+            "No running Neovim server found",
+            ["NVIM_LISTEN_ADDRESS/NVIM unset, no nvim --listen process, and no nvim.<pid>.0 socket"],
+        )
+    server = candidates[0]
     try:
-        mode, rhs, noremap = query_nvim(server, notation)
+        data = query(server, notation)
+    except subprocess.TimeoutExpired:
+        return result(
+            "indeterminate", "indeterminate",
+            f"Neovim did not answer within {QUERY_TIMEOUT}s (busy or blocked waiting for input)",
+            [f"server: {server}"],
+        )
     except Exception as exc:
-        return {
-            "status": "indeterminate",
-            "propagation": "indeterminate",
-            "summary": f"Neovim query failed: {exc}",
-            "details": [str(exc)],
-        }
+        return result(
+            "indeterminate", "indeterminate", f"Neovim query failed: {exc}", [f"server: {server}"]
+        )
+    if not isinstance(data, dict):
+        return result(
+            "indeterminate", "indeterminate", "Neovim returned an unexpected reply", [f"server: {server}"]
+        )
 
-    if rhs:
-        return {
-            "status": "handled",
-            "propagation": "stops",
-            "summary": f"Neovim mode '{mode}' maps {notation} to {rhs}",
-            "details": [
-                f"mode: {mode}",
-                f"lhs: {notation}",
-                f"rhs: {rhs}",
-                f"noremap: {noremap}",
-                f"server: {server}",
-            ],
-        }
-    return {
-        "status": "not_handled",
-        "propagation": "continues",
-        "summary": f"Neovim has no mapping for {notation} in mode '{mode}'",
-        "details": [f"mode: {mode}", f"server: {server}"],
-    }
+    res = interpret(notation, data, server)
+    if len(candidates) > 1 and not named_by_env:
+        res["details"].append(
+            f"assumption: {len(candidates)} Neovim servers found ({', '.join(candidates)}); "
+            "queried the first, which may not be the focused one"
+        )
+        if res["status"] == "not_handled":
+            res["status"] = "indeterminate"
+        res["propagation"] = "indeterminate"
+    return res
 
 
 def self_test():
-    assert to_nvim_notation({"modifiers": 4, "key": "x"}) == "<C-x>"
-    assert to_nvim_notation({"modifiers": 4, "key": "LEFT"}) == "<C-Left>"
-    assert to_nvim_notation({"modifiers": 12, "key": "RETURN"}) == "<C-M-CR>"
-    assert to_nvim_notation({"modifiers": 0, "key": "x"}) == "x"
+    assert to_nvim_notation({"modifiers": CTRL, "key": "X"}) == "<C-x>"
+    assert to_nvim_notation({"modifiers": CTRL, "key": "LEFT"}) == "<C-Left>"
+    assert to_nvim_notation({"modifiers": CTRL | ALT, "key": "RETURN"}) == "<C-M-CR>"
+    assert to_nvim_notation({"modifiers": 0, "key": "X"}) == "x"
+    assert to_nvim_notation({"modifiers": SHIFT, "key": "X"}) == "X"
+    assert to_nvim_notation({"modifiers": CTRL | SHIFT, "key": "X"}) == "<C-S-X>"
     assert to_nvim_notation({"modifiers": 0, "key": "ESCAPE"}) == "<Esc>"
+    assert to_nvim_notation({"modifiers": 0, "key": "F5"}) == "<F5>"
+    assert to_nvim_notation({"modifiers": 0, "key": "PAGE_UP"}) == "<PageUp>"
+    assert to_nvim_notation({"modifiers": 0, "key": "<"}) == "<lt>"
+    assert to_nvim_notation({"modifiers": SUPER, "key": "E"}) == "<D-e>"
+    assert to_nvim_notation({"modifiers": 0, "key": "CODE:36"}) is None
+    assert to_nvim_notation({"modifiers": MOD5, "key": "E"}) is None
 
-    res = inspect_key({"key": {"modifiers": 4, "key": "x"}})
-    assert res["status"] in ("handled", "not_handled", "unavailable", "indeterminate")
-    assert res["propagation"] in ("stops", "continues", "indeterminate")
-    print("self_test passed")
+    # The query is one Vimscript expression on one line with balanced quotes.
+    expr = build_expr("<C-x>")
+    assert "\n" not in expr and "--" not in " ".join(LUA_QUERY)
+    assert all("'" not in line for line in LUA_QUERY)
+
+    env = (["/tmp/nvim.sock"], True)
+
+    def ask(data, mods=CTRL, key="X", servers=env):
+        return inspect_key({"key": {"modifiers": mods, "key": key}}, query=lambda s, n: data, servers=servers)
+
+    base = {"mode": "n", "map_mode": "n", "timeout": True, "timeoutlen": 1000, "longer": {}, "longer_count": 0, "chain": {}}
+
+    res = ask(dict(base, map={"lhs": "<C-X>", "rhs": ":echo 1<CR>", "noremap": True}))
+    assert (res["status"], res["propagation"]) == ("handled", "stops")
+
+    # A Lua-callback mapping has an empty rhs but is still a mapping.
+    res = ask(dict(base, map={"lhs": "<C-X>", "rhs": "", "callback": True, "desc": "Telescope"}))
+    assert (res["status"], res["propagation"]) == ("handled", "stops")
+    assert "Lua callback" in res["summary"]
+
+    # <Plug> chains are followed and missing targets reported.
+    res = ask(dict(base, map={"lhs": "<C-X>", "rhs": "<Plug>(Foo)"}, chain=[{"lhs": "<Plug>(Foo)", "missing": True}]))
+    assert res["status"] == "handled" and any("<Plug>(Foo)" in d for d in res["details"])
+
+    # A key that only starts longer mappings (leader, which-key prefixes) is consumed.
+    res = ask(dict(base, longer=["<C-X>a"], longer_count=1))
+    assert (res["status"], res["propagation"]) == ("handled", "stops")
+
+    # No mapping: built-ins unknown, never a confident not_handled.
+    res = ask(dict(base))
+    assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+    res = ask(dict(base, mode="t", map_mode="t"))
+    assert (res["status"], res["propagation"]) == ("indeterminate", "continues")
+    res = ask(dict(base, mode="r", map_mode=""))
+    assert res["status"] == "indeterminate"
+
+    # A timeout means a busy server, not a missing mapping.
+    def slow(server, notation):
+        raise subprocess.TimeoutExpired("nvim", QUERY_TIMEOUT)
+    res = inspect_key({"key": {"modifiers": CTRL, "key": "X"}}, query=slow, servers=env)
+    assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+    assert "did not answer" in res["summary"]
+
+    # Several discovered servers: the answer may be about the wrong instance.
+    res = ask(dict(base, map={"lhs": "<C-X>", "rhs": "x"}), servers=(["/a", "/b"], False))
+    assert (res["status"], res["propagation"]) == ("handled", "indeterminate")
+
+    res = inspect_key({"key": {"modifiers": CTRL, "key": "X"}}, servers=([], False))
+    assert res["status"] == "unavailable"
+    print("whykey-nvim self_test passed")
 
 
 def main():
@@ -139,15 +370,15 @@ def main():
         self_test()
         return
 
-    raw = sys.stdin.read()
-    if not raw:
-        sys.exit(1)
-    req = json.loads(raw)
-    result = inspect_key(req)
+    try:
+        raw = sys.stdin.read()
+        req = json.loads(raw) if raw else {}
+    except Exception:
+        req = {}
     response = {
         "schema_version": 1,
         "capabilities": ["query_mode", "identify_action"],
-        "result": result,
+        "result": inspect_key(req),
     }
     json.dump(response, sys.stdout)
     sys.stdout.write("\n")

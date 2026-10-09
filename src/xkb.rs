@@ -17,11 +17,100 @@
 use std::collections::HashMap;
 use std::env;
 use std::process::Command;
+use std::sync::LazyLock;
 
 use crate::command;
 
 type KeycodeMap = HashMap<String, Vec<u32>>;
 type SymbolGroupMap = HashMap<String, HashMap<usize, Vec<String>>>;
+/// Explicit `type=` assignments per key; the `None` group applies to every
+/// group without its own `type[N]=`.
+type KeyTypeMap = HashMap<String, HashMap<Option<usize>, String>>;
+
+/// Modifiers an XKB key type can map, reduced to the state [`XkbState`]
+/// observes. Virtual modifiers resolve to the real modifier they sit on in
+/// the stock keymaps (LevelThree on Mod5, NumLock on Mod2).
+const TYPE_SHIFT: u8 = 1;
+const TYPE_LOCK: u8 = 1 << 1;
+const TYPE_LEVEL_THREE: u8 = 1 << 2;
+const TYPE_NUM_LOCK: u8 = 1 << 3;
+/// Any other modifier (Control, Alt, Super, LevelFive, ...). `XkbState`
+/// never observes one, so map entries naming it never match.
+const TYPE_OTHER: u8 = 1 << 4;
+
+/// The stock key types libxkbcommon assigns automatically, used when a
+/// keymap omits its `xkb_types` section (fixtures, hand-written keymaps).
+/// A compiled keymap's own definitions always take precedence.
+const BUILTIN_TYPES: &str = r#"
+xkb_types "builtin" {
+    type "ONE_LEVEL" { modifiers= none; };
+    type "TWO_LEVEL" { modifiers= Shift; map[Shift]= 2; };
+    type "ALPHABETIC" { modifiers= Shift+Lock; map[Shift]= 2; map[Lock]= 2; };
+    type "KEYPAD" { modifiers= NumLock; map[NumLock]= 2; };
+    type "FOUR_LEVEL" {
+        modifiers= Shift+LevelThree;
+        map[Shift]= 2; map[LevelThree]= 3; map[Shift+LevelThree]= 4;
+    };
+    type "FOUR_LEVEL_ALPHABETIC" {
+        modifiers= Shift+Lock+LevelThree;
+        map[Shift]= 2; map[Lock]= 2; map[LevelThree]= 3; map[Shift+LevelThree]= 4;
+        map[Lock+LevelThree]= 4; map[Shift+Lock+LevelThree]= 3;
+    };
+    type "FOUR_LEVEL_SEMIALPHABETIC" {
+        modifiers= Shift+Lock+LevelThree;
+        map[Shift]= 2; map[Lock]= 2; map[LevelThree]= 3; map[Shift+LevelThree]= 4;
+        map[Lock+LevelThree]= 3; map[Shift+Lock+LevelThree]= 4;
+    };
+    type "FOUR_LEVEL_KEYPAD" {
+        modifiers= Shift+NumLock+LevelThree;
+        map[Shift]= 1; map[NumLock]= 2; map[LevelThree]= 3; map[Shift+NumLock]= 2;
+        map[Shift+LevelThree]= 4; map[NumLock+LevelThree]= 3; map[Shift+NumLock+LevelThree]= 4;
+    };
+};
+"#;
+
+static BUILTIN_KEY_TYPES: LazyLock<HashMap<String, KeyType>> =
+    LazyLock::new(|| parse_keymap(BUILTIN_TYPES).types);
+
+/// X11 keysym names with an exact Unicode mapping (from `keysymdef.h`).
+static KEYSYM_TEXT: LazyLock<HashMap<&'static str, char>> = LazyLock::new(|| {
+    include_str!("xkb_keysyms.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            let (name, value) = line.split_once(' ')?;
+            Some((name, char::from_u32(u32::from_str_radix(value, 16).ok()?)?))
+        })
+        .collect()
+});
+
+/// One XKB key type: the modifiers it consumes and their level mapping.
+#[derive(Debug, Clone, Default)]
+struct KeyType {
+    modifiers: u8,
+    /// Exact modifier combination to zero-based level.
+    map: Vec<(u8, usize)>,
+}
+
+impl KeyType {
+    /// XKB semantics: mask the active modifiers with the type's modifiers
+    /// and look the result up exactly; an unmapped combination is level 1.
+    fn level(&self, active: u8) -> usize {
+        let effective = active & self.modifiers;
+        self.map
+            .iter()
+            .find(|(modifiers, _)| *modifiers == effective)
+            .map_or(0, |(_, level)| *level)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ParsedKeymap {
+    keycodes: KeycodeMap,
+    symbols: SymbolGroupMap,
+    key_types: KeyTypeMap,
+    types: HashMap<String, KeyType>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rmlvo {
@@ -121,24 +210,23 @@ impl XkbState {
         }
     }
 
-    /// Return the conservative level for the common two/three-level XKB
-    /// layouts covered by the parser. Unknown group state is represented by
-    /// `None`, so callers can retain conditional evidence.
-    pub fn level(&self) -> Option<usize> {
-        self.group?;
-        let level = if self.altgr {
-            2
-        } else if self.shift ^ self.caps_lock ^ self.latched_shift {
-            1
-        } else {
-            0
-        };
-        Some(level)
-    }
-
-    /// Keypad keys commonly use level 1 for their NumLock symbol.
-    pub fn keypad_level(&self) -> Option<usize> {
-        self.group.map(|_| usize::from(self.num_lock))
+    /// The modifiers a key type can consume, as this state observes them.
+    /// A latched Shift is active for the next key exactly like a held one.
+    fn type_modifiers(&self) -> u8 {
+        let mut modifiers = 0;
+        if self.shift || self.latched_shift {
+            modifiers |= TYPE_SHIFT;
+        }
+        if self.caps_lock {
+            modifiers |= TYPE_LOCK;
+        }
+        if self.altgr {
+            modifiers |= TYPE_LEVEL_THREE;
+        }
+        if self.num_lock {
+            modifiers |= TYPE_NUM_LOCK;
+        }
+        modifiers
     }
 }
 
@@ -264,12 +352,12 @@ pub fn preferred_symbol_for_xkb_keycode(
     group: usize,
     level: usize,
 ) -> Option<String> {
-    let (keycodes, symbols) = parse_keymap(keymap);
-    keycodes.into_iter().find_map(|(name, codes)| {
+    let parsed = parse_keymap(keymap);
+    parsed.keycodes.into_iter().find_map(|(name, codes)| {
         if !codes.contains(&xkb_keycode.get()) {
             return None;
         }
-        let levels = symbols.get(&name)?.get(&group)?;
+        let levels = parsed.symbols.get(&name)?.get(&group)?;
         levels
             .get(level)
             .or_else(|| levels.first())
@@ -288,11 +376,239 @@ pub fn preferred_symbol_for_evdev_keycode(
     preferred_symbol_for_xkb_keycode(keymap, xkb_keycode, group, level)
 }
 
+/// One key's symbol after key-type-aware XKB level selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelSelection {
+    /// `None` when the selected level holds `NoSymbol` or does not exist.
+    pub keysym: Option<String>,
+    /// Zero-based level the key type selects.
+    pub level: usize,
+    pub key_type: String,
+    /// Whether the key type maps LevelThree (AltGr). When it does not, AltGr
+    /// selects nothing on this key and stays an unconsumed modifier.
+    pub consumes_level_three: bool,
+}
+
+/// Select the level XKB would use for `xkb_keycode` under `state`, using the
+/// key's type: CapsLock only affects types that map Lock (ALPHABETIC and its
+/// four-level variants), and Shift+AltGr reaches level 4 on FOUR_LEVEL*
+/// types. `None` when the group is unknown or the key or its type is not in
+/// the keymap.
+pub fn select_level(
+    keymap: &str,
+    xkb_keycode: XkbKeycode,
+    state: &XkbState,
+) -> Option<LevelSelection> {
+    select_level_in(&parse_keymap(keymap), xkb_keycode, state)
+}
+
+fn select_level_in(
+    parsed: &ParsedKeymap,
+    xkb_keycode: XkbKeycode,
+    state: &XkbState,
+) -> Option<LevelSelection> {
+    let group = state.group?;
+    let name = parsed
+        .keycodes
+        .iter()
+        .find_map(|(name, codes)| codes.contains(&xkb_keycode.get()).then_some(name))?;
+    let levels = parsed.symbols.get(name)?.get(&group)?;
+    let explicit = parsed
+        .key_types
+        .get(name)
+        .and_then(|types| types.get(&Some(group)).or_else(|| types.get(&None)));
+    let type_name = match explicit {
+        Some(type_name) => type_name.as_str(),
+        None => automatic_type(levels)?,
+    };
+    let key_type = parsed
+        .types
+        .get(type_name)
+        .or_else(|| BUILTIN_KEY_TYPES.get(type_name))?;
+    let level = key_type.level(state.type_modifiers());
+    Some(LevelSelection {
+        keysym: levels
+            .get(level)
+            .filter(|symbol| !symbol.is_empty())
+            .cloned(),
+        level,
+        key_type: type_name.to_owned(),
+        consumes_level_three: key_type.modifiers & TYPE_LEVEL_THREE != 0,
+    })
+}
+
+/// The type libxkbcommon assigns to a key group without an explicit `type=`
+/// (xkbcomp's `FindAutomaticType`). Compiled keymaps omit those implicit
+/// assignments, so the level-1/2 (and 3/4) case pairs decide whether
+/// CapsLock applies.
+fn automatic_type(levels: &[String]) -> Option<&'static str> {
+    let symbol = |index: usize| levels.get(index).map_or("", String::as_str);
+    let case_pair = |lower: usize, upper: usize| {
+        keysym_is_lower(symbol(lower)) && keysym_is_upper(symbol(upper))
+    };
+    let keypad = || symbol(0).starts_with("KP_") || symbol(1).starts_with("KP_");
+    Some(match levels.len() {
+        0 | 1 => "ONE_LEVEL",
+        2 if case_pair(0, 1) => "ALPHABETIC",
+        2 if keypad() => "KEYPAD",
+        2 => "TWO_LEVEL",
+        3 | 4 if case_pair(0, 1) && case_pair(2, 3) => "FOUR_LEVEL_ALPHABETIC",
+        3 | 4 if case_pair(0, 1) => "FOUR_LEVEL_SEMIALPHABETIC",
+        3 | 4 if keypad() => "FOUR_LEVEL_KEYPAD",
+        3 | 4 => "FOUR_LEVEL",
+        _ => return None,
+    })
+}
+
+/// The character a keysym commits, for named keysyms with an exact Unicode
+/// mapping and for Unicode keysyms (`U20AC`, `0x10020ac`).
+pub fn keysym_char(keysym: &str) -> Option<char> {
+    if let Some(character) = KEYSYM_TEXT.get(keysym) {
+        return Some(*character);
+    }
+    let value = match keysym.strip_prefix('U') {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => u32::from_str_radix(keysym.strip_prefix("0x")?, 16)
+            .ok()?
+            .checked_sub(0x0100_0000)?,
+    };
+    char::from_u32(value)
+}
+
+fn single_char(mut characters: impl Iterator<Item = char>) -> Option<char> {
+    let character = characters.next()?;
+    characters.next().is_none().then_some(character)
+}
+
+fn keysym_is_lower(keysym: &str) -> bool {
+    keysym_char(keysym).is_some_and(|character| {
+        single_char(character.to_uppercase()).is_some_and(|upper| upper != character)
+    })
+}
+
+fn keysym_is_upper(keysym: &str) -> bool {
+    keysym_char(keysym).is_some_and(|character| {
+        single_char(character.to_lowercase()).is_some_and(|lower| lower != character)
+    })
+}
+
+/// The compiled active keymap and layout group, plus the physical key when
+/// a capture observed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyboardLayout {
+    pub keymap: String,
+    pub group: usize,
+    pub physical_keycode: Option<XkbKeycode>,
+}
+
+/// What a key commits once XKB has consumed its level modifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LevelText {
+    Text {
+        keysym: String,
+        text: char,
+    },
+    /// A dead keysym starts composition; nothing is committed yet.
+    Dead {
+        keysym: String,
+    },
+    /// The text cannot be resolved; the reason names the missing evidence.
+    Unresolved(String),
+}
+
+/// Resolve the text `key` commits under `state` in `layout`. `key` is a
+/// normalized query key (see `key::normalize_key_str`); a captured physical
+/// keycode takes precedence over matching it against the base level.
+pub fn resolve_text(layout: &KeyboardLayout, key: &str, state: &XkbState) -> LevelText {
+    let parsed = parse_keymap(&layout.keymap);
+    let keycodes = match layout.physical_keycode {
+        Some(keycode) => vec![keycode],
+        None => keycodes_for_key(&parsed, layout.group, key),
+    };
+    let mut outcomes = keycodes
+        .iter()
+        .map(|keycode| level_text(&parsed, *keycode, key, state));
+    let Some(first) = outcomes.next() else {
+        return LevelText::Unresolved(format!(
+            "{key} is not on the base level of the active XKB layout group {}",
+            layout.group + 1
+        ));
+    };
+    if outcomes.all(|outcome| outcome == first) {
+        first
+    } else {
+        LevelText::Unresolved(format!(
+            "{key} is on several physical keys that select different symbols"
+        ))
+    }
+}
+
+fn level_text(
+    parsed: &ParsedKeymap,
+    keycode: XkbKeycode,
+    key: &str,
+    state: &XkbState,
+) -> LevelText {
+    let Some(selection) = select_level_in(parsed, keycode, state) else {
+        return LevelText::Unresolved(format!(
+            "the XKB key type of {key} (keycode {keycode}) is not known"
+        ));
+    };
+    if state.altgr && !selection.consumes_level_three {
+        return LevelText::Unresolved(format!(
+            "the active layout has no level 3 for {key} (key type {}); AltGr stays an \
+             unconsumed modifier",
+            selection.key_type
+        ));
+    }
+    let level = selection.level + 1;
+    let Some(keysym) = selection.keysym else {
+        return LevelText::Unresolved(format!(
+            "the active layout has no symbol at level {level} for {key}"
+        ));
+    };
+    if keysym.starts_with("dead_") {
+        return LevelText::Dead { keysym };
+    }
+    match keysym_char(&keysym) {
+        Some(text) => LevelText::Text { keysym, text },
+        None => LevelText::Unresolved(format!(
+            "level {level} keysym {keysym} of {key} has no known text"
+        )),
+    }
+}
+
+/// XKB keycodes whose base-level symbol in `group` is the query key.
+fn keycodes_for_key(parsed: &ParsedKeymap, group: usize, key: &str) -> Vec<XkbKeycode> {
+    let query = single_char(key.chars());
+    let mut keycodes = parsed
+        .symbols
+        .iter()
+        .filter(|(_, groups)| {
+            groups
+                .get(&group)
+                .and_then(|levels| levels.first())
+                .is_some_and(|base| {
+                    crate::key::normalize_key_str(base) == key
+                        || query.is_some_and(|query| keysym_char(base) == Some(query))
+                })
+        })
+        .filter_map(|(name, _)| parsed.keycodes.get(name))
+        .flatten()
+        .map(|code| XkbKeycode(*code))
+        .collect::<Vec<_>>();
+    keycodes.sort_by_key(|keycode| keycode.get());
+    keycodes.dedup();
+    keycodes
+}
+
 pub fn parse_symbol_keycodes_for_group(
     keymap: &str,
     group_index: usize,
 ) -> HashMap<String, Vec<u32>> {
-    let (keycodes, symbols) = parse_keymap(keymap);
+    let ParsedKeymap {
+        keycodes, symbols, ..
+    } = parse_keymap(keymap);
     symbols
         .into_iter()
         .flat_map(|(name, groups)| {
@@ -325,49 +641,65 @@ pub fn parse_symbol_keycodes_for_group(
         })
 }
 
-fn parse_keymap(keymap: &str) -> (KeycodeMap, SymbolGroupMap) {
-    let mut keycodes: KeycodeMap = HashMap::new();
-    let mut symbols: SymbolGroupMap = HashMap::new();
+fn parse_keymap(keymap: &str) -> ParsedKeymap {
+    let mut parsed = ParsedKeymap::default();
     let mut in_keycodes = false;
     let mut in_symbols = false;
+    let mut in_types = false;
     let mut pending_symbol_key = None;
+    let mut pending_type: Option<(String, KeyType)> = None;
 
     for line in keymap.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("xkb_keycodes") {
-            in_keycodes = true;
-            in_symbols = false;
-            continue;
-        }
-        if trimmed.starts_with("xkb_symbols") {
-            in_keycodes = false;
-            in_symbols = true;
-            pending_symbol_key = None;
-            continue;
-        }
         if trimmed.starts_with("xkb_") {
-            in_keycodes = false;
-            in_symbols = false;
+            in_keycodes = trimmed.starts_with("xkb_keycodes");
+            in_symbols = trimmed.starts_with("xkb_symbols");
+            in_types = trimmed.starts_with("xkb_types");
             pending_symbol_key = None;
+            pending_type = None;
+            continue;
         }
         if in_keycodes {
             if let Some((name, value)) = parse_keycode_line(trimmed) {
-                keycodes.entry(name).or_default().push(value);
+                parsed.keycodes.entry(name).or_default().push(value);
             }
         }
+        if in_types {
+            parse_type_line(trimmed, &mut pending_type, &mut parsed.types);
+        }
         if in_symbols {
-            if let Some((name, group, symbols_for_key)) = parse_symbol_line(trimmed) {
-                symbols
-                    .entry(name)
-                    .or_default()
-                    .insert(group, symbols_for_key);
-                pending_symbol_key = None;
-            } else if let Some(name) = parse_symbol_key_name(trimmed) {
-                pending_symbol_key = Some(name);
+            if let Some(name) = parse_symbol_key_name(trimmed) {
+                // `key <NAME> { ... };` on one line, or the opener of a block.
+                let body = trimmed.split_once('{').map_or("", |(_, body)| body);
+                if let Some((group, type_name)) = parse_key_type(body) {
+                    parsed
+                        .key_types
+                        .entry(name.clone())
+                        .or_default()
+                        .insert(group, type_name);
+                }
+                if let Some(symbols_for_key) = parse_symbol_fragment(body) {
+                    let group = parse_symbol_group(body).unwrap_or(0);
+                    parsed
+                        .symbols
+                        .entry(name)
+                        .or_default()
+                        .insert(group, symbols_for_key);
+                    pending_symbol_key = None;
+                } else {
+                    pending_symbol_key = Some(name);
+                }
             } else if let Some(name) = pending_symbol_key.clone() {
-                if let Some(symbols_for_key) = parse_symbol_fragment(trimmed) {
+                if let Some((group, type_name)) = parse_key_type(trimmed) {
+                    parsed
+                        .key_types
+                        .entry(name)
+                        .or_default()
+                        .insert(group, type_name);
+                } else if let Some(symbols_for_key) = parse_symbol_fragment(trimmed) {
                     let group = parse_symbol_group(trimmed).unwrap_or(0);
-                    symbols
+                    parsed
+                        .symbols
                         .entry(name)
                         .or_default()
                         .insert(group, symbols_for_key);
@@ -378,7 +710,87 @@ fn parse_keymap(keymap: &str) -> (KeycodeMap, SymbolGroupMap) {
         }
     }
 
-    (keycodes, symbols)
+    parsed
+}
+
+/// Parse one line of an `xkb_types` section. Statements end in `;`, and the
+/// built-in table puts a whole type on one line, so split by statement.
+fn parse_type_line(
+    line: &str,
+    pending: &mut Option<(String, KeyType)>,
+    types: &mut HashMap<String, KeyType>,
+) {
+    let mut rest = line;
+    if let Some(name) = rest
+        .strip_prefix("type")
+        .map(str::trim_start)
+        .and_then(|header| header.strip_prefix('"'))
+        .and_then(|header| header.split_once('"'))
+        .map(|(name, _)| name)
+    {
+        *pending = Some((name.to_owned(), KeyType::default()));
+        rest = rest.split_once('{').map_or("", |(_, body)| body);
+    }
+    for statement in rest.split(';').map(str::trim) {
+        if statement.starts_with('}') {
+            if let Some((name, key_type)) = pending.take() {
+                types.insert(name, key_type);
+            }
+            continue;
+        }
+        let Some((_, key_type)) = pending.as_mut() else {
+            continue;
+        };
+        if let Some(value) = statement
+            .strip_prefix("modifiers")
+            .and_then(|value| value.trim_start().strip_prefix('='))
+        {
+            key_type.modifiers = parse_type_modifiers(value);
+        } else if let Some((modifiers, level)) = statement
+            .strip_prefix("map[")
+            .and_then(|entry| entry.split_once(']'))
+        {
+            let level = level.trim_start().strip_prefix('=').map(str::trim);
+            let level = level.map(|value| value.strip_prefix("Level").unwrap_or(value));
+            if let Some(level) = level
+                .and_then(|value| value.parse::<usize>().ok())
+                .and_then(|value| value.checked_sub(1))
+            {
+                key_type.map.push((parse_type_modifiers(modifiers), level));
+            }
+        }
+    }
+}
+
+fn parse_type_modifiers(value: &str) -> u8 {
+    value.split('+').map(str::trim).fold(0, |modifiers, name| {
+        modifiers
+            | match name {
+                "" | "none" | "None" => 0,
+                "Shift" => TYPE_SHIFT,
+                "Lock" => TYPE_LOCK,
+                "LevelThree" | "Mod5" => TYPE_LEVEL_THREE,
+                "NumLock" | "Mod2" => TYPE_NUM_LOCK,
+                _ => TYPE_OTHER,
+            }
+    })
+}
+
+/// Parse a key's `type= "NAME"` or `type[N]= "NAME"` assignment.
+fn parse_key_type(statement: &str) -> Option<(Option<usize>, String)> {
+    let rest = statement.trim_start().strip_prefix("type")?;
+    let (group, rest) = match rest.strip_prefix('[') {
+        Some(indexed) => {
+            let (index, rest) = indexed.split_once(']')?;
+            let index = index.trim();
+            let index = index.strip_prefix("Group").unwrap_or(index);
+            (Some(index.parse::<usize>().ok()?.checked_sub(1)?), rest)
+        }
+        None => (None, rest),
+    };
+    let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+    let name = rest.strip_prefix('"')?.split_once('"')?.0;
+    Some((group, name.to_owned()))
 }
 
 /// Return every symbol-to-keycode mapping, regardless of layout group.
@@ -413,13 +825,6 @@ fn parse_keycode_line(line: &str) -> Option<(String, u32)> {
     Some((name.to_owned(), value))
 }
 
-fn parse_symbol_line(line: &str) -> Option<(String, usize, Vec<String>)> {
-    let name = parse_symbol_key_name(line)?;
-    let fragment = parse_symbol_fragment(line)?;
-    let group = parse_symbol_group(line).unwrap_or(0);
-    Some((name, group, fragment))
-}
-
 fn parse_symbol_key_name(line: &str) -> Option<String> {
     let rest = line.strip_prefix("key <")?;
     let (name, _) = rest.split_once('>')?;
@@ -444,11 +849,14 @@ fn parse_symbol_fragment(line: &str) -> Option<Vec<String>> {
 }
 
 fn parse_symbol_group(line: &str) -> Option<usize> {
-    let (prefix, _) = line.split_once('=')?;
-    let start = prefix.find("symbols[")? + "symbols[".len();
-    let end = prefix[start..].find(']')? + start;
-    let group = prefix[start..end].trim().parse::<usize>().ok()?;
-    group.checked_sub(1)
+    // Search the whole statement: a one-line key may put `type= ...` (and
+    // its `=`) before `symbols[N]=`.
+    let start = line.find("symbols[")? + "symbols[".len();
+    let end = line[start..].find(']')? + start;
+    let index = line[start..end].trim();
+    // libxkbcommon <= 1.7 dumps `symbols[GroupN]`; newer ones `symbols[N]`.
+    let index = index.strip_prefix("Group").unwrap_or(index);
+    index.parse::<usize>().ok()?.checked_sub(1)
 }
 
 #[cfg(test)]
@@ -519,6 +927,32 @@ xkb_symbols "pc" {
     #[test]
     fn ignores_unknown_groups() {
         assert!(parse_symbol_keycodes_for_group(KEYMAP, 4).is_empty());
+    }
+
+    #[test]
+    fn parses_group_prefixed_symbol_indices() {
+        let keymap = r#"
+xkb_keymap {
+xkb_keycodes "evdev" {
+    <AD01> = 24;
+    <AE01> = 10;
+};
+xkb_symbols "pc" {
+    key <AD01> {
+        symbols[Group1] = [ q, Q ],
+        symbols[Group2] = [ a, A ]
+    };
+    key <AE01> { type= "TWO_LEVEL", symbols[Group1]= [ 1, exclam ] };
+};
+};
+"#;
+        let first = parse_symbol_keycodes_for_group(keymap, 0);
+        let second = parse_symbol_keycodes_for_group(keymap, 1);
+        assert_eq!(first.get("q"), Some(&vec![24]));
+        assert_eq!(first.get("1"), Some(&vec![10]));
+        assert!(!first.contains_key("a"));
+        assert_eq!(second.get("a"), Some(&vec![24]));
+        assert!(!second.contains_key("q"));
     }
 
     #[test]
@@ -616,38 +1050,179 @@ xkb_symbols "pc" {
         );
     }
 
+    const TYPED_KEYMAP: &str = r#"
+xkb_keymap {
+xkb_keycodes "evdev" {
+    <AE01> = 10;
+    <AE02> = 11;
+    <AD01> = 24;
+    <AD02> = 25;
+    <AC10> = 47;
+    <RTRN> = 36;
+    <KP1> = 87;
+    <FK01> = 67;
+};
+xkb_types "complete" {
+    virtual_modifiers NumLock,Alt,LevelThree;
+    type "TWO_LEVEL" {
+        modifiers= Shift;
+        map[Shift]= 2;
+    };
+    type "CTRL+ALT" {
+        modifiers= Shift+Control+Alt+LevelThree;
+        map[Shift]= 2;
+        map[LevelThree]= 3;
+        map[Shift+LevelThree]= 4;
+        map[Control+Alt]= 5;
+    };
+};
+xkb_symbols "pc" {
+    key <AE01> { [ 1, exclam, exclamdown, onesuperior ] };
+    key <AE02> { [ 2, at, twosuperior, dead_doubleacute ] };
+    key <AD01> { [ q, Q, adiaeresis, Adiaeresis ] };
+    key <AD02> {
+        type= "TWO_LEVEL",
+        symbols[1]= [ w, W ]
+    };
+    key <AC10> { [ semicolon, colon, paragraph, degree ] };
+    key <RTRN> { [ Return ] };
+    key <KP1> { [ KP_End, KP_1 ] };
+    key <FK01> {
+        type= "CTRL+ALT",
+        symbols[1]= [ F1, F1, F1, F1, XF86Switch_VT_1 ]
+    };
+};
+};
+"#;
+
+    fn symbol(keycode: u32, state: XkbState) -> Option<String> {
+        select_level(TYPED_KEYMAP, XkbKeycode::from(keycode), &state).and_then(|s| s.keysym)
+    }
+
+    fn state(shift: bool, caps_lock: bool, altgr: bool) -> XkbState {
+        XkbState {
+            group: Some(0),
+            shift,
+            altgr,
+            caps_lock,
+            ..XkbState::default()
+        }
+    }
+
     #[test]
-    fn typed_state_keeps_missing_group_conditional_and_selects_latched_levels() {
-        assert_eq!(XkbState::default().level(), None);
+    fn caps_lock_only_affects_keys_whose_type_maps_lock() {
+        // Digits and punctuation are FOUR_LEVEL: CapsLock leaves them alone.
+        assert_eq!(symbol(10, state(false, true, false)), Some("1".into()));
         assert_eq!(
-            XkbState {
-                group: Some(0),
-                shift: false,
-                altgr: false,
-                caps_lock: false,
-                num_lock: false,
-                latched_shift: true,
-            }
-            .level(),
-            Some(1)
+            symbol(47, state(false, true, false)),
+            Some("semicolon".into())
+        );
+        // Letters are FOUR_LEVEL_ALPHABETIC: CapsLock selects level 2 and
+        // Shift cancels it.
+        assert_eq!(symbol(24, state(false, true, false)), Some("Q".into()));
+        assert_eq!(symbol(24, state(true, true, false)), Some("q".into()));
+        // An explicit type from the keymap beats the case-pair inference.
+        assert_eq!(symbol(25, state(false, true, false)), Some("w".into()));
+        assert_eq!(symbol(25, state(true, false, false)), Some("W".into()));
+    }
+
+    #[test]
+    fn shift_with_altgr_selects_level_four_on_four_level_types() {
+        assert_eq!(
+            symbol(24, state(false, false, true)),
+            Some("adiaeresis".into())
         );
         assert_eq!(
-            XkbState {
-                group: Some(0),
-                altgr: true,
-                ..XkbState::default()
-            }
-            .level(),
-            Some(2)
+            symbol(24, state(true, false, true)),
+            Some("Adiaeresis".into())
         );
         assert_eq!(
-            XkbState {
-                group: Some(0),
-                num_lock: true,
-                ..XkbState::default()
+            symbol(10, state(true, false, true)),
+            Some("onesuperior".into())
+        );
+        // CapsLock reaches level 4 on alphabetic types only.
+        assert_eq!(
+            symbol(24, state(false, true, true)),
+            Some("Adiaeresis".into())
+        );
+        assert_eq!(
+            symbol(47, state(false, true, true)),
+            Some("paragraph".into())
+        );
+        // Keymap-defined types are honored too.
+        assert_eq!(symbol(67, state(true, false, true)), Some("F1".into()));
+    }
+
+    #[test]
+    fn typed_state_keeps_missing_group_conditional_and_selects_latched_and_keypad_levels() {
+        assert_eq!(
+            select_level(TYPED_KEYMAP, XkbKeycode::from(24), &XkbState::default()),
+            None
+        );
+        let latched = XkbState {
+            group: Some(0),
+            latched_shift: true,
+            ..XkbState::default()
+        };
+        assert_eq!(symbol(24, latched), Some("Q".into()));
+        let num_lock = XkbState {
+            group: Some(0),
+            num_lock: true,
+            ..XkbState::default()
+        };
+        assert_eq!(symbol(87, num_lock), Some("KP_1".into()));
+        assert_eq!(symbol(87, state(true, false, false)), Some("KP_End".into()));
+        // AltGr on a one-level key selects nothing and is not consumed.
+        let selection = select_level(
+            TYPED_KEYMAP,
+            XkbKeycode::from(36),
+            &state(false, false, true),
+        )
+        .unwrap();
+        assert_eq!(selection.keysym.as_deref(), Some("Return"));
+        assert!(!selection.consumes_level_three);
+    }
+
+    #[test]
+    fn resolves_altgr_text_dead_keys_and_missing_levels() {
+        let layout = KeyboardLayout {
+            keymap: TYPED_KEYMAP.into(),
+            group: 0,
+            physical_keycode: None,
+        };
+        assert_eq!(
+            resolve_text(&layout, "Q", &state(false, false, true)),
+            LevelText::Text {
+                keysym: "adiaeresis".into(),
+                text: 'ä'
             }
-            .keypad_level(),
-            Some(1)
+        );
+        assert_eq!(
+            resolve_text(&layout, "2", &state(true, false, true)),
+            LevelText::Dead {
+                keysym: "dead_doubleacute".into()
+            }
+        );
+        for key in ["RETURN", "F1", "Z"] {
+            assert!(
+                matches!(
+                    resolve_text(&layout, key, &state(false, false, true)),
+                    LevelText::Unresolved(_)
+                ),
+                "{key}"
+            );
+        }
+        // A captured physical key wins over matching the query symbol.
+        let physical = KeyboardLayout {
+            physical_keycode: Some(XkbKeycode::from(10)),
+            ..layout
+        };
+        assert_eq!(
+            resolve_text(&physical, "Q", &state(false, false, true)),
+            LevelText::Text {
+                keysym: "exclamdown".into(),
+                text: '¡'
+            }
         );
     }
 
@@ -658,7 +1233,48 @@ xkb_symbols "pc" {
         assert!(state.shift);
         assert!(state.altgr);
         assert!(state.caps_lock);
-        assert_eq!(state.level(), None);
+        assert_eq!(
+            select_level(TYPED_KEYMAP, XkbKeycode::from(24), &state),
+            None
+        );
+    }
+
+    #[test]
+    fn resolves_level_three_text_from_an_xkbcli_compiled_keymap() {
+        let rmlvo = Rmlvo {
+            rules: "evdev".into(),
+            model: "pc105".into(),
+            layout: "us".into(),
+            variant: Some("intl".into()),
+            options: None,
+        };
+        let Some(keymap) = compile_keymap(&rmlvo) else {
+            // xkbcli is optional; the fixtures above stay authoritative.
+            return;
+        };
+        let layout = KeyboardLayout {
+            keymap,
+            group: 0,
+            physical_keycode: None,
+        };
+        assert_eq!(
+            resolve_text(&layout, "Q", &state(false, false, true)),
+            LevelText::Text {
+                keysym: "adiaeresis".into(),
+                text: 'ä'
+            }
+        );
+        assert_eq!(
+            resolve_text(&layout, "1", &state(false, true, false)),
+            LevelText::Text {
+                keysym: "1".into(),
+                text: '1'
+            }
+        );
+        assert!(matches!(
+            resolve_text(&layout, "F1", &state(false, false, true)),
+            LevelText::Unresolved(_)
+        ));
     }
 
     #[test]

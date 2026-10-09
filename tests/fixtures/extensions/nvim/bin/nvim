@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Stub nvim binary for hermetic whykey extension testing."""
+"""Stub nvim binary for hermetic whykey extension testing.
 
+Answers the whykey-nvim `--remote-expr` query with the JSON the server-side
+Lua would return for a few fixture mappings.
+"""
+
+import json
+import re
 import sys
 
 args = sys.argv[1:]
@@ -11,13 +17,20 @@ for i, arg in enumerate(args):
     elif arg.startswith("--remote-expr="):
         expr = arg.split("=", 1)[1]
 
-if "<C-x>" in expr:
-    sys.stdout.write("n\t:echo 1<CR>\t1\n")
-elif "<C-Left>" in expr:
-    sys.stdout.write("i\tcopilot#Accept()\t0\n")
-elif "<C-S-X>" in expr:
-    sys.stdout.write("n\t<Plug>(Custom)\t0\n")
-elif "<C-q>" in expr:
-    sys.stdout.write("n\t\t0\n")
-else:
-    sys.stdout.write("n\t\t0\n")
+match = re.search(r", '((?:[^']|'')*)'\)$", expr)
+lhs = match.group(1).replace("''", "'") if match else ""
+
+reply = {"mode": "n", "map_mode": "n", "timeout": True, "timeoutlen": 1000,
+         "longer": {}, "longer_count": 0, "chain": {}}
+if lhs == "<C-x>":
+    reply["map"] = {"lhs": "<C-X>", "rhs": ":echo 1<CR>", "callback": False, "desc": "",
+                    "expr": False, "noremap": True, "buffer": False, "nowait": False}
+elif lhs == "<C-Left>":
+    reply.update(mode="i", map_mode="i")
+    reply["map"] = {"lhs": "<C-Left>", "rhs": "copilot#Accept()", "callback": False, "desc": "",
+                    "expr": True, "noremap": False, "buffer": True, "nowait": False}
+elif lhs == "<C-l>":
+    # Lua-callback mappings have an empty rhs.
+    reply["map"] = {"lhs": "<C-L>", "rhs": "", "callback": True, "desc": "Telescope find_files",
+                    "expr": False, "noremap": True, "buffer": False, "nowait": False}
+sys.stdout.write(json.dumps(reply) + "\n")

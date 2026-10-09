@@ -182,14 +182,16 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
             readline_notation(pending)
         ));
     }
-    let mut bound_entry = None;
+    // The action an unverified (non-snapshot) answer rests on, with the entry
+    // whose source it came from when one is known.
+    let mut default_action: Option<(String, Option<&Entry>)> = None;
     let (outcome, summary) = match keymap.resolve(&bytes) {
         Resolution::Bound {
             entry,
             continuations,
             prefix_of,
         } => {
-            bound_entry = Some(entry);
+            default_action = Some((entry.label(), Some(entry)));
             details.push(format!("binding source: {}", entry.source));
             if prefix_of > 0 {
                 details.push(format!(
@@ -204,6 +206,10 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
             continuations,
             prefix_of,
         } => {
+            default_action = Some((
+                "a prefix key (Readline waits for the next key)".into(),
+                continuations.first().copied(),
+            ));
             details.push(format!(
                 "continues with {}",
                 format_continuations(&continuations, prefix_of)
@@ -218,6 +224,13 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
             )
         }
         Resolution::Unbound if !pending.is_empty() => {
+            default_action = Some((
+                format!(
+                    "a bell after prefix {} (the sequence is discarded)",
+                    readline_notation(pending)
+                ),
+                None,
+            ));
             details.push(format!("binding source: {}", keymap.source_label()));
             (
                 Outcome::Consumed,
@@ -268,20 +281,20 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
         _ => Outcome::UncertainContinues,
     };
     let result = LayerResult::new(LAYER, LayerId::Shell, outcome, summary, details);
-    match bound_entry {
-        Some(entry) => result.with_binding(unverified_evidence(entry)),
+    match default_action {
+        Some((action, entry)) => result.with_binding(unverified_evidence(action, entry)),
         None => result,
     }
 }
 
 /// Evidence for a binding read from Readline defaults or INPUTRC rather than
-/// the live shell, which may have rebound the key.
-fn unverified_evidence(entry: &Entry) -> BindingEvidence {
+/// the live shell, which may have rebound the key. `entry` supplies the
+/// source: an INPUTRC file, or none for a built-in default.
+fn unverified_evidence(action: String, entry: Option<&Entry>) -> BindingEvidence {
     let source = entry
-        .source
-        .strip_prefix("INPUTRC ")
+        .and_then(|entry| entry.source.strip_prefix("INPUTRC "))
         .map(|path| SourceLocation::new(path, None));
-    BindingEvidence::action(entry.label(), BindingScope::Unknown, source)
+    BindingEvidence::action(action, BindingScope::Unknown, source)
         .with_uncertainty(UncertaintyReason::UnverifiedDefault)
 }
 
@@ -995,6 +1008,34 @@ mod tests {
 
         // The live snapshot is authoritative and carries no such caveat.
         assert!(inspect(&live(), &[&[0x0c]]).binding.is_none());
+    }
+
+    #[test]
+    fn default_prefix_key_without_snapshot_is_an_unverified_default() {
+        let result = inspect(&defaults(), &[&[0x18]]);
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("whykey shell-init bash"))
+        );
+        let evidence = result
+            .binding
+            .expect("a default prefix key is typed evidence");
+        assert_eq!(
+            evidence.uncertainty,
+            Some(UncertaintyReason::UnverifiedDefault)
+        );
+        assert!(
+            evidence
+                .action
+                .is_some_and(|action| action.contains("prefix"))
+        );
+        assert!(evidence.source.is_none());
+
+        // The live snapshot is authoritative: its prefix carries no caveat.
+        assert!(inspect(&live(), &[&[0x18]]).binding.is_none());
     }
 
     #[test]

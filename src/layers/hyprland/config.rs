@@ -22,6 +22,9 @@ struct ConfigHints {
     declarative: Vec<ConfigBindHint>,
 }
 
+/// Upper bound on a single Hyprland config or Lua file read.
+const MAX_CONFIG_BYTES: usize = 1024 * 1024;
+
 static CONFIG_HINTS: LazyLock<ConfigHints> = LazyLock::new(|| ConfigHints {
     lua: lua_config_bindings(),
     declarative: declarative_config_hints(),
@@ -83,7 +86,7 @@ fn lua_config_bindings() -> Vec<LuaBindHint> {
 
     let mut hints = Vec::new();
     for path in files {
-        let Ok(content) = fs::read_to_string(&path) else {
+        let Some(content) = crate::util::read_bounded(&path, MAX_CONFIG_BYTES) else {
             continue;
         };
         extend_lua_bind_hints(&mut hints, &content, &path);
@@ -561,7 +564,7 @@ fn collect_config_hints(
     if !visited.insert(canonical.clone()) {
         return;
     }
-    let Ok(content) = fs::read_to_string(&canonical) else {
+    let Some(content) = crate::util::read_bounded(&canonical, MAX_CONFIG_BYTES) else {
         return;
     };
 
@@ -586,11 +589,11 @@ fn collect_config_hints(
         }
         if let Some(include) = parse_config_include(line) {
             let include = resolve_config_path(&include, &canonical, variables);
-            if !include.to_string_lossy().contains('*')
-                && !include.to_string_lossy().contains('?')
-                && !include.to_string_lossy().contains('[')
-            {
-                collect_config_hints(&include, visited, variables, hints, depth + 1);
+            // Bracket classes are not expanded; skip rather than misread them.
+            if !include.to_string_lossy().contains('[') {
+                for include in expand_config_glob(&include) {
+                    collect_config_hints(&include, visited, variables, hints, depth + 1);
+                }
             }
         }
         if let Some(hint) = parse_config_bind_hint(line, variables) {
@@ -618,6 +621,70 @@ fn parse_config_include(line: &str) -> Option<String> {
     }
     let value = value.trim().trim_matches(['"', '\'']);
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// Expand `*` and `?` in each path component the way hyprlang's `source`
+/// does through glob(3): a leading dot only matches explicitly, and matches
+/// are returned in sorted order. A path without wildcards is returned as is.
+fn expand_config_glob(path: &Path) -> Vec<PathBuf> {
+    let mut matches = vec![PathBuf::new()];
+    for component in path.components() {
+        let pattern: Vec<char> = component.as_os_str().to_string_lossy().chars().collect();
+        if !pattern.contains(&'*') && !pattern.contains(&'?') {
+            for path in &mut matches {
+                path.push(component);
+            }
+            continue;
+        }
+        let mut expanded = Vec::new();
+        for directory in &matches {
+            let Ok(entries) = fs::read_dir(directory) else {
+                continue;
+            };
+            expanded.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name())
+                    .filter(|name| {
+                        let name: Vec<char> = name.to_string_lossy().chars().collect();
+                        (name.first() != Some(&'.') || pattern.first() == Some(&'.'))
+                            && wildcard_matches(&pattern, &name)
+                    })
+                    .map(|name| directory.join(name)),
+            );
+        }
+        matches = expanded;
+    }
+    matches.sort_by(|left, right| left.as_os_str().cmp(right.as_os_str()));
+    matches
+}
+
+/// `*` matches any run of characters and `?` exactly one. Linear-time
+/// two-pointer match: only the most recent `*` is ever backtracked to.
+fn wildcard_matches(pattern: &[char], name: &[char]) -> bool {
+    let (mut p, mut n) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, n));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == name[n] => {
+                p += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((star_p, star_n)) => {
+                    p = star_p + 1;
+                    n = star_n + 1;
+                    star = Some((star_p, star_n + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 fn resolve_config_path(
@@ -777,5 +844,37 @@ mod config_variable_tests {
         assert!(hints.iter().any(|hint| hint.combo == super_q));
         let super_w: KeyCombo = "super+w".parse().unwrap();
         assert!(hints.iter().all(|hint| hint.combo != super_w));
+    }
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::wildcard_matches;
+
+    fn matches(pattern: &str, name: &str) -> bool {
+        let pattern: Vec<char> = pattern.chars().collect();
+        let name: Vec<char> = name.chars().collect();
+        wildcard_matches(&pattern, &name)
+    }
+
+    #[test]
+    fn wildcard_semantics() {
+        assert!(matches("*.conf", "binds.conf"));
+        assert!(matches("b?nds*", "binds.conf"));
+        assert!(matches("*", ""));
+        assert!(matches("a*b*c", "aXbYbZc"));
+        assert!(!matches("*.conf", "binds.lua"));
+        assert!(!matches("?", ""));
+        assert!(!matches("a*b", "acbc"));
+    }
+
+    #[test]
+    fn pathological_wildcard_is_linear() {
+        let pattern = format!("{}b", "a*".repeat(64));
+        let name = "a".repeat(4096);
+        let started = std::time::Instant::now();
+        assert!(!matches(&pattern, &name));
+        assert!(matches(&pattern, &format!("{name}b")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }
