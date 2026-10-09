@@ -149,7 +149,25 @@ pub(crate) fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    xkb::compile_keymap(&rmlvo)
+    compile_keymap_cached(rmlvo)
+}
+
+/// One inspection resolves the query key and the captured physical key
+/// against the same keymap; compile it once per RMLVO instead of spawning
+/// `xkbcli` for each lookup. A changed layout simply recompiles.
+fn compile_keymap_cached(rmlvo: xkb::Rmlvo) -> Option<String> {
+    static LAST: Mutex<Option<(xkb::Rmlvo, Option<String>)>> = Mutex::new(None);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached, keymap)) = last.as_ref() {
+        if *cached == rmlvo {
+            return keymap.clone();
+        }
+    }
+    let keymap = xkb::compile_keymap(&rmlvo);
+    *last = Some((rmlvo, keymap.clone()));
+    keymap
 }
 
 fn xkb_symbol_name(key: &KeyCombo) -> Option<String> {

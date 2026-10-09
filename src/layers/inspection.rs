@@ -154,6 +154,64 @@ pub(crate) fn inspect_with_environment(
     request: &InspectRequest<'_>,
     session: &crate::environment::Environment,
 ) -> Vec<LayerResult> {
+    inspect_step(request, session, &mut StepDelivery::default())
+}
+
+/// Inspect every step of a key sequence against one environment snapshot.
+/// Stateful layers receive the earlier steps they actually saw: tmux/Screen
+/// get the keys that reached the multiplexer (so `ctrl+b ctrl+left` resolves
+/// in the prefix table) and the shell gets the input of every step that
+/// reached it (so `ctrl+x ctrl+e` resolves as one Readline sequence).
+/// `target` selects the application process (`--pid`/`--focused`).
+pub fn inspect_sequence(
+    keys: &[KeyCombo],
+    target: Option<(u32, Option<&str>)>,
+) -> Vec<Vec<LayerResult>> {
+    let session = crate::environment::Environment::collect();
+    let mut prefix = SequencePrefix::default();
+    keys.iter()
+        .enumerate()
+        .map(|(index, key)| {
+            let mut request = InspectRequest::new(key);
+            if let Some((pid, source)) = target {
+                request.force_continue = true;
+                request.application_pid = Some(pid);
+                request.application_source = source;
+            }
+            request.sequence_prefix = (index > 0).then_some(&prefix);
+            let mut delivery = StepDelivery::default();
+            let results = inspect_step(&request, &session, &mut delivery);
+            delivery.record(&mut prefix);
+            results
+        })
+        .collect()
+}
+
+/// What one sequence step delivered to the stateful layers. A layer counts
+/// as reached only when no earlier layer consumed or redirected the key.
+#[derive(Debug, Default)]
+struct StepDelivery {
+    multiplexer_key: Option<KeyCombo>,
+    /// `Some(None)`: the shell received the key, but its bytes are unknown.
+    shell_input: Option<Option<TerminalInput>>,
+}
+
+impl StepDelivery {
+    fn record(self, prefix: &mut SequencePrefix) {
+        prefix.multiplexer_keys.extend(self.multiplexer_key);
+        match self.shell_input {
+            Some(Some(input)) => prefix.shell_inputs.push(input),
+            Some(None) => prefix.shell_input_unknown = true,
+            None => {}
+        }
+    }
+}
+
+fn inspect_step(
+    request: &InspectRequest<'_>,
+    session: &crate::environment::Environment,
+    delivery: &mut StepDelivery,
+) -> Vec<LayerResult> {
     let generations_before = session.reload_generations();
     let remapper_result = (!command::deadline_exceeded()).then(|| {
         crate::remapper::inspect_with_detections(
@@ -161,26 +219,81 @@ pub(crate) fn inspect_with_environment(
             &session.remappers,
         )
     });
-    let ime_result =
-        (!command::deadline_exceeded()).then(|| crate::ime::inspect_with_detections(&session.ime));
-    let mut results = inspect_default_chain_inner_without_remapper(request, session);
-    if remapper_result
-        .as_ref()
-        .is_some_and(|result| result.outcome != Outcome::Pass)
-    {
-        results.insert(0, remapper_result.expect("remapper result is present"));
-    }
-    if ime_result
-        .as_ref()
-        .is_some_and(|result| result.outcome != Outcome::Pass)
-    {
-        if let Some(insert_at) = results.iter().position(|result| result.id == LayerId::Tty) {
-            results.insert(insert_at, ime_result.expect("IME result is present"));
-        }
-    }
+    let mut results = route_after_remapper(remapper_result, request, |request| {
+        inspect_default_chain_inner_without_remapper(request, session, delivery)
+    });
     let generations_after = session.reload_generations();
     mark_stale_generation_evidence(&mut results, &generations_before, &generations_after);
     results
+}
+
+/// Apply the pre-compositor remapper finding to the rest of the route. A
+/// consuming remapper stops the chain; a redirecting remapper sends the
+/// remapped key downstream, or makes downstream findings conditional when
+/// its target is not a key combination.
+fn route_after_remapper(
+    remapper: Option<LayerResult>,
+    request: &InspectRequest<'_>,
+    downstream: impl FnOnce(&InspectRequest<'_>) -> Vec<LayerResult>,
+) -> Vec<LayerResult> {
+    let Some(mut remapper) = remapper.filter(|result| result.outcome != Outcome::Pass) else {
+        return downstream(request);
+    };
+    if remapper.outcome == Outcome::Redirected {
+        let target = remapper
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.action.as_deref())
+            .and_then(|action| KeyCombo::parse_query(action).ok());
+        return match target {
+            Some(target) => {
+                remapper.details.push(format!(
+                    "downstream layers inspect the remapped key {target}"
+                ));
+                let redirected = InspectRequest {
+                    key: &target,
+                    // The captured keycode belongs to the original physical key.
+                    physical_input: None,
+                    ..request.clone()
+                };
+                let mut results = vec![remapper];
+                results.extend(downstream(&redirected));
+                results
+            }
+            None => {
+                remapper.details.push(
+                    "remap target is not a key combination; downstream findings for the original key are conditional"
+                        .into(),
+                );
+                let mut results = vec![remapper];
+                results.extend(downstream(request).into_iter().map(conditional_on_remap));
+                results
+            }
+        };
+    }
+    let stop = ContinuationPolicy::StopOnTerminalInterception
+        .should_stop(&remapper, request.force_continue);
+    let mut results = vec![remapper];
+    if !stop {
+        results.extend(downstream(request));
+    }
+    results
+}
+
+/// Downgrade a finding for a key an upstream remapper redirected to an
+/// unknown target: the original key may never arrive.
+fn conditional_on_remap(mut result: LayerResult) -> LayerResult {
+    result.outcome = match result.outcome {
+        Outcome::Pass => Outcome::UncertainContinues,
+        Outcome::HandledAndPassed | Outcome::Consumed | Outcome::Redirected => {
+            Outcome::HandledUncertain
+        }
+        other => other,
+    };
+    result
+        .details
+        .push("conditional: an upstream remapper redirects this key".into());
+    result
 }
 
 fn mark_stale_generation_evidence(
@@ -300,6 +413,14 @@ impl RouteAccumulator {
         !should_stop
     }
 
+    /// True once a recorded layer consumed or redirected the key, so later
+    /// layers are analyzed (with `force_continue`) but never received it.
+    pub fn intercepted(&self) -> bool {
+        self.results
+            .iter()
+            .any(|result| matches!(result.outcome, Outcome::Consumed | Outcome::Redirected))
+    }
+
     /// Records static diagnostic deadline exhaustion if exceeded.
     /// Returns true if the budget was exceeded.
     pub fn check_deadline(&mut self) -> bool {
@@ -351,16 +472,14 @@ fn inspect_compositor(
     physical_input: Option<&PhysicalInput>,
     session: &crate::environment::Environment,
 ) -> LayerResult {
+    // Only the selected (highest-scored applicable) manifest runs its
+    // bindings command; inapplicable manifests are never executed.
     let extension = || {
+        let selected = session.selected_extension.as_deref()?;
         session
             .extension_adapters
             .iter()
-            .find(|adapter| {
-                crate::extension_adapters::applicable_with_context(
-                    adapter,
-                    &session.compositor_context,
-                )
-            })
+            .find(|adapter| adapter.id == selected)
             .map(|adapter| {
                 crate::extension_adapters::inspect_with_report(
                     adapter,
@@ -396,6 +515,7 @@ fn inspect_compositor(
 fn inspect_default_chain_inner_without_remapper(
     request: &InspectRequest<'_>,
     session: &crate::environment::Environment,
+    delivery: &mut StepDelivery,
 ) -> Vec<LayerResult> {
     let key = request.key;
     let mut acc = RouteAccumulator::new(request.force_continue);
@@ -437,13 +557,24 @@ fn inspect_default_chain_inner_without_remapper(
             ));
         }
     }
-    if !acc.append(
+    let terminal_continues = acc.append(
         emulator.layer,
         ContinuationPolicy::StopOnTerminalInterception,
-    ) {
+    );
+    // The input method is a client of the terminal: it sees every key the
+    // compositor delivers to the terminal, including keys the terminal then
+    // consumes, so its finding is kept even when the route stops here. Any
+    // detected IME is reported, even when inactive, so its evidence stays
+    // visible in verbose and JSON output.
+    if !session.ime.is_empty()
+        && !acc.append(
+            crate::ime::inspect_with_detections(&session.ime),
+            ContinuationPolicy::StopOnTerminalInterception,
+        )
+    {
         return acc.finish();
     }
-    if acc.check_deadline() {
+    if !terminal_continues || acc.check_deadline() {
         return acc.finish();
     }
 
@@ -462,7 +593,13 @@ fn inspect_default_chain_inner_without_remapper(
     }
 
     // 4. Session / multiplexer
-    let session_result = session::inspect_with_env(key, bytes_available, session);
+    let preceding = request
+        .sequence_prefix
+        .map_or(&[][..], |prefix| prefix.multiplexer_keys.as_slice());
+    if !acc.intercepted() {
+        delivery.multiplexer_key = Some(key.clone());
+    }
+    let session_result = session::inspect_with_env(preceding, key, bytes_available, session);
     if !acc.append(session_result, ContinuationPolicy::StopOnBlockingResult) {
         return acc.finish();
     }
@@ -489,16 +626,42 @@ fn inspect_default_chain_inner_without_remapper(
 
     // 6. Shell (if endpoint is shell)
     if endpoint == TargetEndpoint::Shell {
-        let shell_result = match (input.as_ref(), application_target) {
-            (Some(input), Some(target)) => shell::inspect_input_for_pid(input, target.pid),
-            (Some(input), None) => shell::inspect_input(input),
-            (None, _) => shell::inspect_unknown(),
-        };
+        if !acc.intercepted() {
+            delivery.shell_input = Some(input.clone());
+        }
+        let shell_result = inspect_shell(
+            request.sequence_prefix,
+            input.as_ref(),
+            application_target.map(|target| target.pid),
+        );
         acc.append(shell_result, ContinuationPolicy::StopOnBlockingResult);
         acc.check_deadline();
     }
 
     acc.finish()
+}
+
+/// Shell editors interpret multi-key sequences, so a later sequence step is
+/// evaluated together with the input of the earlier steps the shell received.
+fn inspect_shell(
+    sequence_prefix: Option<&SequencePrefix>,
+    input: Option<&TerminalInput>,
+    target_pid: Option<u32>,
+) -> LayerResult {
+    let earlier = sequence_prefix
+        .filter(|prefix| !prefix.shell_inputs.is_empty() || prefix.shell_input_unknown);
+    match (earlier, input) {
+        (Some(prefix), Some(input)) if !prefix.shell_input_unknown => {
+            let mut inputs = prefix.shell_inputs.clone();
+            inputs.push(input.clone());
+            shell::inspect_sequence(&inputs, target_pid)
+        }
+        (Some(_), _) | (None, None) => shell::inspect_unknown(),
+        (None, Some(input)) => match target_pid {
+            Some(pid) => shell::inspect_input_for_pid(input, pid),
+            None => shell::inspect_input(input),
+        },
+    }
 }
 
 pub(crate) fn deadline_result() -> LayerResult {
@@ -609,5 +772,86 @@ mod tests {
             select_target_endpoint(Some(&editor_target), &app_pass),
             TargetEndpoint::InteractiveApplication
         );
+    }
+
+    fn remapper_result(outcome: Outcome, target: Option<&str>) -> LayerResult {
+        let result = LayerResult::new(
+            "Input remapper",
+            LayerId::Remapper,
+            outcome,
+            "remapper",
+            Vec::new(),
+        );
+        match target {
+            Some(target) => {
+                result.with_binding(BindingEvidence::action(target, BindingScope::Unknown, None))
+            }
+            None => result,
+        }
+    }
+
+    /// Downstream stand-in that reports which key it was asked about.
+    fn echo_downstream(request: &InspectRequest<'_>) -> Vec<LayerResult> {
+        vec![LayerResult::new(
+            "Compositor",
+            LayerId::Compositor,
+            Outcome::Pass,
+            request.key.to_string(),
+            Vec::new(),
+        )]
+    }
+
+    #[test]
+    fn consuming_remapper_stops_the_chain() {
+        let key: KeyCombo = "f12".parse().unwrap();
+        let request = InspectRequest::new(&key);
+        let results = route_after_remapper(
+            Some(remapper_result(Outcome::Consumed, None)),
+            &request,
+            |_| panic!("downstream layers must not see a consumed key"),
+        );
+        let ids: Vec<_> = results.iter().map(|result| result.id).collect();
+        assert_eq!(ids, vec![LayerId::Remapper]);
+    }
+
+    #[test]
+    fn redirecting_remapper_retargets_downstream_layers() {
+        let key: KeyCombo = "f12".parse().unwrap();
+        let request = InspectRequest::new(&key);
+        let results = route_after_remapper(
+            Some(remapper_result(Outcome::Redirected, Some("escape"))),
+            &request,
+            echo_downstream,
+        );
+        assert_eq!(results[0].id, LayerId::Remapper);
+        let expected: KeyCombo = "escape".parse().unwrap();
+        assert_eq!(results[1].summary, expected.to_string());
+        assert_eq!(results[1].outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn redirect_to_unparsed_target_makes_downstream_conditional() {
+        let key: KeyCombo = "f12".parse().unwrap();
+        let request = InspectRequest::new(&key);
+        let results = route_after_remapper(
+            Some(remapper_result(Outcome::Redirected, Some("layer(nav)"))),
+            &request,
+            echo_downstream,
+        );
+        assert_eq!(results[1].summary, key.to_string());
+        assert_eq!(results[1].outcome, Outcome::UncertainContinues);
+    }
+
+    #[test]
+    fn passing_remapper_is_omitted() {
+        let key: KeyCombo = "ctrl+f".parse().unwrap();
+        let request = InspectRequest::new(&key);
+        let results = route_after_remapper(
+            Some(remapper_result(Outcome::Pass, None)),
+            &request,
+            echo_downstream,
+        );
+        let ids: Vec<_> = results.iter().map(|result| result.id).collect();
+        assert_eq!(ids, vec![LayerId::Compositor]);
     }
 }

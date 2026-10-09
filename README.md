@@ -6,10 +6,20 @@
 continues to the next layer.
 
 It inspects the active compositor, terminal, TTY, multiplexer, application,
-and shell. It never executes the shortcut or changes your configuration.
-Native compositor listening, currently backed by Hyprland, observes in
-pass-through mode by default. Use `--suppress` only when you want a temporary
-compositor capture that is restored before reporting.
+and shell. It never edits configuration files and never runs the shortcut it
+inspects. Two things do touch your session:
+
+- `whykey listen` on Hyprland installs a temporary Lua hook while it runs.
+  The default pass-through hook only observes keys. `--suppress` adds a private
+  submap so the shortcut does not fire. Both are held by a 5-second lease that
+  whykey renews while listening. They are removed when `listen` exits, and
+  Hyprland drops them on its own if the lease expires (for example, after
+  `kill -9`).
+- Compositor extension manifests and `whykey extension` run the programs you
+  configured or named.
+
+Native compositor capture is available on Hyprland (pass-through or
+`--suppress`) and Sway (pass-through only).
 
 ```console
 $ whykey ctrl+z
@@ -62,6 +72,9 @@ Arch, Debian, RPM, and Nix packaging recipes are available in
 
 Arch, Debian, RPM, and Nix recipes are maintained in-tree. Their public
 publication follows the first release; see [`packaging/README.md`](packaging/README.md).
+Only the Arch recipe has a package smoke test. The Debian, RPM, and Nix
+recipes are not built in CI (see L-008 in the [defect register](DEFECT_REGISTER.md)).
+The bundled editor extensions need `python3`.
 
 ## Usage
 
@@ -71,7 +84,6 @@ whykey inspect ctrl+x ctrl+s        # inspect a sequence
 whykey inspect --focused ctrl+z     # inspect the focused application
 whykey listen                       # explain the next shortcut (pass-through by default)
 whykey listen --suppress            # opt into temporary compositor suppression
-whykey listen --no-suppress         # explain the shortcut without suppressing its action
 whykey listen --repeat              # inspect one deliberate shortcut at a time
 whykey listen --terminal            # force terminal-only capture
 whykey listen --evdev               # observe a physical Linux input device
@@ -85,6 +97,14 @@ whykey extension extensions/whykey-nvim ctrl+x # query live Neovim runtime via R
 whykey extension extensions/whykey-vscode ctrl+x # query user VS Code keybindings.json
 whykey extension extensions/whykey-emacs ctrl+x # query live Emacs keymap stack via emacsclient
 ```
+
+Join modifiers and the key with `+`. Modifiers are `ctrl`, `alt`, `shift`,
+`super`, `hyper`, `altgr` (Mod5), `caps`, and `num`. A key is a single
+character, a named key such as `return`, `left`, `comma`, or `f1`, an XF86
+media key, or `code:N`. Unknown names exit with status 2 and suggest the
+closest valid name. `inspect` with several steps keeps prefix state between
+them, so `ctrl+x ctrl+e` resolves a Readline two-key binding, and a tmux or
+Screen prefix applies to the key that follows it.
 
 `whykey doctor --json` includes a cause taxonomy (`not-installed`,
 `permission-missing`, `ipc-unreachable`, or `api-does-not-expose`) and a safe
@@ -125,21 +145,27 @@ configuration. Missing tools and dynamic configuration are reported as
 uncertain evidence instead of guessed answers.
 
 `whykey listen` captures the next deliberate shortcut to explain its path.
-When native compositor capture is available (today: Hyprland and pass-through
-Sway IPC), it observes ordinary compositor bindings without suppression by
-default. Pass `--suppress` to opt into temporary suppression where supported;
-Sway IPC is pass-through-only. Pass `--no-suppress` to observe shortcuts while
-allowing their normal actions to run; `--pass-through` remains its
-compatibility alias. Because Hyprland's key event does not
-identify the originating keyboard, device identity is reported as unavailable.
+When native compositor capture is available (Hyprland, or Sway IPC), it
+observes ordinary compositor bindings without suppressing them; this is the
+default. `--no-suppress` states that default explicitly, and `--pass-through`
+is an older alias for it. Pass `--suppress` to stop the shortcut from firing
+while it is captured. Only Hyprland supports this. `--suppress` fails rather
+than falling back to terminal capture when native suppression is unavailable,
+and it is rejected together with `--terminal`, `--evdev`, or `--device`.
+Because Hyprland's key event does not identify the originating keyboard,
+device identity is reported as unavailable.
 
 If native compositor capture is unavailable, Whykey falls back to terminal capture,
 observing keys that reach the terminal. Pass `--terminal` to explicitly force
 terminal-only capture. Pass `--evdev` to read Linux input events before the
 compositor (may require permission to access `/dev/input/event*`). Whykey
 never grabs an evdev input device and cleans up temporary native capture hooks
-on exit. Press Escape or Ctrl+C to exit. Only `--suppress` temporarily changes
-the Hyprland session; configuration files are never edited.
+on exit. Press Escape or Ctrl+C to exit. With the Kitty keyboard protocol
+active (Kitty, Ghostty, foot, WezTerm), Ctrl+Z is captured and explained like
+any other key. On legacy-encoding terminals Ctrl+Z, like an external
+`kill -TSTP`, suspends the job: Whykey first restores the terminal and removes
+any Hyprland hook, then re-arms when it resumes.
+Configuration files are never edited.
 When multiple compositor adapters are applicable, Whykey reports their scores
 in verbose output and schema-v2 context before selecting the highest-scoring one.
 
@@ -160,9 +186,13 @@ whykey diff --json before.json after.json
 
 Whykey includes adapters for:
 
-- Hyprland, Sway, i3, GNOME, KDE Plasma, Xfce, Cinnamon, MATE, Niri, dwl, River,
-  Wayfire, labwc, bspwm with sxhkd, Openbox, X11 xbindkeys, AwesomeWM, Qtile,
-  and XMonad
+- Compositors read through live IPC or settings queries: Hyprland
+  (`hyprctl`), Sway and i3 (the running configuration from `get_config`),
+  herbstluftwm (`herbstclient`), GNOME, Cinnamon, and MATE (GSettings), and
+  Xfce (`xfconf-query`)
+- Compositors read from configuration files only, without runtime activation
+  state: KDE Plasma (`kglobalshortcutsrc`), Niri, dwl, River, Wayfire, labwc,
+  bspwm with sxhkd, Openbox, X11 xbindkeys, AwesomeWM, Qtile, and XMonad
 - Ghostty, Kitty, Alacritty, Foot, WezTerm, Konsole, and generic terminals
 - Bash with Readline, Zsh with ZLE, Fish, tmux, GNU Screen, and Zellij
 - Neovim, Vim, Emacs, Helix, Kakoune, Micro, VS Code, and JetBrains IDEs
@@ -192,7 +222,7 @@ limits. It never scans `PATH` for adapters or evaluates a configuration file.
 | T3 | literal config | static mappings without runtime activation |
 | T4 | manifest extension | user-selected scripts with conditional evidence |
 
-T4 adapters do not capture input. `listen` still uses native Hyprland,
+T4 adapters do not capture input. `listen` still uses native Hyprland or Sway,
 terminal, or evdev capture. See [the compositor manifest reference](docs/compositor-extensions.md).
 
 See the [support matrix](SUPPORT_MATRIX.md) and
@@ -208,15 +238,27 @@ eval "$(whykey shell-init bash)"
 # whykey shell-init fish | source
 ```
 
+The wrapper is required for exact shell answers. Without it, Bash answers come
+from inputrc files and Readline's built-in defaults. Zsh and Fish answers come
+from literal bindings in `.zshrc`/`.zshenv` or `config.fish` and common
+defaults. A default-based answer is reported as unverified, because startup
+files, plugins, and tools like fzf can rebind keys at runtime. The report
+then tells you which `shell-init` command to load.
+
 Whykey does not edit shell startup files. Completion scripts are available
 through `whykey completions bash|zsh|fish`.
 
 ## Development
 
+These are the commands CI runs:
+
 ```sh
-cargo test --all-targets --locked
-cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --all-features --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt --all -- --check
+python3 extensions/tests/run_all.py
+python3 tools/generate_support_matrix.py --check
+tools/check_package_versions.sh
 ```
 
 Live Hyprland tests mutate the compositor and never run in the ordinary

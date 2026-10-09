@@ -135,6 +135,20 @@ pub const ROUTE_ORDER: &[LayerId] = &[
     LayerId::Shell,
 ];
 
+/// Earlier steps of a multi-key sequence, as delivered to the stateful
+/// layers that interpret sequences (tmux key tables, the shell editor).
+/// Steps a layer never received (consumed upstream) are not recorded for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SequencePrefix {
+    /// Earlier keys that reached the multiplexer layer, oldest first.
+    pub multiplexer_keys: Vec<KeyCombo>,
+    /// Terminal input of earlier keys that reached the shell, oldest first.
+    pub shell_inputs: Vec<TerminalInput>,
+    /// An earlier key reached the shell without predictable bytes, so the
+    /// shell editor's sequence state is unknown.
+    pub shell_input_unknown: bool,
+}
+
 /// One inspection request replacing positional arguments.
 #[derive(Debug, Clone)]
 pub struct InspectRequest<'a> {
@@ -146,6 +160,8 @@ pub struct InspectRequest<'a> {
     pub termios: Option<&'a libc::termios>,
     pub application_pid: Option<u32>,
     pub application_source: Option<&'a str>,
+    /// Earlier steps when `key` is not the first key of a sequence.
+    pub sequence_prefix: Option<&'a SequencePrefix>,
 }
 
 impl<'a> InspectRequest<'a> {
@@ -159,6 +175,7 @@ impl<'a> InspectRequest<'a> {
             termios: None,
             application_pid: None,
             application_source: None,
+            sequence_prefix: None,
         }
     }
 }
@@ -197,6 +214,16 @@ pub enum UncertaintyReason {
     OpaqueDispatcher,
     EndpointUnavailable,
     ModifierAmbiguity,
+    /// The binding comes from built-in defaults or static startup files, not
+    /// from the live shell; the running shell may have rebound the key.
+    UnverifiedDefault,
+    /// The adapter could not read the keys of `candidates` bindings with the
+    /// requested modifiers, so any of them may use this key.
+    /// `consumes_if_matched` is true when every candidate stops the key.
+    UnresolvedBindingKey {
+        candidates: usize,
+        consumes_if_matched: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

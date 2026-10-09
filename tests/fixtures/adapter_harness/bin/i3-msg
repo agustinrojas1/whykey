@@ -5,12 +5,26 @@ import json
 import os
 import sys
 
+CONFIG = "set $mod Mod4\nbindsym $mod+Return exec foot\n"
+
 if os.environ.get("WHYKEY_FAKE_IPC_FAILURE"):
     print("fake i3-msg IPC failure", file=sys.stderr)
     raise SystemExit(1)
-if sys.argv[1:] == ["-t", "get_bindings"]:
-    print(json.dumps([{"command": "exec foot", "symbol": "Return", "input_code": 36}]))
+if sys.argv[1:] == ["-t", "get_config"]:
+    print(json.dumps({
+        "config": CONFIG,
+        "included_configs": [{
+            "path": "/home/user/.config/i3/config",
+            "raw_contents": CONFIG,
+            "variable_replaced_contents": CONFIG.replace("$mod", "Mod4"),
+        }],
+    }))
+elif sys.argv[1:] == ["-t", "get_binding_state"]:
+    print(json.dumps({"name": "default"}))
 elif sys.argv[1:] == ["-t", "get_tree"]:
     print(json.dumps({"focused": True, "pid": 4343}))
+elif sys.argv[1:] == ["-t", "get_version"]:
+    print(json.dumps({"human_readable": "4.23"}))
 else:
-    print("i3 version 4.23")
+    print(f"Unknown message type {sys.argv[1:]}", file=sys.stderr)
+    raise SystemExit(1)

@@ -105,6 +105,7 @@ impl CaptureBackend for TerminalBackend {
 pub struct EvdevBackend {
     session: Option<EvdevSession>,
     requested: Option<PathBuf>,
+    events_all: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -113,10 +114,13 @@ impl EvdevBackend {
         Ok(Self {
             session: Some(EvdevSession::open(device)?),
             requested: device.map(Path::to_owned),
+            events_all: false,
         })
     }
 
+    /// Applies to the open session and to every session re-opened by `arm`.
     pub fn set_events_all(&mut self, events_all: bool) {
+        self.events_all = events_all;
         if let Some(session) = self.session.as_mut() {
             session.include_modifiers = events_all;
         }
@@ -135,9 +139,10 @@ impl CaptureBackend for EvdevBackend {
 
     fn arm(&mut self, _policy: CapturePolicy) -> Result<(), String> {
         if self.session.is_none() {
-            self.session = Some(
-                EvdevSession::open(self.requested.as_deref()).map_err(|error| error.to_string())?,
-            );
+            let mut session =
+                EvdevSession::open(self.requested.as_deref()).map_err(|error| error.to_string())?;
+            session.include_modifiers = self.events_all;
+            self.session = Some(session);
         }
         Ok(())
     }
@@ -168,6 +173,11 @@ impl CaptureBackend for EvdevBackend {
     }
 }
 
+/// Set by SIGTSTP while capture owns the terminal. The capture loops answer
+/// it by restoring the terminal (and removing leased compositor hooks) before
+/// stopping, so job control never leaves the shell in raw/kitty mode.
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
 struct SignalGuard {
     previous: Vec<(libc::c_int, libc::sigaction)>,
 }
@@ -175,28 +185,36 @@ struct SignalGuard {
 impl SignalGuard {
     fn install() -> io::Result<Self> {
         INTERRUPTED.store(false, Ordering::Relaxed);
-        let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
-        action.sa_sigaction = signal_handler as *const () as usize;
-        action.sa_flags = 0;
-        // SAFETY: `action` is valid writable storage and sigemptyset receives
-        // a pointer to its initialized signal mask.
-        if unsafe { libc::sigemptyset(&mut action.sa_mask) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
+        STOP_REQUESTED.store(false, Ordering::Relaxed);
         let mut previous = Vec::new();
-        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
-            let mut old_action = unsafe { std::mem::zeroed::<libc::sigaction>() };
-            // SAFETY: both action pointers refer to valid sigaction structs;
-            // the signal numbers are the four constants listed above.
-            if unsafe { libc::sigaction(signal, &action, &mut old_action) } != 0 {
-                for (old_signal, old_action) in previous.drain(..).rev() {
-                    // SAFETY: these handlers were returned by sigaction for
-                    // the corresponding signal and are restored verbatim.
-                    unsafe { libc::sigaction(old_signal, &old_action, std::ptr::null_mut()) };
+        let handlers: [(libc::c_int, extern "C" fn(libc::c_int)); 5] = [
+            (libc::SIGINT, signal_handler),
+            (libc::SIGTERM, signal_handler),
+            (libc::SIGHUP, signal_handler),
+            (libc::SIGQUIT, signal_handler),
+            (libc::SIGTSTP, stop_signal_handler),
+        ];
+        for (signal, handler) in handlers {
+            let installed = handler_action(handler).and_then(|action| {
+                let mut old_action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+                // SAFETY: both action pointers refer to valid sigaction
+                // structs; the signal numbers are the constants listed above.
+                if unsafe { libc::sigaction(signal, &action, &mut old_action) } != 0 {
+                    return Err(io::Error::last_os_error());
                 }
-                return Err(io::Error::last_os_error());
+                Ok(old_action)
+            });
+            match installed {
+                Ok(old_action) => previous.push((signal, old_action)),
+                Err(error) => {
+                    for (old_signal, old_action) in previous.drain(..).rev() {
+                        // SAFETY: these handlers were returned by sigaction for
+                        // the corresponding signal and are restored verbatim.
+                        unsafe { libc::sigaction(old_signal, &old_action, std::ptr::null_mut()) };
+                    }
+                    return Err(error);
+                }
             }
-            previous.push((signal, old_action));
         }
         Ok(Self { previous })
     }
@@ -204,10 +222,57 @@ impl SignalGuard {
     fn received(&self) -> bool {
         INTERRUPTED.load(Ordering::Relaxed)
     }
+
+    /// Consume a pending SIGTSTP request.
+    fn take_stop_request(&self) -> bool {
+        STOP_REQUESTED.swap(false, Ordering::Relaxed)
+    }
+
+    /// Stop the process with the SIGTSTP disposition that was active before
+    /// capture, then reclaim SIGTSTP once the job is continued. Callers must
+    /// restore the terminal first and re-enter capture mode afterwards.
+    fn stop_process(&self) -> io::Result<()> {
+        let Some((_, previous)) = self
+            .previous
+            .iter()
+            .find(|(signal, _)| *signal == libc::SIGTSTP)
+        else {
+            return Ok(());
+        };
+        let ours = handler_action(stop_signal_handler)?;
+        // SAFETY: `previous` was returned by sigaction for SIGTSTP; raise
+        // only targets this process and returns after SIGCONT.
+        unsafe {
+            if libc::sigaction(libc::SIGTSTP, previous, std::ptr::null_mut()) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            libc::raise(libc::SIGTSTP);
+            if libc::sigaction(libc::SIGTSTP, &ours, std::ptr::null_mut()) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+}
+
+fn handler_action(handler: extern "C" fn(libc::c_int)) -> io::Result<libc::sigaction> {
+    let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    action.sa_sigaction = handler as *const () as usize;
+    action.sa_flags = 0;
+    // SAFETY: `action` is valid writable storage and sigemptyset receives a
+    // pointer to its initialized signal mask.
+    if unsafe { libc::sigemptyset(&mut action.sa_mask) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(action)
 }
 
 extern "C" fn signal_handler(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
+}
+
+extern "C" fn stop_signal_handler(_: libc::c_int) {
+    STOP_REQUESTED.store(true, Ordering::Relaxed);
 }
 
 impl Drop for SignalGuard {
@@ -216,6 +281,13 @@ impl Drop for SignalGuard {
             // SAFETY: each action was returned by sigaction and belongs to
             // the matching signal number.
             unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) };
+        }
+        // Capture state is gone by now (owners drop their sessions before
+        // the guard), so a stop deferred during reporting can take effect.
+        if STOP_REQUESTED.swap(false, Ordering::Relaxed) {
+            // SAFETY: raise only targets this process with its restored
+            // SIGTSTP disposition.
+            unsafe { libc::raise(libc::SIGTSTP) };
         }
     }
 }

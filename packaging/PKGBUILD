@@ -2,10 +2,13 @@ pkgname=whykey
 pkgver=1.3.0
 pkgrel=1
 pkgdesc='Explain where a Linux key combination is handled'
+# Built from the vendored source archive, so any architecture with a Rust
+# toolchain works; release binaries are published for x86_64 only.
 arch=('x86_64' 'aarch64')
 url='https://github.com/agustinrojas1/whykey'
 license=('MIT')
 depends=()
+optdepends=('python: run the whykey-nvim, whykey-vscode, and whykey-emacs extensions')
 makedepends=('cargo')
 # The upstream source archive contains Cargo's locked vendor directory.  Keep
 # this as SKIP in the upstream repository because an embedded checksum would

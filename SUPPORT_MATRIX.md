@@ -9,7 +9,7 @@ contract shared by the capability registry and tests.
 | ID | Area | Implementation | Scope |
 | --- | --- | --- | --- |
 | `cli.inspect.combination` | cli | Implemented | Inspect one normalized key combination. |
-| `cli.inspect.sequence` | cli | Implemented | Inspect a bounded sequence of independent key steps. |
+| `cli.inspect.sequence` | cli | Implemented | Inspect a bounded key sequence, carrying Readline, tmux, and GNU Screen prefix state between steps. |
 | `cli.inspect.pid` | cli | Implemented | Select an interactive target by process ancestry. |
 | `cli.inspect.focused` | cli | Implemented | Discover a focused-window process when the compositor exposes it. |
 | `cli.bindings` | cli | Implemented | Enumerate effective bindings from supported adapters. |
@@ -31,8 +31,8 @@ contract shared by the capability registry and tests.
 | `input.ime-runtime-engine` | input | Implemented | Query an active IBus/Fcitx5 engine through a read-only API when possible. |
 | `input.ime.fcitx5-safe-query` | safety | Implemented | Use bounded read-only Fcitx5 D-Bus calls without launching client helpers. |
 | `compositor.hyprland` | compositor | Implemented | Inspect Hyprland bindings, submaps, devices, and instance-scoped IPC. |
-| `compositor.sway` | compositor | Implemented | Inspect Sway bindings through its read-only IPC. |
-| `compositor.i3` | compositor | Implemented | Inspect i3 bindings through its read-only IPC. |
+| `compositor.sway` | compositor | Implemented | Inspect Sway bindings by parsing the running configuration from get_config IPC and matching the get_binding_state mode. |
+| `compositor.i3` | compositor | Implemented | Inspect i3 bindings by parsing the running configuration (including included_configs) from get_config IPC and matching the get_binding_state mode. |
 | `compositor.kde` | compositor | Implemented | Inspect KDE Plasma shortcut configuration without claiming runtime activation. |
 | `compositor.xfce` | compositor | Implemented | Inspect Xfce keyboard-shortcut channel values. |
 | `compositor.cinnamon` | compositor | Implemented | Inspect Cinnamon global keybinding schemas. |

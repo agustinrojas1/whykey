@@ -10,7 +10,12 @@ Rules-Requires-Root: no
 Package: whykey
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: python3
 Description: explain where a Linux key combination is handled
  Whykey diagnoses the path of a keyboard event through Linux desktops,
  terminals, TTYs, multiplexers, shells, and supported applications.
- It is read-only and never executes the shortcut under investigation.
+ It never edits configuration files or executes the shortcut under
+ investigation.
+ .
+ The optional whykey-nvim, whykey-vscode, and whykey-emacs editor
+ extensions are Python 3 scripts and need python3 (recommended).

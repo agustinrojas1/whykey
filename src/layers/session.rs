@@ -8,15 +8,19 @@ use crate::layers::{LayerId, LayerResult, LayerStatus, Outcome, Propagation};
 /// a report can show where a key was consumed before reaching Readline.
 pub fn inspect(key: &KeyCombo) -> LayerResult {
     let env = crate::environment::Environment::collect();
-    inspect_with_env(key, true, &env)
+    inspect_with_env(&[], key, true, &env)
 }
 
 pub fn inspect_with_byte_status(key: &KeyCombo, bytes_verified: bool) -> LayerResult {
     let env = crate::environment::Environment::collect();
-    inspect_with_env(key, bytes_verified, &env)
+    inspect_with_env(&[], key, bytes_verified, &env)
 }
 
+/// `preceding` holds the earlier keys of the same sequence that reached the
+/// multiplexer, so prefix-driven layers (tmux, Screen) resolve `key` in the
+/// table the earlier keys selected.
 pub fn inspect_with_env(
+    preceding: &[KeyCombo],
     key: &KeyCombo,
     bytes_verified: bool,
     env: &crate::environment::Environment,
@@ -58,12 +62,12 @@ pub fn inspect_with_env(
     match multiplexers.as_slice() {
         [] => {}
         ["tmux"] => {
-            let mut result = super::tmux::inspect_with_byte_status(key, bytes_verified);
+            let mut result = super::tmux::inspect_with_byte_status(preceding, key, bytes_verified);
             result.details.splice(0..0, details);
             return result;
         }
         ["screen"] => {
-            let mut result = super::screen::inspect(key);
+            let mut result = super::screen::inspect_after(preceding, key);
             result.details.splice(0..0, details);
             return result;
         }
@@ -76,8 +80,8 @@ pub fn inspect_with_env(
             let results = multiplexers
                 .iter()
                 .map(|multiplexer| match *multiplexer {
-                    "tmux" => super::tmux::inspect_with_byte_status(key, bytes_verified),
-                    "screen" => super::screen::inspect(key),
+                    "tmux" => super::tmux::inspect_with_byte_status(preceding, key, bytes_verified),
+                    "screen" => super::screen::inspect_after(preceding, key),
                     "Zellij" => super::zellij::inspect(key),
                     _ => unreachable!(),
                 })

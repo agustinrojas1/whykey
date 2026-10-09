@@ -5,7 +5,7 @@ the terminal sees it. The public contract lives in `src/capture.rs`:
 
 ```rust
 trait CaptureBackend {
-    fn id(&self) -> NativeBackendId;
+    fn id(&self) -> CaptureBackendId;
     fn display(&self) -> &'static str;
     fn arm(&mut self, policy: CapturePolicy) -> Result<(), String>;
     fn next_observed_event(&mut self, events_all: bool)
@@ -13,6 +13,7 @@ trait CaptureBackend {
     fn wait_for_chord_release(&mut self, key: XkbKeycode, timeout: Duration)
         -> Result<ChordReleaseStatus, String>;
     fn is_suppressing(&self) -> bool;
+    fn holds_lease(&self) -> bool { false } // true while a leased hook is armed
     fn close(&mut self) -> io::Result<()>;
 }
 
@@ -30,7 +31,7 @@ trait NativeCaptureIo: CaptureBackend {
 The listen loop owns terminal setup, polling, inspection, reporting, and
 export. A backend owns its transport and capture-specific lifecycle. Add a
 backend by implementing `CaptureBackend`, its transport, and `NativeCaptureIo`,
-then adding one arm to `select_native_backend` in `listen.rs`. That selector is
+then adding one arm to `select_native_backend` in `src/listen/output.rs`. That selector is
 implemented through the registry: native capture selection walks the scored compositor candidates and the
 registry's optional capture factory. It returns a boxed transport, so adding
 a second native backend does not change the listen loop. The registry entry
@@ -52,6 +53,13 @@ file descriptor and may use the default no-op lease renewal; the current
 Hyprland implementation supplies both through its Unix socket. A Sway,
 portal, or extension backend can therefore register a different transport
 without expanding `CaptureBackend`.
+
+Hyprland hooks carry a 5-second lease (`CAPTURE_LEASE_MS`) for both policies,
+pass-through and suppress. While `holds_lease()` is true, the listen loop
+renews the lease every `CAPTURE_LEASE_RENEW_INTERVAL` (2 seconds). It removes
+the hook before inspection and re-arms it afterwards, so a slow report cannot
+outlive the lease. If renewals stop, the Lua timer removes the hook, and a
+suppressing hook also restores the submap.
 
 `reload_generation` is reserved for adapters whose configuration can change
 while a report is being assembled. A future listener can compare that

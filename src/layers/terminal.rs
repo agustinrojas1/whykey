@@ -1,39 +1,9 @@
 use std::fs::File;
 use std::os::fd::AsRawFd;
 
-use crate::key::KeyCombo;
 use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput};
 
 pub struct Terminal;
-
-impl Terminal {
-    pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        let Some(byte) = control_byte_for_key(key) else {
-            return LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "no matching terminal special character",
-                vec![],
-            );
-        };
-
-        let input = TerminalInput::predicted(vec![byte], "legacy control byte");
-        let state = match read_tty_state() {
-            Ok(state) => state,
-            Err(message) => {
-                return LayerResult::new(
-                    "TTY driver",
-                    LayerId::Tty,
-                    Outcome::Unavailable,
-                    "could not inspect terminal settings",
-                    vec![message, format_input(&input)],
-                );
-            }
-        };
-        self.inspect_byte(byte, &input, &state)
-    }
-}
 
 impl Terminal {
     pub fn inspect_input(&self, input: &TerminalInput) -> LayerResult {
@@ -99,111 +69,131 @@ impl Terminal {
     }
 
     fn inspect_byte(&self, byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
-        let Some(control) = control_character_byte(byte, state) else {
-            return LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "does not consume this byte sequence",
-                vec![format_input(input)],
-            );
-        };
-
-        let configured = format_control_char(control.byte);
-        let details = || {
-            vec![
-                format!("special character: {} = {configured}", control.name),
-                format!("byte: 0x{:02x}", control.byte),
-            ]
-        };
-
-        match control.kind {
-            ControlKind::Signal if !state.signal_processing => LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "signal processing is disabled; byte is forwarded",
-                {
-                    let mut details = details();
-                    details.push("ISIG is disabled".into());
-                    details
-                },
-            ),
-            ControlKind::Signal => LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Consumed,
-                format!("interprets byte 0x{:02x} as {}", byte, control.name),
-                {
-                    let mut details = details();
-                    details.push(format!(
-                        "kernel sends {} to the foreground process",
-                        control.signal
-                    ));
-                    details
-                },
-            ),
-            ControlKind::Flow if !state.input_flow_control => LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "input flow control is disabled; byte is forwarded",
-                {
-                    let mut details = details();
-                    details.push("IXON is disabled".into());
-                    details
-                },
-            ),
-            ControlKind::Flow => LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Consumed,
-                format!("interprets byte 0x{:02x} as {}", byte, control.name),
-                {
-                    let mut details = details();
-                    details.push("terminal flow control consumes this byte".into());
-                    details
-                },
-            ),
-            ControlKind::Line if !state.canonical => LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "canonical line editing is disabled; byte is forwarded",
-                {
-                    let mut details = details();
-                    details.push("ICANON is disabled".into());
-                    details
-                },
-            ),
-            ControlKind::Line
-                if matches!(control.name, "VLNEXT" | "VDISCARD") && !state.extended_processing =>
-            {
-                LayerResult::new(
-                    "TTY driver",
-                    LayerId::Tty,
-                    Outcome::Pass,
-                    "extended terminal processing is disabled; byte is forwarded",
-                    {
-                        let mut details = details();
-                        details.push("IEXTEN is disabled".into());
-                        details
-                    },
-                )
-            }
-            ControlKind::Line => LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                format!("{} is configured for canonical line editing", control.name),
-                {
-                    let mut details = details();
-                    details
-                        .push("Bash/Readline may handle this byte while editing a command".into());
-                    details
-                },
-            ),
+        let mut result = classify_byte(byte, input, state);
+        if let Some(alias) = legacy_byte_alias(&input.bytes) {
+            result.details.push(alias.into());
         }
+        result
+    }
+}
+
+fn classify_byte(byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
+    let Some(control) = control_character_byte(byte, state) else {
+        return LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Pass,
+            "does not consume this byte sequence",
+            vec![format_input(input)],
+        );
+    };
+
+    let configured = format_control_char(control.byte);
+    let details = || {
+        vec![
+            format!("special character: {} = {configured}", control.name),
+            format!("byte: 0x{:02x}", control.byte),
+        ]
+    };
+
+    match control.kind {
+        ControlKind::Signal if !state.signal_processing => LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Pass,
+            "signal processing is disabled; byte is forwarded",
+            {
+                let mut details = details();
+                details.push("ISIG is disabled".into());
+                details
+            },
+        ),
+        ControlKind::Signal => LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Consumed,
+            format!(
+                "terminal signal handling; interprets byte 0x{byte:02x} as {} ({})",
+                control.name, control.signal
+            ),
+            {
+                let mut details = details();
+                details.push(format!(
+                    "ISIG is enabled; kernel sends {} to the foreground process",
+                    control.signal
+                ));
+                details
+            },
+        ),
+        ControlKind::Flow if !state.input_flow_control => LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Pass,
+            "output flow control (IXON) is disabled; byte is forwarded",
+            {
+                let mut details = details();
+                details.push("IXON is disabled".into());
+                details
+            },
+        ),
+        ControlKind::Flow => LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Consumed,
+            format!(
+                "terminal flow control (IXON); interprets byte 0x{byte:02x} as {}",
+                control.name
+            ),
+            {
+                let mut details = details();
+                details.push(format!(
+                    "IXON is enabled; the TTY consumes this byte and {} terminal output",
+                    if control.name == "VSTOP" {
+                        "suspends"
+                    } else {
+                        "resumes"
+                    }
+                ));
+                details
+            },
+        ),
+        ControlKind::Line if !state.canonical => LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Pass,
+            "canonical line editing is disabled; byte is forwarded",
+            {
+                let mut details = details();
+                details.push("ICANON is disabled".into());
+                details
+            },
+        ),
+        ControlKind::Line
+            if matches!(control.name, "VLNEXT" | "VDISCARD") && !state.extended_processing =>
+        {
+            LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "extended terminal processing is disabled; byte is forwarded",
+                {
+                    let mut details = details();
+                    details.push("IEXTEN is disabled".into());
+                    details
+                },
+            )
+        }
+        ControlKind::Line => LayerResult::new(
+            "TTY driver",
+            LayerId::Tty,
+            Outcome::Pass,
+            format!("{} is configured for canonical line editing", control.name),
+            {
+                let mut details = details();
+                details.push("Bash/Readline may handle this byte while editing a command".into());
+                details
+            },
+        ),
     }
 }
 
@@ -214,6 +204,42 @@ fn format_input(input: &TerminalInput) -> String {
         input.confidence_label(),
         input.description
     )
+}
+
+/// Legacy (non-Kitty-protocol) control byte for Ctrl plus `key`, where `key`
+/// is a normalized `KeyCombo::key()` name: Ctrl+letter, Ctrl+@ / Ctrl+Space
+/// (0x00), Ctrl+[ (0x1b), Ctrl+\ (0x1c), Ctrl+] (0x1d), Ctrl+^ (0x1e) and
+/// Ctrl+_ (0x1f). Shared by terminal encoders so the TTY and shell layers
+/// see the same byte.
+pub(crate) fn legacy_control_byte(key: &str) -> Option<u8> {
+    match key.as_bytes() {
+        b"SPACE" => Some(0),
+        [character] if character.is_ascii_alphabetic() => {
+            Some(character.to_ascii_uppercase() & 0x1f)
+        }
+        [character @ (b'@' | b'[' | b'\\' | b']' | b'^' | b'_')] => Some(character & 0x1f),
+        _ => None,
+    }
+}
+
+/// Keys that are indistinguishable from `bytes` in legacy terminal encoding.
+pub(crate) fn legacy_byte_alias(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0x00] => {
+            Some("0x00 is sent for both Ctrl+@ and Ctrl+Space; programs cannot tell them apart")
+        }
+        [0x08] => Some(
+            "0x08 is Ctrl+H; terminals configured to send ^H for Backspace produce the same byte",
+        ),
+        [0x09] => Some("0x09 is also Tab; Ctrl+I and Tab are indistinguishable in legacy encoding"),
+        [0x0d] => {
+            Some("0x0d is also Return; Ctrl+M and Return are indistinguishable in legacy encoding")
+        }
+        [0x1b] => Some(
+            "0x1b is also Escape; Ctrl+[ and Escape are indistinguishable, and 0x1b starts Alt/escape sequences",
+        ),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -229,24 +255,6 @@ enum ControlKind {
     Signal,
     Flow,
     Line,
-}
-
-fn control_byte_for_key(key: &KeyCombo) -> Option<u8> {
-    if key.modmask() & 4 == 0 || key.modmask() & !(4 | 1) != 0 {
-        return None;
-    }
-    if key.key() == "SPACE" {
-        return Some(0);
-    }
-    let key = key.key().as_bytes();
-    if key.len() != 1 {
-        return None;
-    }
-    match key[0] {
-        b'A'..=b'Z' => Some(key[0] & 0x1f),
-        b'@'..=b'_' => Some(key[0] & 0x1f),
-        _ => None,
-    }
 }
 
 fn control_character_byte(byte: u8, state: &TtyState) -> Option<ControlCharacter> {
@@ -382,5 +390,85 @@ mod tests {
         assert_eq!(result.status(), LayerStatus::Handled);
         assert_eq!(result.propagation(), Propagation::Stops);
         assert!(result.summary.contains("VSUSP"));
+    }
+
+    fn termios_with(lflag: libc::tcflag_t, iflag: libc::tcflag_t) -> libc::termios {
+        let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
+        termios.c_lflag = lflag;
+        termios.c_iflag = iflag;
+        termios.c_cc[libc::VINTR] = 0x03;
+        termios.c_cc[libc::VQUIT] = 0x1c;
+        termios.c_cc[libc::VSUSP] = 0x1a;
+        termios.c_cc[libc::VSTART] = 0x11;
+        termios.c_cc[libc::VSTOP] = 0x13;
+        termios
+    }
+
+    fn inspect_byte(byte: u8, termios: &libc::termios) -> LayerResult {
+        let input = TerminalInput::predicted(vec![byte], "legacy control byte");
+        Terminal.inspect_input_with_termios(&input, termios)
+    }
+
+    #[test]
+    fn labels_ctrl_s_and_ctrl_q_as_flow_control_only_when_ixon_is_set() {
+        let with_ixon = termios_with(libc::ISIG, libc::IXON);
+        for byte in [0x13, 0x11] {
+            let result = inspect_byte(byte, &with_ixon);
+            assert_eq!(result.outcome, Outcome::Consumed);
+            assert!(result.summary.starts_with("terminal flow control (IXON)"));
+            assert!(!result.summary.contains("signal"));
+        }
+
+        let without_ixon = termios_with(libc::ISIG, 0);
+        for byte in [0x13, 0x11] {
+            assert_eq!(inspect_byte(byte, &without_ixon).outcome, Outcome::Pass);
+        }
+    }
+
+    #[test]
+    fn signal_characters_are_consumed_only_when_isig_is_set() {
+        let with_isig = termios_with(libc::ISIG, 0);
+        for (byte, signal) in [(0x03, "SIGINT"), (0x1c, "SIGQUIT"), (0x1a, "SIGTSTP")] {
+            let result = inspect_byte(byte, &with_isig);
+            assert_eq!(result.outcome, Outcome::Consumed);
+            assert!(result.summary.starts_with("terminal signal handling"));
+            assert!(result.summary.contains(signal));
+        }
+
+        let without_isig = termios_with(0, libc::IXON);
+        for byte in [0x03, 0x1c, 0x1a] {
+            assert_eq!(inspect_byte(byte, &without_isig).outcome, Outcome::Pass);
+        }
+    }
+
+    #[test]
+    fn encodes_ctrl_punctuation_as_legacy_control_bytes() {
+        for (key, byte) in [
+            ("]", 0x1d),
+            ("[", 0x1b),
+            ("\\", 0x1c),
+            ("^", 0x1e),
+            ("_", 0x1f),
+            ("@", 0x00),
+            ("SPACE", 0x00),
+            ("X", 0x18),
+        ] {
+            assert_eq!(legacy_control_byte(key), Some(byte), "ctrl+{key}");
+        }
+        assert_eq!(legacy_control_byte("1"), None);
+        assert_eq!(legacy_control_byte("LEFT"), None);
+    }
+
+    #[test]
+    fn states_escape_and_tab_ambiguity_in_tty_evidence() {
+        let termios = termios_with(libc::ISIG, 0);
+        for (byte, key) in [(0x1b, "Escape"), (0x09, "Tab")] {
+            let result = inspect_byte(byte, &termios);
+            assert!(
+                result.details.iter().any(|detail| detail.contains(key)),
+                "{:?}",
+                result.details
+            );
+        }
     }
 }

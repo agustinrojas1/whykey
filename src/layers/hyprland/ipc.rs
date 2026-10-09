@@ -24,12 +24,15 @@ pub fn ipc_available() -> bool {
     run_hyprctl(&["binds", "-j"]).is_ok() && run_hyprctl(&["submap", "-j"]).is_ok()
 }
 
+/// Source label of runtime Hyprland inventory records.
+pub(crate) const INVENTORY_SOURCE: &str = "Hyprland (hyprctl binds -j)";
+
 /// Return Hyprland bindings as inventory records for the global listing.
 /// The raw JSON conversion stays separate from key-specific matching so
 /// malformed entries can be reported here without changing inspection.
 pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
     let value = binding_inventory_json().map_err(|error| format!("Hyprland: {error}"))?;
-    Ok(collect_records(&value))
+    Ok(collect_records(&value, &CONFIG_HINTS.lua))
 }
 
 fn binding_inventory_json() -> Result<serde_json::Value, String> {
@@ -38,7 +41,7 @@ fn binding_inventory_json() -> Result<serde_json::Value, String> {
         .map_err(|error| format!("hyprctl returned invalid binding data: {error}"))
 }
 
-fn collect_records(value: &serde_json::Value) -> Vec<BindingRecord> {
+fn collect_records(value: &serde_json::Value, lua_hints: &[LuaBindHint]) -> Vec<BindingRecord> {
     let mut records = Vec::new();
     let Some(bindings) = value.as_array() else {
         return records;
@@ -51,6 +54,41 @@ fn collect_records(value: &serde_json::Value) -> Vec<BindingRecord> {
             .get("modmask")
             .and_then(super::json_u32)
             .unwrap_or_default();
+        let description = binding
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .filter(|description| !description.is_empty());
+        let keycode = binding
+            .get("keycode")
+            .and_then(super::json_u32)
+            .filter(|keycode| *keycode != 0);
+        let catch_all = binding
+            .get("catch_all")
+            .and_then(boolish_value)
+            .unwrap_or(false);
+        // Lua binds with `code:` keys come back with neither a key nor a
+        // keycode; recover a literal config key or mark the record so it is
+        // never grouped under a bare modifier prefix.
+        let (key, certainty) = if !key.is_empty() || catch_all {
+            (super::combo_display(mask, key), "runtime effective binding")
+        } else if let Some(keycode) = keycode {
+            (
+                super::combo_display(mask, &format!("code:{keycode}")),
+                "runtime effective binding",
+            )
+        } else if let Some(hint_key) =
+            description.and_then(|description| lua_hint_key(mask, description, lua_hints))
+        {
+            (
+                super::combo_display(mask, hint_key),
+                "runtime effective binding; key from static config",
+            )
+        } else {
+            (
+                format!("{}<key not reported>", super::combo_display(mask, "")),
+                crate::bindings::UNRESOLVED_KEY_CERTAINTY,
+            )
+        };
         let action = binding
             .get("dispatcher")
             .and_then(serde_json::Value::as_str)
@@ -64,11 +102,7 @@ fn collect_records(value: &serde_json::Value) -> Vec<BindingRecord> {
             action.push(' ');
             action.push_str(argument);
         }
-        if let Some(description) = binding
-            .get("description")
-            .and_then(serde_json::Value::as_str)
-            .filter(|description| !description.is_empty())
-        {
+        if let Some(description) = description {
             action.push_str("; ");
             action.push_str(description);
         }
@@ -87,11 +121,11 @@ fn collect_records(value: &serde_json::Value) -> Vec<BindingRecord> {
         records.push(BindingRecord {
             device,
             submap: Some(submap.clone()),
-            source: "Hyprland (hyprctl binds -j)".into(),
-            key: super::combo_display(mask, key),
+            source: INVENTORY_SOURCE.into(),
+            key,
             action,
             context: Some(submap),
-            certainty: "runtime effective binding".into(),
+            certainty: certainty.into(),
         });
     }
     records
@@ -203,16 +237,16 @@ fn inspect_system_with_values(
         .as_deref()
         .map(|devices| xkb_keycodes_for_key(key, devices))
         .unwrap_or_default();
-    let lua_hints = lua_config_bindings();
-    let config_ignore_mods = config_has_ignore_mods(key, &lua_hints);
+    let hints = &*CONFIG_HINTS;
+    let lua_hints = hints.lua.as_slice();
 
     let mut result = analyze(
         key,
         &bindings_json,
         &active_submap,
         &keycodes,
-        &lua_hints,
-        config_ignore_mods,
+        lua_hints,
+        &hints.declarative,
         physical_input,
     )?;
     if let Some(instance) = instance_override() {
@@ -331,14 +365,19 @@ fn discover_hyprland_instance() -> Option<String> {
             return signature.into_string().ok();
         }
     }
-    let mut command = Command::new("hyprctl");
-    command.args(["instances", "-j"]);
-    let output = command::output(&mut command).ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let instances = parse_hyprland_instances(&output.stdout)?;
-    select_hyprland_instance(&instances, env::var("WAYLAND_DISPLAY").ok().as_deref())
+    // The instance inventory does not change while one command runs, so
+    // query it once instead of before every hyprctl call.
+    static DISCOVERED: LazyLock<Option<String>> = LazyLock::new(|| {
+        let mut command = Command::new("hyprctl");
+        command.args(["instances", "-j"]);
+        let output = command::output(&mut command).ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let instances = parse_hyprland_instances(&output.stdout)?;
+        select_hyprland_instance(&instances, env::var("WAYLAND_DISPLAY").ok().as_deref())
+    });
+    DISCOVERED.clone()
 }
 
 /// Parse the instance inventory conservatively. Hyprland's inventory has

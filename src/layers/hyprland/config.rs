@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ConfigBindHint {
-    key: String,
+pub(crate) struct ConfigBindHint {
+    combo: KeyCombo,
     ignore_mods: bool,
 }
 
@@ -14,32 +14,37 @@ pub(crate) struct LuaBindHint {
     line_number: usize,
 }
 
+/// Static configuration evidence. Config files do not change during one
+/// process, so they are read once instead of on every inspected key.
+#[derive(Debug)]
+struct ConfigHints {
+    lua: Vec<LuaBindHint>,
+    declarative: Vec<ConfigBindHint>,
+}
+
+static CONFIG_HINTS: LazyLock<ConfigHints> = LazyLock::new(|| ConfigHints {
+    lua: lua_config_bindings(),
+    declarative: declarative_config_hints(),
+});
+
 /// Read only the declarative bind syntax needed to recover `ignore_mods`.
 ///
 /// `hyprctl binds -j` intentionally omits that field on several Hyprland
 /// versions. This parser is deliberately conservative: unresolved variables,
 /// globs, and Lua expressions are skipped, so it can only add evidence and
 /// never turns an unknown binding into a false exact match.
-fn config_has_ignore_mods(key: &KeyCombo, lua_hints: &[LuaBindHint]) -> bool {
-    if lua_hints
-        .iter()
-        .any(|hint| hint.ignore_mods == Some(true) && hint.combo.key() == key.key())
-    {
-        return true;
-    }
+fn declarative_config_hints() -> Vec<ConfigBindHint> {
     let Some(root) = hyprland_config_paths()
         .into_iter()
         .find(|path| path.is_file())
     else {
-        return false;
+        return Vec::new();
     };
     let mut visited = HashSet::new();
     let mut variables = HashMap::new();
     let mut hints = Vec::new();
     collect_config_hints(&root, &mut visited, &mut variables, &mut hints, 0);
     hints
-        .iter()
-        .any(|hint| hint.ignore_mods && hint.key.eq_ignore_ascii_case(key.key()))
 }
 
 fn hyprland_config_paths() -> Vec<PathBuf> {
@@ -55,8 +60,8 @@ fn hyprland_config_paths() -> Vec<PathBuf> {
 }
 
 /// Scan the small, literal subset of Lua used by common Hyprland helpers
-/// (`o.bind` and `hl.bind`). Lua is executable code, so this never evaluates
-/// it; dynamic key expressions remain intentionally unknown.
+/// (`o.bind`, `hl.bind`, and `hl.unbind`). Lua is executable code, so this
+/// never evaluates it; dynamic key expressions remain intentionally unknown.
 fn lua_config_bindings() -> Vec<LuaBindHint> {
     let mut roots = Vec::new();
     // Load packaged defaults first and user configuration last, matching the
@@ -81,14 +86,22 @@ fn lua_config_bindings() -> Vec<LuaBindHint> {
         let Ok(content) = fs::read_to_string(&path) else {
             continue;
         };
-        hints.extend(parse_lua_bind_hints(&content, &path));
+        extend_lua_bind_hints(&mut hints, &content, &path);
     }
     hints
 }
 
+#[cfg(test)]
 fn parse_lua_bind_hints(content: &str, source: &Path) -> Vec<LuaBindHint> {
-    const MAX_CALL_LENGTH: usize = 64 * 1024;
     let mut hints = Vec::new();
+    extend_lua_bind_hints(&mut hints, content, source);
+    hints
+}
+
+/// Apply one file's literal bind/unbind calls, in order, on top of the hints
+/// collected from earlier files.
+fn extend_lua_bind_hints(hints: &mut Vec<LuaBindHint>, content: &str, source: &Path) {
+    const MAX_CALL_LENGTH: usize = 64 * 1024;
     let mut pending = String::new();
     let mut start_line = 0;
     let mut skipped = None;
@@ -110,15 +123,60 @@ fn parse_lua_bind_hints(content: &str, source: &Path) -> Vec<LuaBindHint> {
             .and_then(|(_, open)| lua_call_arguments(&pending[open + 1..]))
             .is_some();
         if complete {
-            if let Some(hint) = parse_lua_bind_hint(&pending, source, start_line) {
-                hints.push(hint);
-            }
+            apply_lua_bind_call(hints, &pending, source, start_line);
             pending.clear();
         } else if pending.len() > MAX_CALL_LENGTH {
             pending.clear();
         }
     }
-    hints
+}
+
+fn apply_lua_bind_call(hints: &mut Vec<LuaBindHint>, call: &str, source: &Path, line: usize) {
+    if find_lua_bind_call(call).is_some_and(|(prefix, _)| prefix == "hl.unbind") {
+        apply_lua_unbind(hints, call);
+    } else if let Some(hint) = parse_lua_bind_hint(call, source, line) {
+        hints.push(hint);
+    }
+}
+
+/// Model `hl.unbind`: a literal combo removes every earlier binding for that
+/// combo (a later bind re-adds it), and `hl.unbind("all")` removes them all.
+/// A dynamic argument cannot be attributed, so it leaves the hints as they are.
+fn apply_lua_unbind(hints: &mut Vec<LuaBindHint>, call: &str) {
+    let Some(arguments) =
+        find_lua_bind_call(call).and_then(|(_, open)| lua_call_arguments(&call[open + 1..]))
+    else {
+        return;
+    };
+    let Some(target) = arguments
+        .first()
+        .and_then(|argument| lua_literal_argument(argument))
+    else {
+        return;
+    };
+    if target == "all" && arguments.len() == 1 {
+        hints.clear();
+    } else if let Ok(combo) = target.parse::<KeyCombo>() {
+        hints.retain(|hint| hint.combo != combo);
+    }
+}
+
+/// Recover the key of a binding that hyprctl reports without one: Lua binds
+/// with `code:` keys expose neither `key` nor `keycode`. Only literal hints
+/// with the same modifiers and description count, and only when they all
+/// agree on the key.
+fn lua_hint_key<'a>(modmask: u32, description: &str, hints: &'a [LuaBindHint]) -> Option<&'a str> {
+    if description.trim().is_empty() {
+        return None;
+    }
+    let mut keys = hints
+        .iter()
+        .filter(|hint| {
+            hint.combo.modmask() == modmask && hint.description.as_deref() == Some(description)
+        })
+        .map(|hint| hint.combo.key());
+    let first = keys.next()?;
+    keys.all(|key| key == first).then_some(first)
 }
 
 /// A Lua long-bracket comment or string that continues onto a later line.
@@ -256,6 +314,9 @@ fn collect_lua_files(
 
 fn parse_lua_bind_hint(line: &str, source: &Path, line_number: usize) -> Option<LuaBindHint> {
     let (prefix, open) = find_lua_bind_call(line)?;
+    if prefix == "hl.unbind" {
+        return None;
+    }
     let arguments = lua_call_arguments(&line[open + 1..])?;
     let combo = lua_literal_argument(arguments.first()?)?.parse().ok()?;
     let (description, action, options_index) = if prefix == "o.bind" {
@@ -289,7 +350,7 @@ fn parse_lua_bind_hint(line: &str, source: &Path, line_number: usize) -> Option<
 }
 
 fn find_lua_bind_call(line: &str) -> Option<(&'static str, usize)> {
-    let prefixes = ["o.bind", "hl.bind", "bind"];
+    let prefixes = ["o.bind", "hl.bind", "hl.unbind", "bind"];
     let mut index = 0;
     while index < line.len() {
         let character = line[index..]
@@ -451,15 +512,38 @@ fn lua_ignore_mods_option(options: Option<&str>) -> Option<bool> {
     }
 }
 
-fn lua_ignore_mods_for_binding(binding: &Binding, hints: &[LuaBindHint]) -> Option<bool> {
+/// `ignore_mods` from the last literal Lua declaration of exactly this
+/// binding (same modifiers and key). A declaration of the same key with other
+/// modifiers says nothing about this binding.
+fn lua_ignore_mods_for_binding(
+    binding: &Binding,
+    key: &BindingKey,
+    hints: &[LuaBindHint],
+) -> Option<bool> {
     hints
         .iter()
         .rev()
         .find(|hint| {
             hint.combo.modmask() == binding.modmask
-                && hint.combo.key().eq_ignore_ascii_case(&binding.key)
+                && BindingKey::from_name(hint.combo.key()) == *key
         })
         .and_then(|hint| hint.ignore_mods)
+}
+
+/// The `.conf` counterpart of [`lua_ignore_mods_for_binding`].
+fn config_ignore_mods_for_binding(
+    binding: &Binding,
+    key: &BindingKey,
+    hints: &[ConfigBindHint],
+) -> Option<bool> {
+    hints
+        .iter()
+        .rev()
+        .find(|hint| {
+            hint.combo.modmask() == binding.modmask
+                && BindingKey::from_name(hint.combo.key()) == *key
+        })
+        .map(|hint| hint.ignore_mods)
 }
 
 fn collect_config_hints(
@@ -487,6 +571,10 @@ fn collect_config_hints(
             continue;
         }
         if let Some((name, value)) = parse_config_variable(line) {
+            // hyprlang expands references in a value against variables defined
+            // earlier; one pass against the current map cannot loop, and a
+            // self-reference resolves to the previous value (or stays literal).
+            let value = resolve_inline_variables(&value, variables);
             variables.insert(name, value);
         }
     }
@@ -507,6 +595,8 @@ fn collect_config_hints(
         }
         if let Some(hint) = parse_config_bind_hint(line, variables) {
             hints.push(hint);
+        } else if let Some(combo) = parse_config_unbind(line, variables) {
+            hints.retain(|hint| hint.combo != combo);
         }
     }
 }
@@ -576,36 +666,116 @@ fn parse_config_bind_hint(
     variables: &HashMap<String, String>,
 ) -> Option<ConfigBindHint> {
     let (directive, values) = line.split_once('=')?;
-    let directive = directive.trim();
-    let flags = directive
-        .strip_prefix("bind[")
-        .and_then(|value| value.strip_suffix(']'))
-        .unwrap_or_default();
-    if !directive.starts_with("bind") {
+    // Hyprland reads every character after `bind` as one flag (`bindel`,
+    // `bindd`, `bindrl`, ...); any other suffix is a different keyword or an
+    // invalid bind that Hyprland rejects.
+    let flags = directive.trim().strip_prefix("bind")?;
+    if !flags.chars().all(|flag| "lremnatisodpcgukx".contains(flag)) {
         return None;
     }
-    let mut fields = values.split(',').map(str::trim);
-    let modifiers = resolve_inline_variables(fields.next()?, variables);
-    let key = resolve_inline_variables(fields.next()?, variables);
-    if key.is_empty() || key.contains(' ') && key.split_whitespace().count() > 1 {
+    // Multi-key binds (`s`) list several keys joined by `&`; they never
+    // describe a single combo.
+    if flags.contains('s') {
         return None;
     }
-    let combo_text = if modifiers.is_empty() {
-        key.clone()
-    } else {
-        format!("{}+{key}", modifiers.replace(' ', "+"))
-    };
-    let combo: KeyCombo = combo_text.parse().ok()?;
+    let mut fields = values.split(',');
+    let combo = parse_config_combo(fields.next()?, fields.next()?, variables)?;
     Some(ConfigBindHint {
-        key: combo.key().to_owned(),
+        combo,
         ignore_mods: flags.contains('i'),
     })
 }
 
-fn resolve_inline_variables(raw: &str, variables: &HashMap<String, String>) -> String {
-    let mut value = raw.trim().to_owned();
-    for (name, replacement) in variables {
-        value = value.replace(&format!("${name}"), replacement);
+/// `unbind = MODS, KEY` removes the earlier declarations of that combo.
+fn parse_config_unbind(line: &str, variables: &HashMap<String, String>) -> Option<KeyCombo> {
+    let (directive, values) = line.split_once('=')?;
+    if directive.trim() != "unbind" {
+        return None;
     }
+    let mut fields = values.split(',');
+    parse_config_combo(fields.next()?, fields.next()?, variables)
+}
+
+fn parse_config_combo(
+    modifiers: &str,
+    key: &str,
+    variables: &HashMap<String, String>,
+) -> Option<KeyCombo> {
+    let modifiers = resolve_inline_variables(modifiers, variables);
+    let key = resolve_inline_variables(key, variables);
+    if key.is_empty() || key.split_whitespace().count() > 1 {
+        return None;
+    }
+    let combo_text = if modifiers.is_empty() {
+        key
+    } else {
+        format!(
+            "{}+{key}",
+            modifiers.split_whitespace().collect::<Vec<_>>().join("+")
+        )
+    };
+    combo_text.parse().ok()
+}
+
+/// Substitute `$name` variables the way hyprlang does: at each `$`, the
+/// longest defined name wins, so `$mod` never clobbers `$mainMod`. Unknown
+/// names stay literal and make the bind unparsable instead of guessed.
+fn resolve_inline_variables(raw: &str, variables: &HashMap<String, String>) -> String {
+    let mut value = String::with_capacity(raw.len());
+    let mut rest = raw.trim();
+    while let Some(start) = rest.find('$') {
+        value.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let longest = variables
+            .iter()
+            .filter(|(name, _)| after.starts_with(name.as_str()))
+            .max_by_key(|(name, _)| name.len());
+        match longest {
+            Some((name, replacement)) => {
+                value.push_str(replacement);
+                rest = &after[name.len()..];
+            }
+            None => {
+                value.push('$');
+                rest = after;
+            }
+        }
+    }
+    value.push_str(rest);
     value.trim_matches(['"', '\'']).trim().to_owned()
+}
+
+#[cfg(test)]
+mod config_variable_tests {
+    use super::*;
+
+    #[test]
+    fn variable_values_expand_earlier_variables_for_bind_and_unbind() {
+        let base = std::env::temp_dir().join(format!(
+            "whykey-hypr-alias-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&base).unwrap();
+        let root = base.join("hyprland.conf");
+        fs::write(
+            &root,
+            "$mainMod = SUPER\n$mod = $mainMod\n$loop = $loop\n\
+             bindi = $mod, Q, exec, a\nbindi = $mod, W, exec, b\nunbind = $mod, W\n",
+        )
+        .unwrap();
+
+        let mut visited = HashSet::new();
+        let mut variables = HashMap::new();
+        let mut hints = Vec::new();
+        collect_config_hints(&root, &mut visited, &mut variables, &mut hints, 0);
+        let _ = fs::remove_dir_all(&base);
+
+        assert_eq!(variables.get("mod").map(String::as_str), Some("SUPER"));
+        assert_eq!(variables.get("loop").map(String::as_str), Some("$loop"));
+        let super_q: KeyCombo = "super+q".parse().unwrap();
+        assert!(hints.iter().any(|hint| hint.combo == super_q));
+        let super_w: KeyCombo = "super+w".parse().unwrap();
+        assert!(hints.iter().all(|hint| hint.combo != super_w));
+    }
 }

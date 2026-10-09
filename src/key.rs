@@ -109,15 +109,20 @@ impl FromStr for KeySequence {
             )));
         }
 
+        let steps = tokens.len();
         tokens
             .into_iter()
             .enumerate()
             .map(|(index, token)| {
-                token.parse::<KeyCombo>().map_err(|error| {
-                    ParseKeySequenceError(format!(
-                        "invalid key combination at step {} ('{token}'): {error}",
-                        index + 1
-                    ))
+                KeyCombo::parse_query(token).map_err(|error| {
+                    ParseKeySequenceError(if steps == 1 {
+                        format!("invalid key combination '{token}': {error}")
+                    } else {
+                        format!(
+                            "invalid key combination at step {} ('{token}'): {error}",
+                            index + 1
+                        )
+                    })
                 })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -148,55 +153,85 @@ impl fmt::Display for ParseKeyComboError {
 
 impl std::error::Error for ParseKeyComboError {}
 
+impl KeyCombo {
+    /// Parse a combination typed by a user. Unlike [`FromStr`], which also
+    /// reads keys from compositor and application configuration, this
+    /// rejects key names Whykey does not recognize instead of reporting on a
+    /// key that cannot exist.
+    pub fn parse_query(input: &str) -> Result<Self, ParseKeyComboError> {
+        parse_combo(input, true)
+    }
+}
+
 impl FromStr for KeyCombo {
     type Err = ParseKeyComboError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let input = input.trim();
-        if input.is_empty() {
-            return Err(ParseKeyComboError("key combination is empty".into()));
-        }
+        parse_combo(input, false)
+    }
+}
 
-        let mut modifiers = 0;
-        let mut remainder = input;
-        while let Some((raw_modifier, rest)) = remainder.split_once('+') {
-            let part = raw_modifier.trim();
-            if part.is_empty() {
-                break;
-            }
-            if let Some(mask) = modifier_mask(part) {
-                if modifiers & mask != 0 {
-                    return Err(ParseKeyComboError(format!(
-                        "modifier '{part}' appears more than once"
-                    )));
-                }
-                modifiers |= mask;
-                remainder = rest;
-                continue;
-            }
+fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComboError> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(ParseKeyComboError("key combination is empty".into()));
+    }
+
+    let mut modifiers = 0;
+    let mut remainder = input;
+    while let Some((raw_modifier, rest)) = remainder.split_once('+') {
+        let part = raw_modifier.trim();
+        if part.is_empty() {
             break;
         }
-
-        let remainder = remainder.trim();
-        if remainder.is_empty() {
-            return Err(ParseKeyComboError(
-                "a combination must contain a non-modifier key".into(),
-            ));
+        if let Some(mask) = modifier_mask(part) {
+            if modifiers & mask != 0 {
+                return Err(ParseKeyComboError(format!(
+                    "modifier '{part}' appears more than once"
+                )));
+            }
+            modifiers |= mask;
+            remainder = rest;
+            continue;
         }
-        if modifier_mask(remainder).is_some() {
-            return Err(ParseKeyComboError(
-                "a combination must contain a non-modifier key".into(),
-            ));
-        }
-        if remainder.contains('+') && remainder != "+" {
-            return Err(ParseKeyComboError(
-                "a combination must contain exactly one non-modifier key".into(),
-            ));
-        }
-        let key = normalize_key(remainder)?;
-
-        Ok(Self { modifiers, key })
+        break;
     }
+
+    let remainder = remainder.trim();
+    if remainder.is_empty() {
+        return Err(ParseKeyComboError(
+            "a combination must contain a non-modifier key".into(),
+        ));
+    }
+    if modifier_mask(remainder).is_some() {
+        return Err(ParseKeyComboError(
+            "a combination must contain a non-modifier key".into(),
+        ));
+    }
+    if remainder.contains('+') && remainder != "+" {
+        let found = remainder
+            .split('+')
+            .map(|token| {
+                let token = token.trim();
+                if token.is_empty() {
+                    "an empty segment".to_owned()
+                } else {
+                    format!("'{token}'")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" and ");
+        return Err(ParseKeyComboError(format!(
+            "a combination must contain exactly one non-modifier key, but found {found} \
+             (modifiers: ctrl, alt, shift, super, hyper, altgr, caps, num, mod2, mod3, mod5)"
+        )));
+    }
+    let key = normalize_key(remainder)?;
+    if validate_key && !is_known_key(&key) {
+        return Err(unknown_key_error(remainder));
+    }
+
+    Ok(KeyCombo { modifiers, key })
 }
 
 impl fmt::Display for KeyCombo {
@@ -230,7 +265,8 @@ impl fmt::Display for KeyCombo {
     }
 }
 
-fn modifier_mask(value: &str) -> Option<u32> {
+/// The modmask bit for one modifier name or alias, if it is a modifier.
+pub(crate) fn modifier_mask(value: &str) -> Option<u32> {
     match value.to_ascii_lowercase().as_str() {
         "ctrl" | "control" | "ctl" => Some(CTRL_MASK),
         "alt" | "mod1" => Some(ALT_MASK),
@@ -239,7 +275,10 @@ fn modifier_mask(value: &str) -> Option<u32> {
         "caps" | "capslock" | "lock" => Some(CAPS_MASK),
         "mod2" | "num" | "numlock" => Some(MOD2_MASK),
         "mod3" | "hyper" => Some(MOD3_MASK),
-        "mod5" | "meta-key" => Some(MOD5_MASK),
+        // AltGr is ISO_Level3_Shift, which XKB maps to Mod5 (Hyprland
+        // modmask 128). `meta-key` names the same bit for the Kitty keyboard
+        // protocol's Meta modifier.
+        "mod5" | "altgr" | "iso_level3_shift" | "meta-key" => Some(MOD5_MASK),
         _ => None,
     }
 }
@@ -325,6 +364,166 @@ fn normalize_key(value: &str) -> Result<String, ParseKeyComboError> {
     Ok(normalize_key_str(value))
 }
 
+/// Named keys accepted in user queries, in their normalized spelling.
+/// Aliases (for example `enter`, `pgup`, `comma`) are folded into these or
+/// into single characters by [`normalize_key_str`] before the check.
+const NAMED_KEYS: &[&str] = &[
+    "LEFT",
+    "RIGHT",
+    "UP",
+    "DOWN",
+    "RETURN",
+    "ESCAPE",
+    "SPACE",
+    "TAB",
+    "BACKSPACE",
+    "DELETE",
+    "INSERT",
+    "HOME",
+    "END",
+    "PAGE_UP",
+    "PAGE_DOWN",
+    "PRINT",
+    "PAUSE",
+    "BREAK",
+    "SYS_REQ",
+    "SCROLL_LOCK",
+    "MENU",
+    "CAPS_LOCK",
+    "NUM_LOCK",
+    "MULTI_KEY",
+    "MODE_SWITCH",
+    "HELP",
+    "UNDO",
+    "REDO",
+    "FIND",
+    "CANCEL",
+    "SELECT",
+    "EXECUTE",
+    "CLEAR",
+    "BEGIN",
+    "LINEFEED",
+    "SHIFT_L",
+    "SHIFT_R",
+    "CONTROL_L",
+    "CONTROL_R",
+    "ALT_L",
+    "ALT_R",
+    "SUPER_L",
+    "SUPER_R",
+    "META_L",
+    "META_R",
+    "HYPER_L",
+    "HYPER_R",
+    "KP_DECIMAL",
+    "KP_SEPARATOR",
+    "KP_DELETE",
+    "KP_INSERT",
+    "KP_UP",
+    "KP_DOWN",
+    "KP_LEFT",
+    "KP_RIGHT",
+    "KP_BEGIN",
+    "KP_SPACE",
+    "KP_TAB",
+    "KP_PAGE_UP",
+    "KP_PAGE_DOWN",
+    "KP_F1",
+    "KP_F2",
+    "KP_F3",
+    "KP_F4",
+    "MOUSE_UP",
+    "MOUSE_DOWN",
+    "MOUSE_LEFT",
+    "MOUSE_RIGHT",
+];
+
+/// Whether a normalized key names a real key: one character, a named key,
+/// a function key F1–F35, an `XF86*` media key, a `CODE:N` keycode, or a
+/// Hyprland `MOUSE:N` button.
+fn is_known_key(key: &str) -> bool {
+    let mut characters = key.chars();
+    if characters.next().is_some() && characters.next().is_none() {
+        return true;
+    }
+    if NAMED_KEYS.contains(&key) || key.starts_with("CODE:") {
+        return true;
+    }
+    if let Some(number) = key.strip_prefix('F') {
+        return !number.starts_with('0')
+            && number
+                .parse::<u8>()
+                .is_ok_and(|number| (1..=35).contains(&number));
+    }
+    if let Some(button) = key.strip_prefix("MOUSE:") {
+        return !button.is_empty() && button.chars().all(|character| character.is_ascii_digit());
+    }
+    key.strip_prefix("XF86").is_some_and(|name| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    })
+}
+
+/// Spellings offered as suggestions for a mistyped key, besides
+/// [`NAMED_KEYS`] and function keys.
+const SUGGESTED_ALIASES: &[&str] = &[
+    "enter",
+    "esc",
+    "pgup",
+    "pgdown",
+    "comma",
+    "period",
+    "slash",
+    "backslash",
+    "semicolon",
+    "apostrophe",
+    "grave",
+    "minus",
+    "equal",
+    "plus",
+    "bracketleft",
+    "bracketright",
+];
+
+fn unknown_key_error(raw: &str) -> ParseKeyComboError {
+    let lowered = raw.to_lowercase();
+    let function_keys = (1..=35).map(|number| format!("f{number}"));
+    let suggestion = NAMED_KEYS
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .chain(function_keys)
+        .chain(SUGGESTED_ALIASES.iter().map(|alias| (*alias).to_owned()))
+        .map(|candidate| (edit_distance(&lowered, &candidate), candidate))
+        .min_by_key(|(distance, _)| *distance)
+        .filter(|(distance, _)| *distance <= (lowered.chars().count() / 2).max(1));
+    let hint = "use a single character, a named key such as return, left, or f1, an XF86 media key, or code:N";
+    match suggestion {
+        Some((_, candidate)) => ParseKeyComboError(format!(
+            "unknown key '{raw}'; did you mean '{candidate}'? ({hint})"
+        )),
+        None => ParseKeyComboError(format!("unknown key '{raw}'; {hint}")),
+    }
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+    for (row, left_character) in left.chars().enumerate() {
+        current[0] = row + 1;
+        for (column, right_character) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_character != *right_character);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,9 +558,11 @@ mod tests {
     fn rejects_two_non_modifier_keys() {
         let error = "ctrl+a+b".parse::<KeyCombo>().unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "a combination must contain exactly one non-modifier key"
+        assert!(
+            error.to_string().starts_with(
+                "a combination must contain exactly one non-modifier key, but found 'a' and 'b'"
+            ),
+            "{error}"
         );
     }
 
@@ -378,10 +579,79 @@ mod tests {
     #[test]
     fn rejects_empty_segments() {
         let error = "ctrl++left".parse::<KeyCombo>().unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "a combination must contain exactly one non-modifier key"
+        assert!(
+            error
+                .to_string()
+                .contains("but found an empty segment and 'left'"),
+            "{error}"
         );
+    }
+
+    #[test]
+    fn query_rejects_unknown_key_names() {
+        let error = KeyCombo::parse_query("hyper+banana").unwrap_err();
+        assert!(
+            error.to_string().starts_with("unknown key 'banana'"),
+            "{error}"
+        );
+
+        let error = KeyCombo::parse_query("ctrl+retrun").unwrap_err();
+        assert!(
+            error.to_string().contains("did you mean 'return'?"),
+            "{error}"
+        );
+
+        let error = "hyper+banana".parse::<KeySequence>().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("invalid key combination 'hyper+banana': unknown key 'banana'"),
+            "{error}"
+        );
+
+        // Configuration readers keep the lenient parser: an unfamiliar
+        // keysym in a config file is not a user error.
+        assert!("hyper+banana".parse::<KeyCombo>().is_ok());
+    }
+
+    #[test]
+    fn query_accepts_every_supported_key_form() {
+        for input in [
+            "a",
+            "é",
+            "super+1",
+            "super+comma",
+            "ctrl+]",
+            "ctrl++",
+            "ctrl+slash",
+            "f1",
+            "F35",
+            "Prior",
+            "kp_enter",
+            "KP_Decimal",
+            "Print",
+            "Scroll_Lock",
+            "XF86AudioRaiseVolume",
+            "ctrl+code:30",
+            "super+mouse:272",
+            "super+Super_L",
+            "shift+Tab",
+            "ctrl+left",
+        ] {
+            assert!(KeyCombo::parse_query(input).is_ok(), "{input} should parse");
+        }
+        for input in ["f0", "f36", "f01", "XF86", "mouse:", "KP_BANANA", "=="] {
+            assert!(KeyCombo::parse_query(input).is_err(), "{input} should fail");
+        }
+    }
+
+    #[test]
+    fn accepts_altgr_as_mod5() {
+        for input in ["altgr+q", "ISO_Level3_Shift+q", "mod5+q"] {
+            let combo = KeyCombo::parse_query(input).unwrap();
+            assert_eq!(combo.modmask(), MOD5_MASK, "{input}");
+            assert_eq!(combo.key(), "Q");
+        }
     }
 
     #[test]

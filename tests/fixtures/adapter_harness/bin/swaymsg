@@ -8,9 +8,14 @@ import sys
 if os.environ.get("WHYKEY_FAKE_IPC_FAILURE"):
     print("fake swaymsg IPC failure", file=sys.stderr)
     raise SystemExit(1)
-if sys.argv[1:] == ["-t", "get_bindings", "-r"]:
-    print(json.dumps([{"command": "exec foot", "keysym": "Return", "input_code": 36}]))
+if sys.argv[1:] == ["-t", "get_config", "-r"]:
+    print(json.dumps({"config": "set $mod Mod4\nbindsym $mod+Return exec foot\n"}))
+elif sys.argv[1:] == ["-t", "get_binding_state", "-r"]:
+    print(json.dumps({"name": "default"}))
 elif sys.argv[1:] == ["-t", "get_tree", "-r"]:
     print(json.dumps({"focused": True, "pid": 4242}))
+elif sys.argv[1:] == ["-t", "get_version", "-r"]:
+    print(json.dumps({"human_readable": "1.9"}))
 else:
-    print("sway version 1.9")
+    print(f"Unknown message type {sys.argv[1:]}", file=sys.stderr)
+    raise SystemExit(1)

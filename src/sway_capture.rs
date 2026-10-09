@@ -108,8 +108,8 @@ impl SwayCaptureSession {
                 .ok_or_else(|| "Sway binding event omitted a key symbol".to_owned())?;
             let mask = binding
                 .get("event_state_mask")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as u32;
+                .and_then(crate::layers::tiling::event_state_mask)
+                .unwrap_or(0);
             let combo = KeyCombo::from_parts(mask, symbol);
             if !events_all && combo.modmask() == 0 && combo.key().is_empty() {
                 continue;
@@ -254,7 +254,7 @@ mod tests {
             closed: false,
         };
         let payload =
-            br#"{"binding":{"symbol":"Return","event_state_mask":64,"command":"exec foot"}}"#;
+            br#"{"binding":{"symbol":"Return","event_state_mask":["Mod4"],"command":"exec foot"}}"#;
         session.buffer.extend_from_slice(IPC_MAGIC);
         session
             .buffer
@@ -272,5 +272,34 @@ mod tests {
             }
         );
         assert_eq!(observed.disposition, CaptureDisposition::PassedThrough);
+    }
+
+    fn binding_frame(payload: &[u8]) -> Vec<u8> {
+        let mut frame = IPC_MAGIC.to_vec();
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(&IPC_EVENT_BINDING.to_le_bytes());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    #[test]
+    fn binding_event_keeps_modifier_names_from_the_ipc_array() {
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let mut session = SwayCaptureSession {
+            stream,
+            buffer: Vec::new(),
+            policy: CapturePolicy::PassThrough,
+            closed: false,
+        };
+        session.buffer.extend(binding_frame(
+            br#"{"change":"run","binding":{"command":"move left","event_state_mask":["Shift","Mod4","Group2"],"input_code":0,"symbol":"h","input_type":"keyboard"}}"#,
+        ));
+        session.buffer.extend(binding_frame(
+            br#"{"change":"run","binding":{"command":"kill","event_state_mask":["Ctrl","Mod1","Lock"],"symbol":"q"}}"#,
+        ));
+        let first = session.next_event(false).unwrap().unwrap();
+        assert_eq!(first.combo.compact_display(), "SHIFT+SUPER+H");
+        let second = session.next_event(false).unwrap().unwrap();
+        assert_eq!(second.combo.compact_display(), "CTRL+ALT+CAPS+Q");
     }
 }

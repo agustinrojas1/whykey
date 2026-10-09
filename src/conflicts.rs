@@ -46,6 +46,16 @@ pub fn current() -> Report {
             "{unknown_context_groups} duplicate group(s) were omitted because their active context was unavailable"
         ));
     }
+    let unresolved_keys = inventory
+        .bindings
+        .iter()
+        .filter(|entry| entry.certainty == bindings::UNRESOLVED_KEY_CERTAINTY)
+        .count();
+    if unresolved_keys > 0 {
+        limitations.push(format!(
+            "{unresolved_keys} binding(s) whose key the source does not report were not compared"
+        ));
+    }
     limitations.push(
         "identical actions and bindings in different applications are not global conflicts".into(),
     );
@@ -60,7 +70,12 @@ pub fn current() -> Report {
 
 fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize) {
     let mut groups: BTreeMap<ConflictGroupKey, Vec<&bindings::BindingRecord>> = BTreeMap::new();
-    for entry in entries {
+    // A record without a reported key carries only its modifiers; grouping
+    // it would invent a collision on a bare modifier prefix.
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.certainty != bindings::UNRESOLVED_KEY_CERTAINTY)
+    {
         groups
             .entry((
                 entry.source.clone(),
@@ -100,17 +115,29 @@ fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize
         let runtime = entries
             .iter()
             .all(|entry| entry.certainty == "runtime effective binding");
+        let classification = if source == crate::layers::hyprland::INVENTORY_SOURCE {
+            // Hyprland runs every matching bind in order; only a `submap`
+            // bind stops the binds after it.
+            if actions
+                .iter()
+                .any(|action| action.split_whitespace().next() == Some("submap"))
+            {
+                "possible; a submap bind stops later matching binds"
+            } else {
+                "multiple binds fire together; Hyprland runs every matching bind"
+            }
+        } else if runtime {
+            "possible; precedence/order is not exposed"
+        } else {
+            "possible; runtime activation or precedence is unknown"
+        };
         conflicts.push(Conflict {
             key,
             source,
             context,
             device,
             submap,
-            classification: if runtime {
-                "possible; precedence/order is not exposed".into()
-            } else {
-                "possible; runtime activation or precedence is unknown".into()
-            },
+            classification: classification.into(),
             actions,
         });
     }
@@ -297,6 +324,45 @@ mod tests {
         assert_eq!(unknown_context_groups, 0);
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].actions, vec!["first", "second"]);
+    }
+
+    fn hyprland_record(key: &str, action: &str, certainty: &str) -> bindings::BindingRecord {
+        bindings::BindingRecord {
+            device: None,
+            submap: Some("default".into()),
+            source: crate::layers::hyprland::INVENTORY_SOURCE.into(),
+            key: key.into(),
+            action: action.into(),
+            context: Some("default".into()),
+            certainty: certainty.into(),
+        }
+    }
+
+    #[test]
+    fn unresolved_keys_are_not_grouped_and_hyprland_duplicates_fire_together() {
+        let unresolved = bindings::UNRESOLVED_KEY_CERTAINTY;
+        let runtime = "runtime effective binding";
+        let entries = vec![
+            hyprland_record(
+                "SUPER+<key not reported>",
+                "__lua 71; Switch to workspace 1",
+                unresolved,
+            ),
+            hyprland_record(
+                "SUPER+<key not reported>",
+                "__lua 77; Switch to workspace 2",
+                unresolved,
+            ),
+            hyprland_record("ALT+TAB", "__lua 157; Focus on next window", runtime),
+            hyprland_record("ALT+TAB", "__lua 161; Reveal active window on top", runtime),
+        ];
+        let (conflicts, _) = build_conflicts(&entries);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+        assert_eq!(conflicts[0].key, "ALT+TAB");
+        assert_eq!(
+            conflicts[0].classification,
+            "multiple binds fire together; Hyprland runs every matching bind"
+        );
     }
 
     #[test]

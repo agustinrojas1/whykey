@@ -9,6 +9,11 @@ use crate::style::RenderOptions;
 
 const MAX_BINDINGS: usize = 8192;
 
+/// Certainty of a runtime record whose key the source does not report (for
+/// example Hyprland Lua binds with runtime-built `code:` keys). Such records
+/// list an action and modifiers only and are never compared by key.
+pub(crate) const UNRESOLVED_KEY_CERTAINTY: &str = "runtime effective binding; key not reported";
+
 /// Versioned output for `whykey bindings`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Inventory {
@@ -19,6 +24,10 @@ pub struct Inventory {
     pub bindings: Vec<BindingRecord>,
     pub unavailable: Vec<String>,
     pub limitations: Vec<String>,
+    /// Records whose key the source does not report but whose modifiers
+    /// equal those of a `--key` filter: any of them may be bound to it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub possible_matches: Vec<BindingRecord>,
 }
 
 pub fn current() -> Inventory {
@@ -34,6 +43,7 @@ pub fn current() -> Inventory {
             "the inventory covers only sources exposed by detected adapters".into(),
             "application, plugin, input-inhibitor, and firmware bindings may remain outside the listing".into(),
         ],
+        possible_matches: Vec::new(),
     };
 
     for entry in crate::registry::DESKTOPS {
@@ -141,14 +151,44 @@ pub fn filter(
     device: Option<&str>,
     submap: Option<&str>,
 ) -> Inventory {
-    inventory.bindings.retain(|binding| {
-        contains(&binding.key, key)
-            && contains(&binding.action, action)
+    let matches_other_filters = |binding: &BindingRecord| {
+        contains(&binding.action, action)
             && contains(&binding.source, source)
             && contains_optional(binding.device.as_deref(), device)
             && contains_optional(binding.submap.as_deref(), submap)
-    });
+    };
+    if let Some(query) = key.and_then(|key| key.parse::<crate::key::KeyCombo>().ok()) {
+        inventory.possible_matches = inventory
+            .bindings
+            .iter()
+            .filter(|binding| {
+                unresolved_modmask(binding) == Some(query.modmask())
+                    && !contains(&binding.key, key)
+                    && matches_other_filters(binding)
+            })
+            .cloned()
+            .collect();
+    }
     inventory
+        .bindings
+        .retain(|binding| contains(&binding.key, key) && matches_other_filters(binding));
+    inventory
+}
+
+/// Modifiers of a record whose key the source does not report, for example
+/// `SUPER+<key not reported>`.
+fn unresolved_modmask(binding: &BindingRecord) -> Option<u32> {
+    if binding.certainty != UNRESOLVED_KEY_CERTAINTY {
+        return None;
+    }
+    binding
+        .key
+        .strip_suffix("<key not reported>")?
+        .split('+')
+        .filter(|part| !part.is_empty())
+        .try_fold(0, |mask, part| {
+            crate::key::modifier_mask(part).map(|bit| mask | bit)
+        })
 }
 
 fn contains(haystack: &str, needle: Option<&str>) -> bool {
@@ -207,53 +247,25 @@ pub fn render_text_with_options(inventory: &Inventory, options: RenderOptions) -
         output.push('\n');
     }
     for entry in &inventory.bindings {
-        let line = format!(
-            "{}  {}  {} [{}]",
-            crate::style::human_key_text(&entry.key),
-            entry.action,
-            entry.source,
-            entry.certainty
-        );
-        for line in crate::style::wrap_hanging(&line, options.width, "  ", "    ") {
-            output.push_str(&line);
-            output.push('\n');
-        }
-        if let Some(context) = &entry.context {
-            for line in crate::style::wrap_hanging(
-                &format!("context: {context}"),
-                options.width,
-                "    ",
-                "      ",
-            ) {
-                output.push_str(&line);
-                output.push('\n');
-            }
-        }
-        if let Some(device) = &entry.device {
-            for line in crate::style::wrap_hanging(
-                &format!("device: {device}"),
-                options.width,
-                "    ",
-                "      ",
-            ) {
-                output.push_str(&line);
-                output.push('\n');
-            }
-        }
-        if let Some(submap) = &entry.submap {
-            for line in crate::style::wrap_hanging(
-                &format!("submap: {submap}"),
-                options.width,
-                "    ",
-                "      ",
-            ) {
-                output.push_str(&line);
-                output.push('\n');
-            }
-        }
+        push_entry(&mut output, entry, options);
     }
     if inventory.bindings.is_empty() {
         output.push_str("No matching bindings were enumerated from the detected sources.\n");
+    }
+    if !inventory.possible_matches.is_empty() {
+        let count = inventory.possible_matches.len();
+        let note = format!(
+            "{count} binding{} with these modifiers {} keys the source does not report; any of them may match:",
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "has" } else { "have" },
+        );
+        for line in crate::style::wrap_hanging(&note, options.width, "", "  ") {
+            output.push_str(&options.uncertain(line));
+            output.push('\n');
+        }
+        for entry in &inventory.possible_matches {
+            push_entry(&mut output, entry, options);
+        }
     }
     for unavailable in &inventory.unavailable {
         for line in crate::style::wrap_hanging(
@@ -280,6 +292,37 @@ pub fn render_text_with_options(inventory: &Inventory, options: RenderOptions) -
     output
 }
 
+fn push_entry(output: &mut String, entry: &BindingRecord, options: RenderOptions) {
+    let line = format!(
+        "{}  {}  {} [{}]",
+        crate::style::human_key_text(&entry.key),
+        entry.action,
+        entry.source,
+        entry.certainty
+    );
+    for line in crate::style::wrap_hanging(&line, options.width, "  ", "    ") {
+        output.push_str(&line);
+        output.push('\n');
+    }
+    for (label, value) in [
+        ("context", &entry.context),
+        ("device", &entry.device),
+        ("submap", &entry.submap),
+    ] {
+        if let Some(value) = value {
+            for line in crate::style::wrap_hanging(
+                &format!("{label}: {value}"),
+                options.width,
+                "    ",
+                "      ",
+            ) {
+                output.push_str(&line);
+                output.push('\n');
+            }
+        }
+    }
+}
+
 pub fn render_json(inventory: &Inventory, schema_version: u8) -> String {
     if schema_version == 2 {
         return serde_json::to_string_pretty(&serde_json::json!({
@@ -290,6 +333,7 @@ pub fn render_json(inventory: &Inventory, schema_version: u8) -> String {
             "bindings": inventory.bindings,
             "unavailable": inventory.unavailable,
             "limitations": inventory.limitations,
+            "possible_matches": inventory.possible_matches,
         }))
         .expect("bindings are serializable")
             + "\n";
@@ -315,6 +359,7 @@ mod tests {
             bindings: Vec::new(),
             unavailable: Vec::new(),
             limitations: vec!["runtime clients remain unknown".into()],
+            possible_matches: Vec::new(),
         };
         let value: serde_json::Value = serde_json::from_str(&render_json(&inventory, 1)).unwrap();
         assert_eq!(value["complete"], false);
@@ -356,6 +401,7 @@ mod tests {
             ],
             unavailable: Vec::new(),
             limitations: Vec::new(),
+            possible_matches: Vec::new(),
         }
     }
 
@@ -464,6 +510,62 @@ mod tests {
     }
 
     #[test]
+    fn key_filter_lists_same_modifier_bindings_with_unreported_keys() {
+        let mut inventory = filter_fixture();
+        for workspace in 1..=2 {
+            inventory.bindings.push(BindingRecord {
+                device: None,
+                submap: Some("default".into()),
+                source: "Hyprland".into(),
+                key: "SUPER+<key not reported>".into(),
+                action: format!("__lua {workspace}; Switch to workspace {workspace}"),
+                context: None,
+                certainty: UNRESOLVED_KEY_CERTAINTY.into(),
+            });
+        }
+        inventory.bindings.push(BindingRecord {
+            device: None,
+            submap: Some("default".into()),
+            source: "Hyprland".into(),
+            key: "ALT+SUPER+<key not reported>".into(),
+            action: "__lua 9; Switch to group window 1".into(),
+            context: None,
+            certainty: UNRESOLVED_KEY_CERTAINTY.into(),
+        });
+
+        let filtered = filter(inventory.clone(), Some("super+1"), None, None, None, None);
+
+        assert!(filtered.bindings.is_empty());
+        assert_eq!(filtered.possible_matches.len(), 2);
+        let text = render_text_with_options(
+            &filtered,
+            RenderOptions {
+                color: crate::style::ColorChoice::Never,
+                verbose: false,
+                width: 400,
+            },
+        );
+        assert!(text.contains("No matching bindings were enumerated"));
+        assert!(text.contains(
+            "2 bindings with these modifiers have keys the source does not report; any of them may match:"
+        ));
+        assert!(text.contains("Super+<key not reported> __lua 2; Switch to workspace 2"));
+        assert!(!text.contains("Switch to group window"));
+        for version in [1, 2] {
+            let value: serde_json::Value =
+                serde_json::from_str(&render_json(&filtered, version)).unwrap();
+            assert_eq!(value["possible_matches"].as_array().unwrap().len(), 2);
+        }
+
+        // Without a key filter nothing is a "possible" match.
+        assert!(
+            filter(inventory, None, None, None, None, None)
+                .possible_matches
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn extension_inventory_stops_at_the_shared_diagnostic_budget() {
         let mut environment = crate::environment::Environment::collect();
         environment.compositor_context.desktop = Some("budget".into());
@@ -486,6 +588,7 @@ mod tests {
             bindings: Vec::new(),
             unavailable: Vec::new(),
             limitations: Vec::new(),
+            possible_matches: Vec::new(),
         };
         crate::command::with_deadline(std::time::Duration::ZERO, || {
             append_extension_inventory(&environment, &mut inventory);

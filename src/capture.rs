@@ -7,6 +7,13 @@ use std::time::Duration;
 use crate::listen::ObservedKey;
 use crate::xkb::XkbKeycode;
 
+/// Compositor-side failsafe for leased runtime hooks: the compositor removes
+/// the hook on its own unless the listener renews it, so a listener killed
+/// without cleanup (for example by SIGKILL) cannot leave a hook behind.
+pub const CAPTURE_LEASE_MS: u64 = 5000;
+/// Renewal cadence for [`CAPTURE_LEASE_MS`], comfortably inside the lease.
+pub const CAPTURE_LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Whether a capture backend should consume the captured shortcut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CapturePolicy {
@@ -128,6 +135,11 @@ pub trait CaptureBackend {
         timeout: Duration,
     ) -> Result<ChordReleaseStatus, String>;
     fn is_suppressing(&self) -> bool;
+    /// Whether the armed hook holds a compositor-side lease that expires
+    /// unless renewed through [`NativeCaptureTransport::renew_lease`].
+    fn holds_lease(&self) -> bool {
+        false
+    }
     fn close(&mut self) -> io::Result<()>;
 
     /// Optional backend-specific warning shown before arming.

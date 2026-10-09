@@ -215,8 +215,15 @@ fn unicode_width(character: char) -> usize {
 }
 
 pub fn human_key(key: &crate::key::KeyCombo) -> String {
-    let mut parts = Vec::new();
-    for (mask, name) in [
+    let mut parts = human_modifiers(key.modmask());
+    parts.push(human_key_name(key.key()));
+    parts.join("+")
+}
+
+/// Human names of the modifiers in an X11/Hyprland modmask, in display
+/// order. Mod5 is shown as AltGr: XKB layouts put ISO_Level3_Shift there.
+pub fn human_modifiers(modmask: u32) -> Vec<String> {
+    [
         (4, "Ctrl"),
         (8, "Alt"),
         (1, "Shift"),
@@ -224,14 +231,12 @@ pub fn human_key(key: &crate::key::KeyCombo) -> String {
         (2, "Caps"),
         (16, "Mod2"),
         (32, "Mod3"),
-        (128, "Mod5"),
-    ] {
-        if key.modmask() & mask != 0 {
-            parts.push(name.to_owned());
-        }
-    }
-    parts.push(human_key_name(key.key()));
-    parts.join("+")
+        (128, "AltGr"),
+    ]
+    .into_iter()
+    .filter(|(mask, _)| modmask & mask != 0)
+    .map(|(_, name)| name.to_owned())
+    .collect()
 }
 
 /// Normalize a stored machine/display key for human-facing text while
@@ -239,6 +244,20 @@ pub fn human_key(key: &crate::key::KeyCombo) -> String {
 /// one compact combination at a time.
 pub fn human_key_text(value: &str) -> String {
     let compact = value.replace(" + ", "+");
+    // A placeholder such as `SUPER+<key not reported>` names no key; only
+    // its modifiers are humanized.
+    if let Some((prefix, placeholder)) = compact.split_once('<') {
+        let modifiers = prefix
+            .split('+')
+            .filter(|part| !part.is_empty())
+            .map(|part| crate::key::modifier_mask(part).map(human_modifiers))
+            .collect::<Option<Vec<_>>>();
+        if let Some(modifiers) = modifiers {
+            let mut parts: Vec<String> = modifiers.into_iter().flatten().collect();
+            parts.push(format!("<{placeholder}"));
+            return parts.join("+");
+        }
+    }
     if let Ok(key) = compact.parse::<crate::key::KeyCombo>() {
         return human_key(&key);
     }
@@ -296,6 +315,23 @@ mod tests {
         assert_eq!(human_key(&key), "Super+K");
         assert_eq!(human_key_text("CTRL + Z"), "Ctrl+Z");
         assert_eq!(human_key_text("CTRL+X CTRL+S"), "Ctrl+X Ctrl+S");
+    }
+
+    #[test]
+    fn keeps_unreported_key_placeholders_readable() {
+        assert_eq!(
+            human_key_text("ALT+SUPER+<key not reported>"),
+            "Alt+Super+<key not reported>"
+        );
+        assert_eq!(human_key_text("CTRL+<"), "Ctrl+<");
+    }
+
+    #[test]
+    fn names_mod5_altgr() {
+        let key: crate::key::KeyCombo = "altgr+shift+q".parse().unwrap();
+        assert_eq!(human_key(&key), "Shift+AltGr+Q");
+        assert_eq!(human_key_text("MOD5+Q"), "AltGr+Q");
+        assert_eq!(human_modifiers(64 | 128), ["Super", "AltGr"]);
     }
 
     #[test]

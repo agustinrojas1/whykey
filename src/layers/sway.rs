@@ -1,33 +1,50 @@
 use std::env;
-use std::process::Command;
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-
-use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::LayerResult;
+
+use super::tiling::Family;
 
 /// Read-only Sway compositor adapter.
 pub struct Sway;
 
-#[derive(Debug, Deserialize, Serialize)]
-struct SwayBinding {
-    #[serde(default)]
-    command: String,
-    #[serde(default)]
-    keysym: serde_json::Value,
-    #[serde(default)]
-    symbols: serde_json::Value,
-    #[serde(default)]
-    input_code: Option<u32>,
-    #[serde(default)]
-    keycodes: Vec<u32>,
-    #[serde(default)]
-    event_state_mask: serde_json::Value,
-    #[serde(default)]
-    release: bool,
-    #[serde(default)]
-    exact: bool,
+/// Sway forwards the press of a `--release` binding to the focused client
+/// (`handle_key_event` in sway/input/keyboard.c only marks the event handled
+/// when the held binding runs on release).
+const FAMILY: Family = Family {
+    layer: "Sway",
+    source: "Sway",
+    msg: "swaymsg",
+    msg_args: &["-r"],
+    release_press_forwarded: Some(true),
+    config_candidates,
+};
+
+/// The search order of sway's `get_config_path` (sway/main.c), used to find
+/// which file `GET_CONFIG` returned so relative includes resolve.
+fn config_candidates() -> Vec<PathBuf> {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".config")));
+    let mut candidates = Vec::new();
+    if let Some(home) = &home {
+        candidates.push(home.join(".sway/config"));
+    }
+    if let Some(config_home) = &config_home {
+        candidates.push(config_home.join("sway/config"));
+    }
+    if let Some(home) = &home {
+        candidates.push(home.join(".i3/config"));
+    }
+    if let Some(config_home) = &config_home {
+        candidates.push(config_home.join("i3/config"));
+    }
+    candidates.push(PathBuf::from("/etc/sway/config"));
+    candidates.push(PathBuf::from("/etc/i3/config"));
+    candidates
 }
 
 pub fn applicable() -> bool {
@@ -47,141 +64,57 @@ pub fn applicable() -> bool {
 }
 
 pub fn ipc_available() -> bool {
-    run_sway_version().is_ok()
+    super::tiling::version_available(&FAMILY)
 }
 
-/// Return Sway bindings as inventory records for the global listing.
+/// Return Sway bindings, parsed from the running config, for the global
+/// listing.
 pub fn binding_inventory() -> Result<Vec<super::BindingRecord>, String> {
-    let value =
-        binding_inventory_json().map_err(|error| format!("{}{}", META.error_prefix, error))?;
-    Ok(super::collect_ipc_json_bindings(&value, "Sway"))
-}
-
-fn binding_inventory_json() -> Result<serde_json::Value, String> {
-    let output = run_swaymsg()?;
-    serde_json::to_value(output)
-        .map_err(|error| format!("could not serialize Sway bindings: {error}"))
+    super::tiling::inventory(&FAMILY).map_err(|error| format!("Sway: {error}"))
 }
 
 pub fn focused_pid() -> Result<u32, String> {
-    let mut command = Command::new("swaymsg");
-    command.args(["-t", "get_tree", "-r"]);
-    let output = command::output(&mut command).map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if message.is_empty() {
-            format!("swaymsg exited with {}", output.status)
-        } else {
-            format!("swaymsg: {message}")
-        });
-    }
-    let tree: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("swaymsg returned invalid tree data: {error}"))?;
-    super::tiling::focused_pid_in_tree(&tree)
-        .ok_or_else(|| "Sway focused tree node does not expose a valid PID".into())
+    super::tiling::focused_pid(&FAMILY)
 }
-
-const META: super::tiling::TilingMeta = super::tiling::TilingMeta {
-    layer: "Sway",
-    error_prefix: "Sway: ",
-    unavailable_summary: "could not inspect effective Sway bindings",
-    no_match_source: "swaymsg -t get_bindings -r",
-    match_source: "source: swaymsg -t get_bindings -r",
-    possible_note: "Sway binding may accept additional modifiers because exact matching is not enabled",
-    show_release: true,
-};
 
 impl Sway {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        let loaded =
-            run_swaymsg().map(|bindings| bindings.iter().map(to_ipc_binding).collect::<Vec<_>>());
-        super::tiling::inspect(&META, loaded, key)
-    }
-}
-
-fn run_swaymsg() -> Result<Vec<SwayBinding>, String> {
-    let mut command = Command::new("swaymsg");
-    command.args(["-t", "get_bindings", "-r"]);
-    let output = command::output(&mut command).map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if message.is_empty() {
-            format!("swaymsg exited with {}", output.status)
-        } else {
-            format!("swaymsg: {message}")
-        });
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("swaymsg returned invalid binding data: {error}"))
-}
-
-fn run_sway_version() -> Result<(), String> {
-    let mut command = Command::new("swaymsg");
-    command.args(["-t", "get_version"]);
-    let output = command::output(&mut command).map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(if message.is_empty() {
-            format!("swaymsg exited with {}", output.status)
-        } else {
-            format!("swaymsg: {message}")
-        })
-    }
-}
-
-fn to_ipc_binding(binding: &SwayBinding) -> super::tiling::IpcBinding {
-    let mut keys = super::tiling::string_values(&binding.keysym);
-    keys.extend(super::tiling::string_values(&binding.symbols));
-    super::tiling::IpcBinding {
-        command: binding.command.clone(),
-        keys,
-        input_code: binding.input_code,
-        keycodes: binding.keycodes.clone(),
-        mask: super::json_u32(&binding.event_state_mask),
-        release: binding.release,
-        exact: binding.exact,
+        super::tiling::inspect(&FAMILY, super::tiling::load(&FAMILY), key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layers::Outcome;
+    use crate::layers::tiling::{LoadedConfig, config_reply, inspect, parse_config};
 
     #[test]
-    fn converts_sway_keysym_and_symbol_fields() {
-        let binding: SwayBinding = serde_json::from_str(
-            r#"{
-                "command": "exec test",
-                "keysym": "Return",
-                "symbols": ["KP_Enter"],
-                "input_code": 36,
-                "keycodes": [36],
-                "event_state_mask": 64
-            }"#,
-        )
-        .unwrap();
-        let ipc = to_ipc_binding(&binding);
-        assert_eq!(ipc.keys, vec!["Return", "KP_Enter"]);
-        assert_eq!(ipc.mask, Some(64));
-        assert_eq!(ipc.input_code, Some(36));
-        assert_eq!(ipc.keycodes, vec![36]);
-    }
-
-    #[test]
-    fn session_fixture_covers_positive_and_ipc_failure_shapes() {
+    fn session_fixture_is_a_get_config_reply_with_a_consuming_binding() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/sessions/sway.json")).unwrap();
         assert_eq!(fixture["id"], "sway");
-        let binding: SwayBinding = serde_json::from_value(fixture["bindings"][0].clone()).unwrap();
-        assert_eq!(to_ipc_binding(&binding).keys, vec!["Return"]);
+        let (main, provided) = config_reply(&fixture["get_config"]).unwrap();
+        let loaded = LoadedConfig {
+            parsed: parse_config(&main, provided),
+            active_mode: fixture["get_binding_state"]["name"]
+                .as_str()
+                .map(str::to_owned),
+        };
+        let result = inspect(&FAMILY, Ok(loaded), &"super+return".parse().unwrap());
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(result.details.iter().any(|line| line.contains("exec foot")));
         assert_eq!(fixture["focused_tree"]["pid"], 4242);
         assert!(fixture["ipc_failure"].as_str().unwrap().contains("swaymsg"));
-        assert!(
-            serde_json::from_str::<Vec<SwayBinding>>("[]")
-                .unwrap()
-                .is_empty()
+    }
+
+    #[test]
+    fn searches_sway_config_locations_in_sway_order() {
+        let candidates = config_candidates();
+        assert_eq!(
+            candidates.last().map(PathBuf::as_path),
+            Some(std::path::Path::new("/etc/i3/config"))
         );
+        assert!(candidates.contains(&PathBuf::from("/etc/sway/config")));
     }
 }

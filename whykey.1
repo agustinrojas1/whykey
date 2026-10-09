@@ -1,6 +1,7 @@
-.TH WHYKEY 1 "September 2026" "whykey 1.2.1" "User Commands"
+.TH WHYKEY 1 "October 2026" "whykey 1.3.0" "User Commands"
 .SH NAME
 whykey \- explain which layer handles a keyboard shortcut
+.SH SYNOPSIS
 .B whykey
 .RB [ --verbose ] [ --json ] [ --schema-version\ 2 ]
 .I combination
@@ -12,7 +13,8 @@ whykey \- explain which layer handles a keyboard shortcut
 .B whykey listen
 .RB [ --json ] [ --ndjson ] [ --repeat ] [ --timeout seconds ] [ --count n ]
 .RB [ --events all ] [ --suppress | --no-suppress | --pass-through ]
-.RB [ --evdev ] [ --device path ] [ --verbose ]
+.RB [ --dry-run ] [ --explain-capture ] [ --terminal ]
+.RB [ --evdev ] [ --device path ] [ --output path ] [ --verbose ]
 .br
 .B whykey doctor
 .RB [ --json ] [ --schema-version\ 2 ]
@@ -21,10 +23,10 @@ whykey \- explain which layer handles a keyboard shortcut
 .RB [ --all ] [ --json ] [ --schema-version\ 2 ]
 .br
 .B whykey bindings
-.RB [ --json ]
+.RB [ --key\ text ] [ --action\ text ] [ --source\ text ] [ --device\ text ] [ --submap\ text ] [ --json ]
 .br
 .B whykey conflicts
-.RB [ --json ]
+.RB [ --key\ text ] [ --action\ text ] [ --source\ text ] [ --device\ text ] [ --submap\ text ] [ --json ]
 .br
 .B whykey extension
 .I program combination
@@ -45,7 +47,16 @@ and fail with an explicit build-time platform message.
 .B whykey
 inspects a key combination through the typed input chain: an optional
 remapper, the selected compositor, one terminal layer, input-method context,
-the TTY driver, an optional tmux, GNU Screen, or Zellij session,
+the TTY driver, an optional tmux, GNU Screen, or Zellij session, the
+interactive application, and the shell.
+It never edits configuration files and never executes the inspected
+shortcut.
+.B listen
+on Hyprland installs a temporary, leased Lua hook (see
+.BR listen ),
+and compositor extension manifests and
+.B whykey extension
+run the programs the user configured or named.
 .PP
 Uncertainty is reported explicitly, with a text assessment or JSON
 .B confidence
@@ -63,8 +74,16 @@ state.
 In an SSH session without local Hyprland IPC, Hyprland is reported as not
 applicable and the remote terminal path remains a valid doctor target.
 .PP
-The desktop adapters also cover GNOME, KDE Plasma, Xfce, Cinnamon, MATE,
-Niri, dwl, River, Wayfire, labwc, bspwm/sxhkd, Openbox, X11 xbindkeys, AwesomeWM, Qtile, and XMonad.
+The desktop adapters also cover herbstluftwm, GNOME, KDE Plasma, Xfce,
+Cinnamon, MATE, Niri, dwl, River, Wayfire, labwc, bspwm/sxhkd, Openbox, X11
+xbindkeys, AwesomeWM, Qtile, and XMonad. Sway and i3 are read by parsing the
+running configuration returned by
+.B get_config
+and matching the mode reported by
+.BR get_binding_state .
+KDE Plasma and the Niri, dwl, River, Wayfire, labwc, sxhkd, Openbox,
+xbindkeys, AwesomeWM, Qtile, and XMonad adapters parse configuration files
+only and cannot observe runtime activation.
 Xfce is queried through the live
 .B xfce4-keyboard-shortcuts
 channel; Cinnamon and MATE are queried through their GSettings schemas. These
@@ -88,8 +107,15 @@ layers and sequence steps. Set
 to override it.
 .PP
 Literal Hyprland Lua helper calls provide source evidence and can resolve a
-literal modifier-insensitivity option; Lua is never executed. Same-key
-bindings in inactive submaps are listed as inactive,
+literal modifier-insensitivity option; Lua is never executed. A
+.B __lua
+or plugin dispatcher consumes the key unless its callback returns
+.BR pass_event ,
+which whykey cannot observe. Bindings that Hyprland reports with an empty
+key are matched through a literal Lua
+.B code:
+hint, or are otherwise reported as possible matches for their modifiers.
+Same-key bindings in inactive submaps are listed as inactive,
 while dynamic configuration, unknown application modes, and
 device-specific physical origins remain conditional unless an evdev capture
 provides a matching device and keycode; evdev keycodes are converted to the
@@ -102,13 +128,24 @@ discarding valid entries.
 .BI combination
 Inspect a normalized combination such as
 .BR ctrl+left ", " ctrl+z ", or " super+c .
+Join modifiers and the key with
+.BR + .
+Modifiers are ctrl, alt, shift, super, hyper, caps, num, and altgr (Mod5,
+also iso_level3_shift), plus mod2, mod3, and mod5. The key is a single
+character, a named key such as return, left, comma, or f1, an XF86 media
+key, or
+.BR code:N .
+An unknown key name exits with status 2 and suggests the closest valid name.
 .TP
 .B inspect combination-or-sequence
 Inspect one or more whitespace-separated combinations, such as
-.B ctrl+x ctrl+s .
-Each step is analyzed independently and keeps its own evidence and
-uncertainty. Prefix state and temporal precedence between steps are not
-inferred yet; use the separate
+.B ctrl+x ctrl+e .
+Each step keeps its own evidence and uncertainty, and prefix state carries
+across steps: Readline multi-key bindings and prefix keys, tmux prefix and
+.B switch-client -T
+tables, and the GNU Screen command escape apply to the keys that follow.
+A layer only receives the earlier keys that actually reached it. A bare key
+is looked up only in tmux's root or active table. Use the separate
 .B conflicts
 command for enumerated binding collisions. Focused-window discovery is supported by Hyprland, Sway, and i3; other
 desktops report the missing API.
@@ -123,31 +160,51 @@ user's environment.
 .TP
 .B listen
 Capture the next key reaching the terminal or, when available, through native
-compositor capture (currently a Hyprland hook). The Hyprland backend changes
-the compositor session state temporarily and restores the previous submap before reporting;
-it does not edit configuration files. Press Escape twice within 300
-milliseconds to exit. Use
-.B --repeat
-to capture more than one event.
+compositor capture (Hyprland, or Sway IPC). On Hyprland,
+.B listen
+installs a temporary Lua hook: the default pass-through hook only observes,
+and
 .B --suppress
-is the safe default and can be stated explicitly;
+also activates a private submap and restores the previous submap before
+reporting. Each hook holds a 5-second lease that
+.B listen
+renews; it is removed on exit, and Hyprland drops it if the lease expires.
+Configuration files are never edited. Press Escape or Ctrl+C to exit.
+With the Kitty keyboard protocol active (Kitty, Ghostty, foot, WezTerm),
+Ctrl+Z is captured and explained like any other key. On legacy-encoding
+terminals Ctrl+Z, like an external
+.BR "kill -TSTP" ,
+suspends the job: the terminal is restored and the hook removed before the
+job stops, and capture re-arms when the job continues. Use
+.B --repeat
+to capture more than one event. Capture without suppression is the default;
 .B --no-suppress
-allows the normal compositor action, with
+states it explicitly, and
 .B --pass-through
-retained as a compatibility alias.
+is a compatibility alias for it.
 .B --timeout seconds
 sets a wall-clock deadline for the capture.
 .B --count n
 stops after n captured reports.
 .B --events all
-includes modifier-only and release events in evdev mode.
+includes modifier-only and release events with native compositor or evdev
+capture.
 .TP
 .B --suppress
 Opt into temporarily suppressing native compositor shortcuts while capturing.
-Capture is observe-only by default; Sway IPC is pass-through-only.
+Only Hyprland supports suppression. When native suppression is unavailable
+(including on Sway), the command fails with status 1 instead of falling back
+to terminal capture. Combining it with
+.BR --terminal ,
+.BR --evdev ,
+.BR --device ,
+or
+.B --no-suppress
+is a usage error (status 2).
 .TP
 .B --no-suppress
-Capture through the native compositor without suppressing its shortcut.
+Capture through the native compositor without suppressing its shortcut. This
+is the default; the option states it explicitly.
 .B --pass-through
 is a compatibility alias.
 .TP
@@ -193,6 +250,7 @@ Text output shows applicable and available entries by default;
 lists the complete adapter inventory.
 The JSON form distinguishes implemented capabilities from planned ones and
 from integrations unavailable in the current session.
+.TP
 .B bindings
 Enumerate effective bindings exposed by detected compositor adapters. The
 versioned output marks the inventory incomplete when application, plugin,
@@ -241,7 +299,7 @@ to add conditional static bindings and optional focused-window PID evidence
 for an otherwise unsupported compositor. Commands are argv arrays, bounded to
 two seconds and one MiB. Tier 4 manifests never provide
 .B listen
-capture; native Hyprland, terminal, and evdev remain the capture transports.
+capture; native Hyprland and Sway, terminal, and evdev remain the capture transports.
 .TP
 .B replay file
 Read and render one or more concatenated schema-v1 or schema-v2 JSON reports
@@ -252,6 +310,9 @@ devices, execute actions, or inject keys. Files are limited to 16 MiB.
 Print an optional shell wrapper that supplies live binding snapshots to
 .B whykey .
 Evaluate it in the current shell; it does not modify shell startup files.
+Without it, Bash answers come from inputrc files and Readline defaults, and
+Zsh and Fish answers come from literal configuration and common defaults.
+Answers based on defaults are reported as unverified.
 .TP
 .B completions bash|zsh|fish
 Print a completion script for the selected shell.
@@ -299,8 +360,14 @@ Stop after the given positive number of captured reports. A count greater
 than one implies repeated capture.
 .TP
 .B --events all
-Include modifier-only and release events when using evdev. Normal capture
-reports completed key presses.
+Include modifier-only and release events with native compositor or evdev
+capture. Normal capture reports completed key presses.
+.TP
+.B --terminal
+Force terminal-only capture of keys that reach the terminal.
+.TP
+.BI --output path
+Write listen reports to a file.
 .TP
 .B --evdev
 Use the Linux evdev pre-compositor capture backend. It requires read access
@@ -325,7 +392,10 @@ all required prerequisites were available.
 An unavailable prerequisite or inspection error.
 .TP
 .B 2
-Invalid command-line usage or key combination.
+Invalid command-line usage or key combination, including an unknown key name
+and a
+.B --suppress
+combination that cannot suppress.
 .SH EXAMPLES
 .EX
 whykey ctrl+left

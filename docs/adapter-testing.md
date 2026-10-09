@@ -9,8 +9,10 @@ gate.
 `tools/check_adapter_gate.sh` validates those boundaries and deliberately
 checks that an incomplete entry is rejected. The harness binaries under
 `tests/fixtures/adapter_harness/bin/` provide stock-CI stand-ins for
-`hyprctl`, `swaymsg`, and `i3-msg`; `socket2_server.py` provides a local Unix
-socket for protocol tests. They never contact a user's compositor.
+`hyprctl`, `swaymsg`, and `i3-msg`. The Sway and i3 stand-ins answer
+`get_config`, `get_binding_state`, `get_tree`, and `get_version` with real
+reply shapes; `socket2_server.py` provides a local Unix socket for protocol
+tests. They never contact a user's compositor.
 
 Capture lifecycle tests must cover:
 
