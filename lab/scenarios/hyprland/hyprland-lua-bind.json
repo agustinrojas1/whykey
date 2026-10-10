@@ -1,0 +1,32 @@
+{
+  "id": "hyprland-lua-bind",
+  "description": "a Lua config hl.bind with a description fires and consumes the key",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "Hyprland",
+    "detail": "Lab fire"
+  }
+}

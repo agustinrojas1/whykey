@@ -214,7 +214,7 @@ pub(crate) enum Parsed<T> {
     Run(T),
 }
 
-const LISTEN_HELP: &str = "Capture one key and explain its path. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression. Without native capture it falls back to terminal capture, except that --suppress fails instead; --suppress cannot be combined with --terminal, --evdev, --device, or --window. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --window opens a focused probe window and reports whether the desktop delivered the key or consumed it. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor, evdev, or window capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file.";
+const LISTEN_HELP: &str = "Capture one key and explain its path. By default the first usable backend wins: native compositor capture (Hyprland, Sway), then a focused probe window when a Wayland or X11 display is usable (press the shortcut there; it reports whether the desktop delivered the key or consumed it), then terminal capture. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression, which fails instead of falling back; --suppress cannot be combined with --terminal, --evdev, --device, or --window. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --window forces the probe window and --terminal forces terminal capture. --dry-run prints the capture chain and the backend it selects without arming it; --explain-capture prints detection evidence and the chain.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor, evdev, or window capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file.";
 
 pub(crate) fn parse_listen_arguments(
     arguments: Vec<String>,
@@ -939,8 +939,14 @@ pub(crate) mod help {
         OptionSpec::switch("--pass-through", "compatibility alias of --no-suppress")
             .alternative()
             .alias(),
-        OptionSpec::switch("--dry-run", "select a capture backend without arming it"),
-        OptionSpec::switch("--explain-capture", "show capture detection evidence"),
+        OptionSpec::switch(
+            "--dry-run",
+            "print the capture chain and selected backend without arming it",
+        ),
+        OptionSpec::switch(
+            "--explain-capture",
+            "show capture detection evidence and the capture chain",
+        ),
         OptionSpec::switch("--terminal", "force terminal capture").short("-t"),
         OptionSpec::switch(
             "--evdev",

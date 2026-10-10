@@ -1,0 +1,32 @@
+{
+  "id": "hyprland-release-bind",
+  "description": "bindr (release) fires when the key is released",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bindr = SUPER, T, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "Hyprland",
+    "detail": "exec touch /tmp/fired"
+  }
+}

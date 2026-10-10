@@ -1,0 +1,55 @@
+{
+  "id": "sway-window-bound",
+  "description": "listen --window under Sway: a bound Super combo fires and never reaches whykey's probe window",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "bindsym Mod4+Return exec sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+return"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "vkbd": [
+        "super+return"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired",
+      "equals": "x\nx"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--window",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": "window",
+    "observation": true,
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    },
+    "combo": {
+      "key": "",
+      "modifiers": 64
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "hyprland-keysym-comma",
+  "description": "a bind on the keysym name comma fires for Super+,",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, comma, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+comma"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+comma"
+    ],
+    "layer": "Hyprland",
+    "detail": "exec touch /tmp/fired"
+  }
+}

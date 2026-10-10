@@ -2,12 +2,20 @@
 """In-container scenario driver for the whykey reality lab.
 
 Runs exactly one scenario inside a fresh lab container: writes the scenario
-files, starts the real programs (Sway, Xvfb + X11 window managers or hotkey
-daemons, a session bus, or a shell in a pty), optionally opens an independent
-input probe (foot running lab/keylog.py on Wayland, xev on X11), performs the
-scenario actions with real synthetic input, records ground truth from the
-programs' reaction, and finally runs whykey. The result is printed as one JSON
-line prefixed with RESULT_MARKER; lab/run.py compares it with whykey's verdict.
+files, starts the real programs (Sway, Hyprland, Xvfb + X11 window managers or
+hotkey daemons, a session bus, or a shell in a pty), optionally opens an
+independent input probe (foot running lab/keylog.py on Wayland, xev on X11),
+performs the scenario actions with real synthetic input, records ground truth
+from the programs' reaction, and finally runs whykey. The result is printed as
+one JSON line prefixed with RESULT_MARKER; lab/run.py compares it with
+whykey's verdict.
+
+Hyprland cannot run in a plain container: aquamarine needs a KMS device to
+allocate buffers even for headless outputs. A "hyprland" scenario therefore
+boots the image's own kernel in a KVM guest (virtme-ng, root filesystem = this
+container over 9p, virtio-gpu for KMS, Mesa kms_swrast/llvmpipe for GL) and
+runs this driver again inside it with WHYKEY_LAB_VM=1; the guest writes its
+result to VM_RESULT_DIR, shared read-write with the container.
 
 Stdlib only; the scenario format is documented in lab/run.py.
 """
@@ -35,8 +43,13 @@ LOG_DIR = "/tmp/lab-logs"
 RUNTIME_DIR = "/tmp/rt"
 WHYKEY = "/w/whykey"
 X_DISPLAY = ":5"
+# Title of whykey's own probe window (`whykey listen --window`).
+WHYKEY_WINDOW_TITLE = "whykey: press a shortcut here (Esc exits)"
 PROBE_TITLE = "whykey-probe"
 INPUT_SETTLE = 0.3
+VM_INPUT_SETTLE = 1.0
+VM_RESULT_DIR = "/tmp/vm-result"
+VM_TIMEOUT = 150
 
 # Keysyms a probe ignores when deciding whether "the key" arrived: synthetic
 # chords press and release modifiers around the key itself.
@@ -163,6 +176,7 @@ class Lab:
         self.pty: Pty | None = None
         self.probe: str | None = None
         self.steps: list[str] = []
+        self.settle = INPUT_SETTLE
 
     # -- process helpers -------------------------------------------------
     def spawn(self, name: str, argv: list[str], env: dict | None = None) -> subprocess.Popen:
@@ -251,6 +265,43 @@ class Lab:
         self.env["WAYLAND_DISPLAY"] = os.path.basename(display)
         wait_for(lambda: self.ok(["swaymsg", "-t", "get_version"]), 10.0, "Sway IPC")
 
+    def start_hyprland(self) -> None:
+        """Hyprland on the guest's virtio-gpu KMS device (see the module docstring)."""
+        if not glob.glob("/dev/dri/card*"):
+            raise LabError("no KMS device: Hyprland scenarios must run inside the lab VM")
+        argv = ["Hyprland", "--i-am-really-stupid"]  # root, in a throwaway VM
+        config = self.scenario.get("hyprland", {}).get("config")
+        if config:
+            argv += ["--config", config]
+        env = dict(self.env)
+        # No logind/seatd in the guest: libseat opens devices directly.
+        env["LIBSEAT_BACKEND"] = "noop"
+        self.spawn("Hyprland", argv, env)
+        socket = wait_for(
+            lambda: (self.ensure_alive(), glob.glob(f"{RUNTIME_DIR}/hypr/*/.socket.sock"))[1],
+            30.0,
+            "the Hyprland IPC socket",
+        )[0]
+        display = wait_for(
+            lambda: sorted(glob.glob(f"{RUNTIME_DIR}/wayland-*[0-9]")),
+            10.0,
+            "the Wayland socket",
+        )[0]
+        # What Hyprland exports to every client it starts (checked with an
+        # `exec env` bind); whykey run from a terminal in the session inherits it.
+        self.env.update(
+            HYPRLAND_INSTANCE_SIGNATURE=os.path.basename(os.path.dirname(socket)),
+            WAYLAND_DISPLAY=os.path.basename(display),
+            XDG_CURRENT_DESKTOP="Hyprland",
+            XDG_SESSION_TYPE="wayland",
+        )
+        wait_for(lambda: self.ok(["hyprctl", "version"]), 30.0, "Hyprland IPC")
+        version = self.run(["hyprctl", "version"]).stdout.decode().splitlines()[0]
+        self.steps.append(f"hyprctl version: {version}")
+        # Binds exec through Hyprland in a 2-vCPU guest that shares the host
+        # with other scenarios; give their effects time to land.
+        self.settle = VM_INPUT_SETTLE
+
     def start_x11(self) -> None:
         x11 = self.scenario.get("x11", {})
         # -noreset: Xvfb otherwise resets when its last client disconnects,
@@ -323,7 +374,7 @@ class Lab:
                  "python3", "/lab/keylog.py", "/tmp/probe.log"],
             )
             wait_for(lambda: os.path.exists("/tmp/probe.log.ready"), 10.0, "the foot probe")
-            wait_for(self._sway_probe_focused, 5.0, "probe focus")
+            wait_for(self._probe_focused, 5.0, "probe focus")
         elif kind == "x11":
             # xev uses stdio; without line buffering its log lags the input.
             self.spawn("probe", ["stdbuf", "-oL", "xev", "-event", "keyboard", "-name", PROBE_TITLE])
@@ -348,17 +399,43 @@ class Lab:
         self.probe = kind
         self.steps.append(f"probe {kind} focused")
 
-    def _sway_probe_focused(self) -> bool:
+    def _focused_window(self) -> tuple[str, str]:
+        """(Wayland app id, title) of the window with keyboard focus; on X11
+        the app id is empty. ("", "") when nothing has focus."""
+        environment = self.scenario["environment"]
+        if environment == "hyprland":
+            completed = self.run(["hyprctl", "activewindow", "-j"], check=False)
+            try:
+                window = json.loads(completed.stdout or b"{}")
+            except json.JSONDecodeError:
+                return "", ""
+            return window.get("class") or "", window.get("title") or ""
+        if environment == "x11":
+            completed = self.run(["xdotool", "getwindowfocus", "getwindowname"], check=False)
+            return "", completed.stdout.decode("utf-8", "replace").strip()
         completed = self.run(["swaymsg", "-t", "get_tree"], check=False)
         if completed.returncode != 0:
-            return False
+            return "", ""
 
-        def focused(node: dict) -> bool:
-            if node.get("focused") and node.get("app_id") == PROBE_TITLE:
-                return True
-            return any(focused(child) for child in node.get("nodes", []) + node.get("floating_nodes", []))
+        def focused(node: dict) -> tuple[str, str] | None:
+            if node.get("focused") and node.get("type") in ("con", "floating_con"):
+                return node.get("app_id") or "", node.get("name") or ""
+            for child in node.get("nodes", []) + node.get("floating_nodes", []):
+                found = focused(child)
+                if found:
+                    return found
+            return None
 
-        return focused(json.loads(completed.stdout))
+        return focused(json.loads(completed.stdout)) or ("", "")
+
+    def _probe_focused(self) -> bool:
+        """The foot probe (app id PROBE_TITLE) has focus."""
+        app_id, title = self._focused_window()
+        return app_id == PROBE_TITLE and title != WHYKEY_WINDOW_TITLE
+
+    def _whykey_window_focused(self) -> bool:
+        """whykey's own probe window (`listen --window`) has focus."""
+        return self._focused_window()[1] == WHYKEY_WINDOW_TITLE
 
     def probe_keys(self) -> list[str]:
         """Non-modifier keys the probe client received, in order."""
@@ -392,6 +469,9 @@ class Lab:
         if "sleep" in action:
             time.sleep(float(action["sleep"]))
             return
+        if "start_whykey" in action:
+            self.start_whykey_background()
+            return
         if "wtype" in action:
             self.run(["wtype", *action["wtype"]])
         elif "vkbd" in action:
@@ -412,7 +492,7 @@ class Lab:
         else:
             raise LabError(f"unknown action {action}")
         self.steps.append(f"action {json.dumps(action)}")
-        time.sleep(float(action.get("settle", INPUT_SETTLE)))
+        time.sleep(float(action.get("settle", self.settle)))
 
     # -- ground truth ----------------------------------------------------
     def check_fired(self, spec: dict) -> tuple[bool, str]:
@@ -459,10 +539,77 @@ class Lab:
         }
 
     # -- whykey ----------------------------------------------------------
+    def start_whykey_background(self) -> None:
+        """`run: background`: start whykey (e.g. `listen --window`) before the
+        actions, or at a {"start_whykey": true} action, and wait until it is
+        ready: "ready": "window" waits for its probe window to have focus,
+        {"stderr": regex} for a line on its stderr. "tty": true runs it with a
+        controlling terminal (`script`), as `whykey listen` requires for
+        native capture; stdout/stderr still go to files, not the terminal."""
+        spec = self.scenario["whykey"]
+        env = dict(self.env)
+        env.update(spec.get("env", {}))
+        argv = [WHYKEY, *spec["args"], "--json", "--schema-version", "2"]
+        if spec.get("tty"):
+            command = f"{shlex.join(argv)} >/tmp/whykey.out 2>/tmp/whykey.err"
+            open("/tmp/whykey.err", "wb").close()
+            self.whykey_output = ()
+            self.whykey_process = subprocess.Popen(
+                ["script", "-qec", command, "/dev/null"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                cwd="/root",
+                start_new_session=True,
+            )
+        else:
+            self.whykey_output = (open("/tmp/whykey.out", "wb"), open("/tmp/whykey.err", "wb"))
+            self.whykey_process = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=self.whykey_output[0],
+                stderr=self.whykey_output[1],
+                env=env,
+                cwd="/root",
+                start_new_session=True,
+            )
+        self.steps.append(f"spawn whykey {shlex.join(spec['args'])}")
+        condition = spec.get("ready")
+
+        def ready() -> bool:
+            with open("/tmp/whykey.err", encoding="utf-8", errors="replace") as handle:
+                stderr = handle.read()
+            if self.whykey_process.poll() is not None:
+                raise LabError(f"whykey exited with {self.whykey_process.returncode} "
+                               f"before it was ready: {stderr.strip()}")
+            if condition == "window":
+                return self._whykey_window_focused()
+            if isinstance(condition, dict) and "stderr" in condition:
+                return re.search(condition["stderr"], stderr, re.MULTILINE) is not None
+            return True
+
+        wait_for(ready, 10.0, f"whykey to be ready ({condition})")
+        time.sleep(float(spec.get("settle", 0.3)))
+        self.steps.append("whykey ready")
+
     def run_whykey(self) -> dict:
         spec = self.scenario["whykey"]
         args = [*spec["args"], "--json", "--schema-version", "2"]
-        if spec.get("run", "direct") == "pty":
+        mode = spec.get("run", "direct")
+        if mode == "background":
+            try:
+                exit_code = self.whykey_process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.whykey_process.pid, 9)
+                exit_code = self.whykey_process.wait()
+            for handle in self.whykey_output:
+                handle.close()
+            with open("/tmp/whykey.out", encoding="utf-8", errors="replace") as handle:
+                stdout = handle.read()
+            with open("/tmp/whykey.err", encoding="utf-8", errors="replace") as handle:
+                stderr = handle.read()
+        elif mode == "pty":
             if self.pty is None:
                 raise LabError("whykey run=pty needs the pty environment")
             for path in ("/tmp/whykey.out", "/tmp/whykey.err", "/tmp/whykey.done"):
@@ -510,6 +657,8 @@ class Lab:
         self.start_session_bus()
         if environment == "sway":
             self.start_sway()
+        elif environment == "hyprland":
+            self.start_hyprland()
         elif environment == "x11":
             self.start_x11()
         elif environment == "pty":
@@ -520,7 +669,12 @@ class Lab:
             self.run(["sh", "-c", command])
             self.steps.append(f"session setup {command}")
         self.start_probe()
-        for action in self.scenario.get("actions", []):
+        actions = self.scenario.get("actions", [])
+        if self.scenario["whykey"].get("run") == "background" and not any(
+            "start_whykey" in action for action in actions
+        ):
+            self.start_whykey_background()
+        for action in actions:
             self.perform(action)
         truth = self.ground_truth()
         whykey = self.run_whykey()
@@ -528,10 +682,14 @@ class Lab:
 
     def logs(self) -> dict[str, str]:
         logs = {}
-        for path in sorted(glob.glob(os.path.join(LOG_DIR, "*.log"))):
+        paths = glob.glob(os.path.join(LOG_DIR, "*.log"))
+        # Hyprland stops logging to stdout once its config is parsed.
+        paths += glob.glob(f"{RUNTIME_DIR}/hypr/*/hyprland.log")
+        for path in sorted(paths):
             with open(path, encoding="utf-8", errors="replace") as handle:
                 lines = handle.read().splitlines()
-            logs[os.path.basename(path)] = "\n".join(lines[-25:])
+            name = os.path.basename(path)
+            logs["Hyprland instance log" if name == "hyprland.log" else name] = "\n".join(lines[-25:])
         if self.pty is not None:
             logs["pty transcript"] = self.pty.text()[-3000:]
         return logs
@@ -547,9 +705,57 @@ class Lab:
                     pass
 
 
+def run_in_vm(scenario_path: str) -> dict:
+    """Boot the image's kernel with this container as root filesystem and run
+    the scenario there (see the module docstring)."""
+    kernels = sorted(glob.glob("/lib/modules/*/vmlinuz"))
+    if not kernels:
+        return {"error": "the lab image has no kernel for the Hyprland VM (kernel-core)"}
+    os.makedirs(VM_RESULT_DIR, exist_ok=True)
+    result_path = os.path.join(VM_RESULT_DIR, "result.json")
+    if os.path.exists(result_path):
+        os.remove(result_path)
+    inner = f"env WHYKEY_LAB_VM=1 python3 /lab/driver.py {shlex.quote(scenario_path)}"
+    argv = [
+        "vng", "--run", kernels[-1], "--rw", "--force-9p", "--disable-microvm",
+        "--memory", "2G", "--cpus", "2", "--rwdir", VM_RESULT_DIR,
+        "--qemu-opts=-device virtio-gpu-pci", "--exec", inner,
+    ]
+    kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
+    if not kvm:
+        argv.append("--disable-kvm")
+    steps = [f"vm ({'kvm' if kvm else 'tcg, no /dev/kvm'}): {shlex.join(argv)}"]
+    try:
+        completed = subprocess.run(
+            argv, stdin=subprocess.DEVNULL, capture_output=True, cwd="/root", timeout=VM_TIMEOUT
+        )
+        console = (completed.stdout + completed.stderr).decode("utf-8", "replace")
+    except subprocess.TimeoutExpired as error:
+        console = ((error.stdout or b"") + (error.stderr or b"")).decode("utf-8", "replace")
+        return {"error": f"the Hyprland VM timed out after {VM_TIMEOUT}s", "steps": steps,
+                "logs": {"vm console": console[-4000:]}}
+    try:
+        with open(result_path, encoding="utf-8") as handle:
+            result = json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        return {"error": f"the Hyprland VM produced no result ({error})", "steps": steps,
+                "logs": {"vm console": console[-4000:]}}
+    result["steps"] = steps + result.get("steps", [])
+    return result
+
+
 def main() -> int:
     with open(sys.argv[1], encoding="utf-8") as handle:
         scenario = json.load(handle)
+    in_vm = os.environ.get("WHYKEY_LAB_VM") == "1"
+    if scenario["environment"] == "hyprland" and not in_vm:
+        result = {"scenario": scenario["id"], **run_in_vm(sys.argv[1])}
+        print(RESULT_MARKER + json.dumps(result), flush=True)
+        if os.environ.get("WHYKEY_LAB_KEEP") == "1":
+            print("keeping container alive for debugging (docker exec -it <name> bash)", flush=True)
+            while True:
+                time.sleep(3600)
+        return 0
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(RUNTIME_DIR, mode=0o700, exist_ok=True)
     os.chmod(RUNTIME_DIR, 0o700)
@@ -561,6 +767,11 @@ def main() -> int:
         result["error"] = str(error)
     result["steps"] = lab.steps
     result["logs"] = lab.logs()
+    if in_vm:
+        with open(os.path.join(VM_RESULT_DIR, "result.json"), "w", encoding="utf-8") as handle:
+            json.dump(result, handle)
+        lab.shutdown()
+        return 0
     print(RESULT_MARKER + json.dumps(result), flush=True)
     if os.environ.get("WHYKEY_LAB_KEEP") == "1":
         print("keeping container alive for debugging (docker exec -it <name> bash)", flush=True)

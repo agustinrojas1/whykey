@@ -6,55 +6,80 @@ Do not edit it by hand. Runtime availability is environment-dependent and
 is reported by `whykey capabilities`; this matrix records the implementation
 contract shared by the capability registry and tests.
 
-| ID | Area | Implementation | Scope |
-| --- | --- | --- | --- |
-| `cli.inspect.combination` | cli | Implemented | Inspect one normalized key combination. |
-| `cli.inspect.sequence` | cli | Implemented | Inspect a bounded key sequence, carrying Readline, tmux, and GNU Screen prefix state between steps. |
-| `cli.inspect.pid` | cli | Implemented | Select an interactive target by process ancestry. |
-| `cli.inspect.focused` | cli | Implemented | Discover a focused-window process when the compositor exposes it. |
-| `cli.bindings` | cli | Implemented | Enumerate effective bindings from supported adapters. |
-| `cli.conflicts` | cli | Implemented | Compare bindings within matching source and context. |
-| `cli.replay` | cli | Implemented | Render saved schema-v1 and schema-v2 reports without input injection. |
-| `cli.snapshot` | cli | Implemented | Save a versioned static diagnostic snapshot without capturing or injecting input. |
-| `cli.diff` | cli | Implemented | Compare saved snapshots or reports without querying the desktop. |
-| `cli.output.schema-v2` | cli | Implemented | Emit structured context and evidence while preserving schema v1. |
-| `cli.extensions` | cli | Implemented | Run one explicitly selected adapter through the bounded JSON protocol. |
-| `cli.extensions-compositor` | cli | Implemented | Use opt-in compositor manifests for bounded read-only binding and focus queries. |
-| `capture.terminal` | capture | Implemented | Capture terminal input when a controlling terminal is available. |
-| `capture.native-compositor` | capture | Implemented | Capture through the native compositor backend when Hyprland socket2 IPC is available. |
-| `capture.native-sway` | capture | Implemented | Observe Sway binding events through IPC in pass-through mode; suppression is not exposed by Sway IPC. |
-| `capture.ndjson` | capture | Implemented | Emit one compact schema-v2 record per captured event. |
-| `capture.export` | capture | Implemented | Write replayable JSON or NDJSON capture records to an explicit file. |
-| `capture.evdev` | capture | Implemented | Capture Linux evdev keyboard events when a readable device is available. |
-| `remapper.pre-compositor` | input | Implemented | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, kmonad, input-remapper, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions and kmonad or input-remapper rules for unproven devices conditional. |
-| `input.ime-context` | input | Implemented | Detect IBus/Fcitx5 session context. |
-| `input.ime-runtime-engine` | input | Implemented | Query an active IBus/Fcitx5 engine through a read-only API when possible. |
-| `input.ime.fcitx5-safe-query` | safety | Implemented | Use bounded read-only Fcitx5 D-Bus calls without launching client helpers. |
-| `compositor.hyprland` | compositor | Implemented | Inspect Hyprland bindings, submaps, devices, and instance-scoped IPC. |
-| `compositor.sway` | compositor | Implemented | Inspect Sway bindings by parsing the running configuration from get_config IPC and matching the get_binding_state mode. |
-| `compositor.i3` | compositor | Implemented | Inspect i3 bindings by parsing the running configuration (including included_configs) from get_config IPC and matching the get_binding_state mode. |
-| `compositor.kde` | compositor | Implemented | Inspect KDE Plasma shortcut configuration without claiming runtime activation. |
-| `compositor.xfce` | compositor | Implemented | Inspect Xfce keyboard-shortcut channel values. |
-| `compositor.cinnamon` | compositor | Implemented | Inspect Cinnamon global keybinding schemas. |
-| `compositor.mate` | compositor | Implemented | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
-| `compositor.niri` | compositor | Implemented | Inspect literal Niri binds configuration. |
-| `compositor.dwl` | compositor | Implemented | Inspect literal dwl config.h key mappings conditionally; dwl has no stable capture IPC. |
-| `compositor.herbstluftwm` | compositor | Implemented | Inspect effective herbstluftwm key bindings through bounded herbstclient IPC. |
-| `compositor.river` | compositor | Implemented | Inspect literal River init mappings. |
-| `compositor.wayfire` | compositor | Implemented | Inspect literal Wayfire binding settings. |
-| `compositor.labwc` | compositor | Implemented | Inspect labwc Openbox-compatible keybind configuration. |
-| `compositor.bspwm-sxhkd` | compositor | Implemented | Inspect literal sxhkd mappings from SXHKD_CONFIG, the running sxhkd's -c and extra configuration files, or the default sxhkdrc. |
-| `compositor.openbox` | compositor | Implemented | Inspect Openbox keybind XML. |
-| `compositor.gnome` | compositor | Implemented | Inspect GNOME global shortcuts through read-only GSettings queries. |
-| `compositor.programmable-x11` | compositor | Implemented | Inspect literal AwesomeWM, Qtile, and XMonad mappings. |
-| `compositor.x11.xbindkeys` | compositor | Implemented | Inspect literal X11 xbindkeys configuration. |
-| `compositor.portal-globalshortcuts` | compositor | Implemented | Probe read-only xdg-desktop-portal GlobalShortcuts availability; the API does not expose an existing binding inventory. |
-| `compositor.kglobalaccel-runtime` | compositor | Implemented | Ask the running kglobalaccel over D-Bus (globalShortcutsByKey, isActive, allShortcutInfos) without auto-starting it; kglobalshortcutsrc is a configured-only fallback. |
-| `compositor.gnome-gsettings` | compositor | Implemented | Read the live GNOME keybinding schemas (mutter, GNOME Shell, gnome-settings-daemon media and custom keys) with gsettings. |
-| `compositor.generic` | compositor | Implemented | Report generic desktop/session context with opaque global bindings. |
-| `compositor.additional-desktops` | compositor | Planned | Additional desktop integrations beyond the supported adapter set. |
-| `terminal.dedicated` | terminal | Implemented | Detect and query a dedicated terminal adapter when available. |
-| `shell.runtime-snapshot` | shell | Implemented | Use a live Bash, Zsh, or Fish binding snapshot when shell-init supplied one. |
-| `session.multiplexers` | session | Implemented | Detect tmux, GNU Screen, and Zellij session context. |
-| `input.ime-limits` | input | Implemented | Expose typed committed-text, Compose/dead-key, and application-preedit observability limits; passive capture does not reconstruct text history. |
-| `safety.read-only` | safety | Implemented | Keep adapters read-only and never execute the investigated action. |
+Verification is what reality confirmed: *lab-verified* entries name the
+[lab](lab/run.py) scenarios where the real program agreed with whykey (see
+[Lab evidence](#lab-evidence)); *live-verified* entries were checked by hand
+on the maintainer's desktop; everything else is *unverified*, however well
+its fixtures pass.
+
+| ID | Area | Implementation | Verification | Scope |
+| --- | --- | --- | --- | --- |
+| `cli.inspect.combination` | cli | Implemented | unverified | Inspect one normalized key combination. |
+| `cli.inspect.sequence` | cli | Implemented | unverified | Inspect a bounded key sequence, carrying Readline, tmux, and GNU Screen prefix state between steps. |
+| `cli.inspect.pid` | cli | Implemented | unverified | Select an interactive target by process ancestry. |
+| `cli.inspect.focused` | cli | Implemented | unverified | Discover a focused-window process when the compositor exposes it. |
+| `cli.bindings` | cli | Implemented | unverified | Enumerate effective bindings from supported adapters. |
+| `cli.conflicts` | cli | Implemented | unverified | Compare bindings within matching source and context. |
+| `cli.replay` | cli | Implemented | unverified | Render saved schema-v1 and schema-v2 reports without input injection. |
+| `cli.snapshot` | cli | Implemented | unverified | Save a versioned static diagnostic snapshot without capturing or injecting input. |
+| `cli.diff` | cli | Implemented | unverified | Compare saved snapshots or reports without querying the desktop. |
+| `cli.output.schema-v2` | cli | Implemented | unverified | Emit structured context and evidence while preserving schema v1. |
+| `cli.extensions` | cli | Implemented | live-verified on maintainer machine: Neovim extension (whykey-nvim) answering from a running nvim | Run one explicitly selected adapter through the bounded JSON protocol. |
+| `cli.extensions-compositor` | cli | Implemented | unverified | Use opt-in compositor manifests for bounded read-only binding and focus queries. |
+| `capture.terminal` | capture | Implemented | unverified | Capture terminal input when a controlling terminal is available. |
+| `capture.native-compositor` | capture | Implemented | lab-verified (1 scenario) | Capture through the native compositor backend when Hyprland socket2 IPC is available. |
+| `capture.native-sway` | capture | Implemented | unverified | Observe Sway binding events through IPC in pass-through mode; suppression is not exposed by Sway IPC. |
+| `capture.probe-window` | capture | Implemented | lab-verified (7 scenarios) | Open a focused Wayland or X11 probe window and report whether the desktop delivered the key to a client or consumed it; the default listen chain uses it when native compositor capture is unavailable. |
+| `capture.ndjson` | capture | Implemented | unverified | Emit one compact schema-v2 record per captured event. |
+| `capture.export` | capture | Implemented | unverified | Write replayable JSON or NDJSON capture records to an explicit file. |
+| `capture.evdev` | capture | Implemented | unverified | Capture Linux evdev keyboard events when a readable device is available. |
+| `remapper.pre-compositor` | input | Implemented | unverified | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, kmonad, input-remapper, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions and kmonad or input-remapper rules for unproven devices conditional. |
+| `input.ime-context` | input | Implemented | unverified | Detect IBus/Fcitx5 session context. |
+| `input.ime-runtime-engine` | input | Implemented | unverified | Query an active IBus/Fcitx5 engine through a read-only API when possible. |
+| `input.ime.fcitx5-safe-query` | safety | Implemented | unverified | Use bounded read-only Fcitx5 D-Bus calls without launching client helpers. |
+| `compositor.hyprland` | compositor | Implemented | lab-verified (15 scenarios); live-verified on maintainer machine: static `whykey <key>` inspection against the running Hyprland session | Inspect Hyprland bindings, submaps, devices, and instance-scoped IPC. |
+| `compositor.sway` | compositor | Implemented | lab-verified (9 scenarios) | Inspect Sway bindings by parsing the running configuration from get_config IPC and matching the get_binding_state mode. |
+| `compositor.i3` | compositor | Implemented | lab-verified (5 scenarios) | Inspect i3 bindings by parsing the running configuration (including included_configs) from get_config IPC and matching the get_binding_state mode. |
+| `compositor.kde` | compositor | Implemented | lab-verified (3 scenarios) | Inspect KDE Plasma shortcut configuration without claiming runtime activation. |
+| `compositor.xfce` | compositor | Implemented | unverified | Inspect Xfce keyboard-shortcut channel values. |
+| `compositor.cinnamon` | compositor | Implemented | unverified | Inspect Cinnamon global keybinding schemas. |
+| `compositor.mate` | compositor | Implemented | unverified | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
+| `compositor.niri` | compositor | Implemented | unverified | Inspect literal Niri binds configuration. |
+| `compositor.dwl` | compositor | Implemented | unverified | Inspect literal dwl config.h key mappings conditionally; dwl has no stable capture IPC. |
+| `compositor.herbstluftwm` | compositor | Implemented | unverified | Inspect effective herbstluftwm key bindings through bounded herbstclient IPC. |
+| `compositor.river` | compositor | Implemented | unverified | Inspect literal River init mappings. |
+| `compositor.wayfire` | compositor | Implemented | unverified | Inspect literal Wayfire binding settings. |
+| `compositor.labwc` | compositor | Implemented | unverified | Inspect labwc Openbox-compatible keybind configuration. |
+| `compositor.bspwm-sxhkd` | compositor | Implemented | lab-verified (2 scenarios) | Inspect literal sxhkd mappings from SXHKD_CONFIG, the running sxhkd's -c and extra configuration files, or the default sxhkdrc. |
+| `compositor.openbox` | compositor | Implemented | lab-verified (2 scenarios) | Inspect Openbox keybind XML. |
+| `compositor.gnome` | compositor | Implemented | lab-verified (4 scenarios) | Inspect GNOME global shortcuts through read-only GSettings queries. |
+| `compositor.programmable-x11` | compositor | Implemented | lab-verified (2 scenarios) | Inspect literal AwesomeWM, Qtile, and XMonad mappings. |
+| `compositor.x11.xbindkeys` | compositor | Implemented | lab-verified (2 scenarios) | Inspect literal X11 xbindkeys configuration. |
+| `compositor.portal-globalshortcuts` | compositor | Implemented | unverified | Probe read-only xdg-desktop-portal GlobalShortcuts availability; the API does not expose an existing binding inventory. |
+| `compositor.kglobalaccel-runtime` | compositor | Implemented | lab-verified (3 scenarios) | Ask the running kglobalaccel over D-Bus (globalShortcutsByKey, isActive, allShortcutInfos) without auto-starting it; kglobalshortcutsrc is a configured-only fallback. |
+| `compositor.gnome-gsettings` | compositor | Implemented | lab-verified (4 scenarios) | Read the live GNOME keybinding schemas (mutter, GNOME Shell, gnome-settings-daemon media and custom keys) with gsettings. |
+| `compositor.generic` | compositor | Implemented | unverified | Report generic desktop/session context with opaque global bindings. |
+| `compositor.additional-desktops` | compositor | Planned | unverified | Additional desktop integrations beyond the supported adapter set. |
+| `terminal.dedicated` | terminal | Implemented | unverified | Detect and query a dedicated terminal adapter when available. |
+| `shell.runtime-snapshot` | shell | Implemented | lab-verified (13 scenarios); live-verified on maintainer machine: Bash with `whykey shell-init bash` loaded | Use a live Bash, Zsh, or Fish binding snapshot when shell-init supplied one. |
+| `session.multiplexers` | session | Implemented | lab-verified (5 scenarios) | Detect tmux, GNU Screen, and Zellij session context. |
+| `input.ime-limits` | input | Implemented | unverified | Expose typed committed-text, Compose/dead-key, and application-preedit observability limits; passive capture does not reconstruct text history. |
+| `safety.read-only` | safety | Implemented | unverified | Keep adapters read-only and never execute the investigated action. |
+
+## Lab evidence
+
+- `capture.native-compositor`: `hyprland-native-capture-lua`
+- `capture.probe-window`: `hyprland-listen-conf-fallback`, `hyprland-window-bound`, `hyprland-window-unbound`, `i3-window-bound`, `i3-window-unbound`, `sway-window-bound`, `sway-window-unbound`
+- `compositor.hyprland`: `hyprland-bindn`, `hyprland-code-key`, `hyprland-keysym-comma`, `hyprland-lua-bind`, `hyprland-lua-code-key`, `hyprland-lua-submap-active`, `hyprland-lua-submap-inactive`, `hyprland-lua-unbound`, `hyprland-native-capture-lua`, `hyprland-plain-bind`, `hyprland-release-bind`, `hyprland-source-include`, `hyprland-submap-active`, `hyprland-submap-inactive`, `hyprland-unbound`
+- `compositor.sway`: `sway-include`, `sway-mode-active`, `sway-mode-inactive`, `sway-plain-bind`, `sway-plain-bind-wtype`, `sway-release-bind`, `sway-to-code`, `sway-unbound`, `sway-variable-mod`
+- `compositor.i3`: `i3-mode-active`, `i3-mode-inactive`, `i3-plain-bind`, `i3-release-bind`, `i3-unbound`
+- `compositor.kde`: `kde-inactive-component`, `kde-launch-bind`, `kde-unbound`
+- `compositor.bspwm-sxhkd`: `sxhkd-bind`, `sxhkd-unbound`
+- `compositor.openbox`: `openbox-keybind`, `openbox-unbound`
+- `compositor.gnome`: `gnome-changed-bound`, `gnome-changed-unbound`, `gnome-default-bound`, `gnome-default-unbound`
+- `compositor.programmable-x11`: `awesome-bind`, `awesome-unbound`
+- `compositor.x11.xbindkeys`: `xbindkeys-bind`, `xbindkeys-unbound`
+- `compositor.kglobalaccel-runtime`: `kde-inactive-component`, `kde-launch-bind`, `kde-unbound`
+- `compositor.gnome-gsettings`: `gnome-changed-bound`, `gnome-changed-unbound`, `gnome-default-bound`, `gnome-default-unbound`
+- `shell.runtime-snapshot`: `bash-alt-f-init`, `bash-default-transpose-init`, `bash-user-bind-init`, `fish-default-transpose-init`, `fish-user-bind-init`, `fish-vi-default-mode-bind-init`, `fish-vi-insert-bind-init`, `tmux-fish-vi-insert-bind`, `tmux-zsh-user-bind`, `zsh-bind-before-vi-init`, `zsh-default-transpose-init`, `zsh-user-bind-init`, `zsh-vi-user-bind-init`
+- `session.multiplexers`: `screen-prefix-fish`, `tmux-prefix`, `tmux-prefix-zsh`, `tmux-root-bind`, `tmux-unbound`

@@ -1,0 +1,31 @@
+{
+  "id": "hyprland-unbound",
+  "description": "an unbound Super combo reaches the focused window",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, T, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+x"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+x"
+    ],
+    "layer": "Hyprland"
+  }
+}

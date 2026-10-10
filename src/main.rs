@@ -472,6 +472,33 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     let nvim_extension = detect_extension("whykey-nvim");
     let nvim_server = detect_nvim_server();
     let runtime_readers = whykey::runtime_readers::current();
+    let observation_taps = whykey::doctor::observation_taps(&whykey::doctor::TapInputs {
+        native: native_available.then_some(native_backend),
+        wayland: (whykey::probe::available_display() == Some("Wayland"))
+            .then(|| env::var("WAYLAND_DISPLAY").ok())
+            .flatten(),
+        x11: env::var("DISPLAY").ok().filter(|value| !value.is_empty()),
+        xwayland: whykey::probe::wayland::display_configured()
+            || compositor_context
+                .session_type
+                .as_deref()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("wayland")),
+        remote: ssh,
+        tty,
+        evdev_readable: evdev,
+        evdev_detail: evdev_scan.detail(),
+        evdev_enable: evdev_next.clone(),
+    });
+    let layer_sources = doctor_layer_sources(&DoctorLayerFacts {
+        environment: &environment,
+        x11_grab: observation_taps
+            .iter()
+            .any(|tap| tap.id == "x11-grab" && tap.available),
+        ghostty,
+        shell: &shell,
+        shell_snapshot,
+        nvim_server: nvim_server.as_deref(),
+    });
 
     let compositor_context_available = ssh
         || generic_compositor
@@ -600,6 +627,8 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
                 "operation": "doctor",
                 "context": schema::context_for_environment(&environment),
                 "checks": legacy_value,
+                "observation_taps": observation_taps,
+                "layer_sources": layer_sources,
                 "next_steps": next_steps.clone(),
             })
         } else {
@@ -877,6 +906,47 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
                     .muted("Neovim extension: not found on PATH or extensions/ (whykey-nvim)")
             );
         }
+        println!(
+            "\n{}",
+            render_options.accent("Observation taps (what whykey can watch now)")
+        );
+        for tap in &observation_taps {
+            let line = format!(
+                "{}  {}: {}",
+                if tap.available { "OK" } else { "FAIL" },
+                tap.name,
+                tap.detail
+            );
+            for wrapped in whykey::style::wrap_hanging(&line, render_options.width, "", "  ") {
+                if tap.available {
+                    println!("{}", render_options.success(wrapped));
+                } else {
+                    println!("{}", render_options.failure(wrapped));
+                }
+            }
+            if let Some(enable) = &tap.enable {
+                for wrapped in
+                    whykey::style::wrap_hanging(enable, render_options.width, "  enable: ", "    ")
+                {
+                    println!("{}", render_options.muted(wrapped));
+                }
+            }
+        }
+        println!(
+            "\n{}",
+            render_options.accent("Layer sources (live query, config file, or none)")
+        );
+        for source in &layer_sources {
+            let line = format!(
+                "{}: {} — {}",
+                source.layer,
+                source.source.label(),
+                source.detail
+            );
+            for wrapped in whykey::style::wrap_hanging(&line, render_options.width, "  ", "    ") {
+                println!("{wrapped}");
+            }
+        }
         if !next_steps.is_empty() {
             println!("\n{}", render_options.accent("Next steps"));
             for step in &next_steps {
@@ -891,6 +961,167 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     } else {
         ExitCode::from(1)
     }
+}
+
+/// What doctor learned that decides each layer's answer source.
+struct DoctorLayerFacts<'a> {
+    environment: &'a whykey::environment::Environment,
+    x11_grab: bool,
+    ghostty: bool,
+    shell: &'a str,
+    shell_snapshot: bool,
+    nvim_server: Option<&'a str>,
+}
+
+/// Per layer: is its answer a live query of the running program, parsed
+/// configuration, or nothing at all in this session?
+fn doctor_layer_sources(facts: &DoctorLayerFacts<'_>) -> Vec<whykey::doctor::LayerSource> {
+    use whykey::doctor::{LayerSource, SourceKind};
+    let environment = facts.environment;
+    let mut sources = Vec::new();
+    sources.push(if environment.remappers.is_empty() {
+        LayerSource::new("remapper", SourceKind::None, "no remapper detected")
+    } else {
+        LayerSource::new(
+            "remapper",
+            SourceKind::ConfigFile,
+            environment
+                .remappers
+                .iter()
+                .map(|remapper| remapper.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    });
+    let desktop = whykey::registry::DESKTOPS
+        .iter()
+        .find(|entry| entry.doctor.is_some() && environment.desktop(entry.id).applicable);
+    sources.push(match desktop {
+        Some(entry) => {
+            let reachable = environment.desktop(entry.id).ipc;
+            let source = whykey::doctor::desktop_source(entry.id, reachable);
+            let detail = if reachable {
+                entry.display.to_owned()
+            } else {
+                format!("{} (not reachable)", entry.display)
+            };
+            LayerSource::new("compositor/desktop", source, detail)
+        }
+        None if environment.ssh => LayerSource::new(
+            "compositor/desktop",
+            SourceKind::None,
+            "remote session; the local desktop is not inspected",
+        ),
+        None => LayerSource::new(
+            "compositor/desktop",
+            SourceKind::None,
+            environment
+                .compositor_context
+                .desktop
+                .as_deref()
+                .map_or_else(
+                    || "no supported desktop detected".to_owned(),
+                    |desktop| format!("{desktop} has no read-only adapter"),
+                ),
+        ),
+    });
+    if facts.x11_grab {
+        sources.push(LayerSource::new(
+            "X11 key grabs",
+            SourceKind::LiveQuery,
+            "the X server reports which shortcuts a client has grabbed",
+        ));
+    }
+    let live_ime = environment
+        .ime
+        .iter()
+        .any(|engine| engine.state.is_some() || engine.active_engine.is_some());
+    sources.push(match (environment.ime.is_empty(), live_ime) {
+        (true, _) => LayerSource::new("input method", SourceKind::None, "none detected"),
+        (false, true) => LayerSource::new(
+            "input method",
+            SourceKind::LiveQuery,
+            "the input-method daemon reports its active engine",
+        ),
+        (false, false) => LayerSource::new(
+            "input method",
+            SourceKind::None,
+            "detected, but its engine state cannot be queried",
+        ),
+    });
+    sources.push(match environment.terminal {
+        Some("Ghostty") if facts.ghostty => LayerSource::new(
+            "terminal",
+            SourceKind::LiveQuery,
+            "Ghostty (`ghostty +list-keybinds`)",
+        ),
+        Some("WezTerm") => LayerSource::new(
+            "terminal",
+            SourceKind::LiveQuery,
+            "WezTerm (`wezterm show-keys`)",
+        ),
+        Some(terminal) => LayerSource::new("terminal", SourceKind::ConfigFile, terminal),
+        None => LayerSource::new(
+            "terminal",
+            SourceKind::None,
+            "no terminal adapter; bytes are predicted generically",
+        ),
+    });
+    let mut multiplexers = Vec::new();
+    if environment.tmux {
+        multiplexers.push(LayerSource::new(
+            "multiplexer",
+            SourceKind::LiveQuery,
+            "tmux server (key tables)",
+        ));
+    }
+    if environment.screen {
+        multiplexers.push(LayerSource::new(
+            "multiplexer",
+            SourceKind::ConfigFile,
+            "GNU Screen (.screenrc)",
+        ));
+    }
+    if environment.zellij {
+        multiplexers.push(LayerSource::new(
+            "multiplexer",
+            SourceKind::ConfigFile,
+            "Zellij configuration",
+        ));
+    }
+    if multiplexers.is_empty() {
+        multiplexers.push(LayerSource::new(
+            "multiplexer",
+            SourceKind::None,
+            "none detected",
+        ));
+    }
+    sources.extend(multiplexers);
+    let shell_name = facts.shell.rsplit('/').next().unwrap_or(facts.shell);
+    sources.push(match (shell_name, facts.shell_snapshot) {
+        ("bash" | "zsh" | "fish", true) => LayerSource::new(
+            "shell",
+            SourceKind::LiveQuery,
+            format!("{shell_name} bindings dumped by shell-init"),
+        ),
+        ("bash" | "zsh" | "fish", false) => LayerSource::new(
+            "shell",
+            SourceKind::ConfigFile,
+            format!(
+                "{shell_name} defaults and startup files; load `whykey shell-init {shell_name}` for live bindings"
+            ),
+        ),
+        _ => LayerSource::new("shell", SourceKind::None, "no supported shell"),
+    });
+    sources.push(match facts.nvim_server {
+        Some(server) => LayerSource::new(
+            "editor",
+            SourceKind::LiveQuery,
+            format!("Neovim RPC ({server})"),
+        ),
+        None => LayerSource::new("editor", SourceKind::None, "no Neovim server is listening"),
+    });
+    sources
 }
 
 #[cfg(test)]

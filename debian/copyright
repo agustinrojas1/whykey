@@ -6,11 +6,27 @@ Files: *
 Copyright: 2026 whykey contributors
 License: MIT
 
-Files: vendor/itoa/* vendor/libc/* vendor/proc-macro2/* vendor/quote/*
- vendor/serde/* vendor/serde_core/* vendor/serde_derive/*
- vendor/serde_json/* vendor/syn/*
+Files: vendor/arraydeque/* vendor/bitflags/* vendor/cc/* vendor/downcast-rs/*
+ vendor/errno/* vendor/find-msvc-tools/* vendor/hashbrown/* vendor/hashlink/*
+ vendor/itoa/* vendor/libc/* vendor/pkg-config/* vendor/proc-macro2/*
+ vendor/quote/* vendor/serde/* vendor/serde_core/* vendor/serde_derive/*
+ vendor/serde_json/* vendor/shlex/* vendor/smallvec/* vendor/syn/*
+ vendor/windows-link/* vendor/windows-sys/* vendor/x11rb/*
+ vendor/x11rb-protocol/* vendor/yaml-rust2/*
 Copyright: respective upstream contributors
 License: MIT OR Apache-2.0
+
+Files: vendor/linux-raw-sys/* vendor/rustix/*
+Copyright: respective upstream contributors
+License: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+
+Files: vendor/gethostname/*
+Copyright: respective upstream contributors
+License: Apache-2.0
+
+Files: vendor/foldhash/*
+Copyright: respective upstream contributors
+License: Zlib
 
 Files: vendor/memchr/*
 Copyright: respective upstream contributors
@@ -20,7 +36,9 @@ Files: vendor/unicode-ident/*
 Copyright: respective upstream contributors
 License: (MIT OR Apache-2.0) AND Unicode-3.0
 
-Files: vendor/zmij/*
+Files: vendor/quick-xml/* vendor/wayland-backend/* vendor/wayland-client/*
+ vendor/wayland-protocols/* vendor/wayland-scanner/* vendor/wayland-server/*
+ vendor/wayland-sys/* vendor/zmij/*
 Copyright: respective upstream contributors
 License: MIT
 

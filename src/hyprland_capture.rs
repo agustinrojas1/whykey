@@ -55,6 +55,17 @@ pub fn capture_connect() -> Result<Box<dyn NativeCaptureIo>, String> {
     Ok(Box::new(HyprlandCaptureSession::connect()?))
 }
 
+/// Why native capture is unavailable when the no-op `hyprctl eval` fails.
+fn lua_eval_unavailable(error: &str) -> String {
+    if error.contains("only supported with the lua config manager") {
+        "the Hyprland key hook needs a Lua config (hyprland.lua); this Hyprland \
+         runs a hyprlang (.conf) config, which rejects `hyprctl eval`"
+            .into()
+    } else {
+        format!("hyprctl eval is unavailable: {error}")
+    }
+}
+
 pub fn generate_token() -> String {
     format!(
         "wk_{}_{}",
@@ -789,6 +800,13 @@ impl HyprlandCaptureSession {
             hyprland_instance_signature().ok_or("HYPRLAND_INSTANCE_SIGNATURE is not set")?;
         let stream = connect_socket2(&signature)
             .map_err(|e| format!("failed to connect to Hyprland socket2: {e}"))?;
+        // The key hook is Lua. A Hyprland running a hyprlang (.conf) config
+        // rejects every `hyprctl eval`, so check with a no-op before claiming
+        // native capture; listen then falls back to the next backend instead
+        // of failing to arm.
+        Hyprctl::Real
+            .eval("return nil")
+            .map_err(|error| lua_eval_unavailable(&error.to_string()))?;
 
         let saved_submap =
             query_active_submap().ok_or("could not determine the active Hyprland submap safely")?;
@@ -1778,6 +1796,21 @@ xkb_symbols "pc" {
         assert!(submap_target_matches("resize", "resize"));
         assert!(!submap_target_matches("default", "resize"));
         assert!(!submap_target_matches("__whykey_capture", "reset"));
+    }
+
+    #[test]
+    fn hyprlang_config_eval_rejection_explains_the_lua_requirement() {
+        // Hyprland 0.56.2's reply to `hyprctl eval` under a hyprland.conf
+        // config, observed in the reality lab.
+        let reason = lua_eval_unavailable("eval is only supported with the lua config manager");
+        assert!(
+            reason.contains("needs a Lua config (hyprland.lua)"),
+            "{reason}"
+        );
+        assert_eq!(
+            lua_eval_unavailable("connection refused"),
+            "hyprctl eval is unavailable: connection refused"
+        );
     }
 
     #[test]

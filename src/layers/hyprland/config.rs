@@ -345,7 +345,9 @@ pub(super) fn parse_lua_bind_hint(
         )
     } else {
         (
-            None,
+            arguments
+                .get(2)
+                .and_then(|options| lua_table_string_field(options, "description")),
             arguments
                 .get(1)
                 .and_then(|value| lua_literal_argument(value)),
@@ -505,6 +507,20 @@ pub(super) fn lua_literal_argument(argument: &str) -> Option<String> {
         return None;
     }
     Some(value)
+}
+
+/// The literal string value of a top-level `name = "..."` field of a Lua
+/// table constructor such as `{ description = "Open terminal", repeat = true }`.
+fn lua_table_string_field(table: &str, name: &str) -> Option<String> {
+    let inner = table.trim().strip_prefix('{')?.strip_suffix('}')?;
+    // lua_call_arguments splits on top-level commas up to a closing paren.
+    let fields = format!("{inner})");
+    lua_call_arguments(&fields)?.into_iter().find_map(|field| {
+        let (key, value) = field.split_once('=')?;
+        (key.trim() == name)
+            .then(|| lua_literal_argument(value))
+            .flatten()
+    })
 }
 
 fn lua_ignore_mods_option(options: Option<&str>) -> Option<bool> {

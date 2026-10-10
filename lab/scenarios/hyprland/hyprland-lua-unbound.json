@@ -1,0 +1,31 @@
+{
+  "id": "hyprland-lua-unbound",
+  "description": "with a Lua config, an unbound Super combo reaches the focused window",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+x"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+x"
+    ],
+    "layer": "Hyprland"
+  }
+}

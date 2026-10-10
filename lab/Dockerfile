@@ -23,6 +23,22 @@ RUN dnf -y -q install --setopt=install_weak_deps=False \
        done \
     && glib-compile-schemas /usr/share/glib-2.0/schemas
 
+# Hyprland: Fedora retired its package; the sdegler/hyprland COPR builds the
+# upstream releases for Fedora 44 (0.56.2 = the main user's desktop; both the
+# hyprlang .conf and the Lua config are supported by this release). The
+# version is pinned so a COPR update cannot silently change what the lab
+# verifies. aquamarine needs a KMS device even for headless outputs, so
+# Hyprland scenarios boot this image's kernel in a KVM guest (virtme-ng with
+# the container as 9p root, virtio-gpu for KMS, llvmpipe via kms_swrast); see
+# lab/driver.py. file and binutils are virtme-ng's kernel-version probes.
+RUN dnf -y -q install --setopt=install_weak_deps=False dnf-plugins-core \
+    && dnf -y -q copr enable sdegler/hyprland \
+    && dnf -y -q install --setopt=install_weak_deps=False \
+        hyprland-0.56.2 \
+        virtme-ng qemu-system-x86-core qemu-device-display-virtio-gpu-pci \
+        kernel-core busybox file binutils \
+    && dnf clean all
+
 # File capabilities (sway ships cap_sys_nice) make exec fail with EPERM in an
 # unprivileged container; the loop above strips them. Scenarios run as root
 # inside a throwaway container, with whykey mounted at /w/whykey.

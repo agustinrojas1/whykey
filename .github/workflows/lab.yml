@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: lab-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lab:
     runs-on: ubuntu-latest
@@ -30,6 +34,9 @@ jobs:
           toolchain: stable
       - name: Build whykey
         run: cargo build --release --locked
+      # Hyprland scenarios boot a KVM guest inside their container; run.py
+      # passes /dev/kvm through (GitHub's Linux runners expose it) and the
+      # guest falls back to much slower TCG emulation without it.
       - name: Run lab scenarios
         run: python3 lab/run.py -j "$(nproc)"
       - name: Upload results

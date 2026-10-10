@@ -1,0 +1,51 @@
+{
+  "id": "hyprland-window-bound",
+  "description": "listen --window under Hyprland: a bound Super combo fires and never reaches whykey's probe window",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, Return, exec, sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+return"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "vkbd": [
+        "super+return"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired",
+      "equals": "x\nx"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--window",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": "window",
+    "observation": true,
+    "combo": {
+      "key": "",
+      "modifiers": 64
+    }
+  }
+}

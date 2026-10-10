@@ -171,6 +171,20 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
                 "Native compositor capture (Sway): SWAYSOCK is unavailable or unreachable"
             },
         ),
+        {
+            let display = crate::probe::available_display();
+            available(
+                "capture.probe-window",
+                "capture",
+                display.is_some(),
+                match display {
+                    Some(display) => format!(
+                        "whykey listen opens a focused probe window via {display} when native capture is unavailable (--window forces it)"
+                    ),
+                    None => "no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY is usable".into(),
+                },
+            )
+        },
         implemented(
             "capture.ndjson",
             "capture",

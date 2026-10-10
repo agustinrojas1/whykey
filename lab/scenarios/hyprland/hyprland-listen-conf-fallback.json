@@ -1,0 +1,52 @@
+{
+  "id": "hyprland-listen-conf-fallback",
+  "description": "whykey listen on a hyprlang .conf Hyprland (no Lua, so no native key hook) falls back to its probe window, which never receives the bound Super+T",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, T, exec, sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired",
+      "equals": "x\nx"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "tty": true,
+    "ready": "window",
+    "observation": true,
+    "combo": {
+      "key": "",
+      "modifiers": 64
+    },
+    "stderr": "needs a Lua config (hyprland.lua)"
+  }
+}
