@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.5.0] - 2026-10-10
+
+### Features
+
+- Remappers: kmonad and input-remapper are now evaluated for the queried key. kmonad reads the configuration file from the running process's command line (and its `--fallthrough`, `--input`, and `--implicit-around` options), or `KMONAD_CONFIG` and `~/.config/kmonad/*.kbd` when no kmonad runs. It evaluates `defcfg` (`device-file`, `fallthrough`, `implicit-around`), named and unnamed `defsrc`, the first `deflayer`, aliases, kmonad's key and shifted names (a bare `@` is Shift+2), modifier prefixes, and `around` forms. Remaps redirect; layer, macro, command, compose, and dead-key buttons, `XX`, and keys dropped without fallthrough consume; tap, multi-tap, sticky, stepped, and timeout buttons stay conditional. input-remapper reads `INPUT_REMAPPER_CONFIG` (a directory or its `config.json`), otherwise `$XDG_CONFIG_HOME/input-remapper-2` or `~/.config/input-remapper-2`, and evaluates every autoloaded preset in both preset formats, resolving symbols through `xmodmap.json` and `KEY_*` names. Autoload keys name input-remapper device groups (a duplicate `<name> N` uses the preset directory `<name>` and leaves the device unknown), and a preset applies to every evdev node of its group, such as the keyboard's "Consumer Control" node. Macro names with non-ASCII characters are read without a crash. Key and combination outputs redirect; `disable` and macros consume, except conditional macros such as `if_tap` and `mod_tap`. Presets applied from the GUI without autoload are unknown. For both remappers the answer stays conditional unless the captured key came from the configured device.
+- Dead keys: a key that starts dead-key composition now gets its own headline ("AltGr+' is a dead key (dead_acute) in the active layout; …") instead of being described as configured to consume the key. JSON v2 and NDJSON path entries gain an optional `dead_key` field with the keysym; schema v1 is unchanged.
+- Hyprland: `source =` paths with bracket classes (`[abc]`, `[a-z]`, `[!x]`, `[^x]`) are now expanded like glob(3), in linear time. POSIX named classes and backslash escapes are not supported.
+- `whykey-nvim`: an unmapped `<C-i>`, `<C-m>`, `<C-[>`, or `<C-j>` now resolves to its `<Tab>`, `<CR>`, `<Esc>`, or `<NL>` mapping, as Neovim does (`:help CTRL-I`), and the summary says so ("maps <C-i> (as <Tab>) to …"). The extension was checked against a live Neovim 0.12.5.
+
+### Fixes
+
+- Hyprland: while whykey's capture submap is active, the query for the previous submap no longer mistakes a failed or unexpected reply for a submap name. A real submap called `none` is kept, and when the previous submap is unknown, bindings are evaluated as in the default submap with a detail line that says so.
+- `meta-key` is no longer accepted as an alias for AltGr (Mod5); a combination containing it is a usage error (exit status 2).
+
+### Internal
+
+- kanata and kmonad share one s-expression reader (`src/remapper/sexp.rs`) with the 64-level nesting cap.
+- The Hyprland and `listen` source files are now real modules instead of `include!`d files.
+
 ## [1.4.0] - 2026-10-09
 
 ### Features
