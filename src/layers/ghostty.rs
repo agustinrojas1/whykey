@@ -55,6 +55,7 @@ pub(crate) fn with_default_encoding(
                 layer.outcome = Outcome::Consumed;
                 layer.summary =
                     "starts dead-key composition; no bytes are sent until the next key".into();
+                layer.dead_key = Some(keysym.clone());
             }
             layer.details.push(format!(
                 "dead key {keysym}: composition sends no bytes until the next key"
@@ -1170,6 +1171,7 @@ xkb_symbols "pc" {
             true,
         );
         assert_eq!(layer.outcome, Outcome::Consumed);
+        assert_eq!(layer.dead_key.as_deref(), Some("dead_doubleacute"));
         assert!(input.is_none());
     }
 

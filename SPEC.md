@@ -57,7 +57,9 @@ JSON reports have a top-level `schema_version` field. Version 1 remains the
 default for compatibility. `--json --schema-version 2` (or `--json-v2`) opts
 into the version-2 shape, which adds an operation name, session context,
 structured input/observation fields, and per-layer evidence while preserving
-the same diagnostic conclusions. Selecting two different versions
+the same diagnostic conclusions. Version-2 and NDJSON path entries carry an
+optional `dead_key` keysym when a terminal layer consumes the key to start
+dead-key composition; version 1 is unchanged. Selecting two different versions
 (`--json-v2` with `--schema-version 1`, or two different `--schema-version`
 values) is a usage error; repeating the same selection is accepted. Extension
 stdin/stdout remains protocol v1 until a separately negotiated extension
@@ -82,7 +84,8 @@ example `ctrl+code:30`.
 
 Modifier names are `ctrl`/`control`/`ctl`, `alt`/`mod1`, `shift`,
 `super`/`meta`/`win`/`mod4`, `caps`/`capslock`/`lock`, `num`/`numlock`/`mod2`,
-`hyper`/`mod3`, and `altgr`/`iso_level3_shift`/`mod5`. The key must be one of
+`hyper`/`mod3`, and `altgr`/`iso_level3_shift`/`mod5`. `meta-key` is not a
+modifier name; a combination containing it is a usage error. The key must be one of
 the following: a single Unicode character; a named key (arrows,
 `return`/`enter`, `escape`, `space`, `tab`, `backspace`, `delete`, `page_up`,
 keypad and lock keys, or keysym names such as `comma`, `slash`, and `minus`);
@@ -168,8 +171,9 @@ applications are not combined. `whykey bindings --key` also lists, under
 and conventional configuration paths, and list literal keyd, kanata, kmonad,
 input-remapper, and xremap mappings as evidence.
 
-Inspection evaluates the queried key against keyd, kanata, and xremap
-configurations. keyd reads `/etc/keyd/*.conf` (or the `WHYKEY_KEYD_CONFIG`
+Inspection evaluates the queried key against keyd, kanata, kmonad,
+input-remapper, and xremap configurations. kanata and kmonad share one
+s-expression reader with a 64-level nesting cap. keyd reads `/etc/keyd/*.conf` (or the `WHYKEY_KEYD_CONFIG`
 file or directory) with `include`, `[ids]`, `[aliases]`, and `[global]
 default_layout`. Only `[main]`, the built-in layers for the held modifiers,
 their composite layers, and the default layout apply, and the last binding
@@ -189,6 +193,28 @@ and side-specific modifiers are conditional. A file without `defsrc`, or YAML
 with anchors, aliases, tags, or block scalars, or a kanata or xremap file nested
 more than 64 levels deep, is reported as not evaluated.
 
+kmonad reads the configuration file from each running process's command line
+(relative to its `/proc/<pid>/cwd`) and applies its `--fallthrough`,
+`--input`, and `--implicit-around` options; `KMONAD_CONFIG` and
+`~/.config/kmonad/*.kbd` are used only when no kmonad runs. It evaluates
+`defcfg` (`device-file` input, `fallthrough`, `implicit-around`), named and
+unnamed `defsrc`, the first `deflayer`, aliases, kmonad's key names and
+shifted names, `C-`/`S-`/`A-`/`M-` and right-side prefixes, and `around`
+forms. Layer, macro, command, pause, press-/release-only, `around-next`,
+compose, and dead-key buttons consume the key, as do `XX` and, without
+fallthrough, `_` or keys outside `defsrc`. Tap, multi-tap, sticky, stepped,
+and timeout buttons are conditional. input-remapper reads
+`INPUT_REMAPPER_CONFIG` (a directory or its `config.json`), otherwise
+`$XDG_CONFIG_HOME/input-remapper-2` or `~/.config/input-remapper-2`, and treats
+each `autoload` entry as the active preset for its device. Both preset
+formats are read. Symbols resolve through `xmodmap.json`, then `KEY_*` names;
+without `xmodmap.json` only layout-invariant keysyms resolve. A key or
+combination output is a redirect; `disable` and macros consume, except
+conditional macros (`if_tap`, `mod_tap`, …). Presets applied from the GUI
+without autoload are unknown, so a running service without autoload stays
+uncertain. For both, the result is conditional unless the captured device is
+proven to be the configured one.
+
 A key captured from a physical evdev device is exact. Otherwise keys whose
 keysym does not depend on the layout (Escape, CapsLock, function keys,
 arrows, modifiers, media keys) map to fixed codes, and printable keys map to
@@ -198,9 +224,7 @@ uncertain. Input captured by the compositor or from a remapper's virtual
 device is already remapped and stays uncertain. When several configurations
 or keys apply and disagree, when a configuration is found with no running
 process, or when several remappers act on the key, the result is uncertain. A
-configuration that cannot be read is unavailable, never a pass. kmonad and
-input-remapper are not evaluated, so a running instance leaves the route
-uncertain.
+configuration that cannot be read is unavailable, never a pass.
 
 `whykey replay <file>` accepts one or more concatenated schema-v1 JSON reports,
 including the pretty-printed documents emitted by `listen --json`. It validates
@@ -228,7 +252,7 @@ never discovered or invoked automatically.
 
 ### First-party extensions
 
-- `extensions/whykey-nvim`: stdlib Python 3 script querying running Neovim via `--remote-expr`. Declares `query_mode` and `identify_action` capabilities. Connects via `NVIM_LISTEN_ADDRESS`, active `nvim --listen` / `--server` instances, or default `$XDG_RUNTIME_DIR/nvim.<pid>.0` sockets; when several servers are found and none is named in the environment, the answer is indeterminate because the queried server may not be the focused one. Returns `status: "unavailable"` when no running Neovim server is found. Converts `KeyCombo` to Vim notation (`<C-x>`, `<C-Left>`, `<D-x>` for Super, `<lt>`, `<Bar>`). One `luaeval` query reads the mode from `nvim_get_mode` and the mapping from `maparg`. A Lua-callback mapping, a mapping (after following `<Plug>` chains up to 5 levels), or a key that only starts longer mappings (reported with the `timeoutlen` wait) is `handled`/`stops`. No mapping is `indeterminate`, because built-in commands and `vim.on_key` handlers are not inspected; in terminal mode it is `indeterminate`/`continues`. Prompt modes, timeouts, AltGr, and keycode queries are `indeterminate`.
+- `extensions/whykey-nvim`: stdlib Python 3 script querying running Neovim via `--remote-expr`. Declares `query_mode` and `identify_action` capabilities. Connects via `NVIM_LISTEN_ADDRESS`, active `nvim --listen` / `--server` instances, or default `$XDG_RUNTIME_DIR/nvim.<pid>.0` sockets; when several servers are found and none is named in the environment, the answer is indeterminate because the queried server may not be the focused one. Returns `status: "unavailable"` when no running Neovim server is found. Converts `KeyCombo` to Vim notation (`<C-x>`, `<C-Left>`, `<D-x>` for Super, `<lt>`, `<Bar>`). One `luaeval` query reads the mode from `nvim_get_mode` and the mapping from `maparg`. A Lua-callback mapping, a mapping (after following `<Plug>` chains up to 5 levels), or a key that only starts longer mappings (reported with the `timeoutlen` wait) is `handled`/`stops`. An unmapped `<C-i>`, `<C-m>`, `<C-[>`, or `<C-j>` falls back to the `<Tab>`, `<CR>`, `<Esc>`, or `<NL>` mapping, as Neovim does. No mapping is `indeterminate`, because built-in commands and `vim.on_key` handlers are not inspected; in terminal mode it is `indeterminate`/`continues`. Prompt modes, timeouts, AltGr, and keycode queries are `indeterminate`.
 - `extensions/whykey-vscode`: stdlib Python 3 script querying user `keybindings.json` across Code, Code - Insiders, Code - OSS, VSCodium, and their Flatpak paths, searching `$XDG_CONFIG_HOME` before `~/.config`. Declares `identify_action` capability. Follows VS Code's resolver: user entries come after the defaults, and the last matching entry without a `when` clause decides. A `when` clause is named but not evaluated, so its binding is `handled`/`indeterminate`. `"command": "-id"` removes only default bindings. A chord prefix is `handled`/`stops`, an empty command is `not_handled`/`continues`, and `^command` is `handled`/`continues`. Keys follow VS Code's parser (`+`/`-` separators, `cmd`/`win`/`meta` as Super, `[KeyA]` scan codes, multi-chord keys). A key missing from the user file is `indeterminate`, because VS Code's default keybindings are not bundled; a User directory without `keybindings.json` counts as no user bindings. Profile keybindings or several VS Code builds make the answer `indeterminate`, as do keycode and AltGr queries.
 - `extensions/whykey-emacs`: stdlib Python 3 script querying running Emacs via `emacsclient --eval`. Declares `query_mode` and `identify_action` capabilities. Connects via `EMACS_SERVER_FILE`, `EMACS_SOCKET_NAME`, or default daemon socket. Returns `status: "unavailable"` when emacsclient is missing or no daemon is reachable, with remediation to run `emacs --daemon` or `(server-start)`. Runs `key-binding` at point in the selected window's buffer, so text-property and overlay maps count, and reports the winning map from `current-active-maps` (`global`, `major`, `minor (<mode>)`, or an overriding, emulation, or text-property map). A prefix key is `handled`/`stops` because Emacs waits for the next key. In graphical frames `<return>`/`<tab>`/`<escape>`/`<backspace>` are looked up before `RET`/`TAB`/`ESC`/`DEL`, and an unbound shifted key falls back to its unshifted form. No binding is `indeterminate`, because `key-translation-map`, `input-decode-map`, and pre-command hooks are not inspected. A timeout or evaluation error is `indeterminate`, not "no daemon".
 
@@ -241,7 +265,7 @@ Parsing is case-insensitive. JSON keeps the numeric modifier mask. Text output o
 3. Match the normalized key name and exact modifier mask. Keysym names in bindings (`comma`, `slash`, `minus`, `Prior`) are normalized the same way as the query. Hyprland reports some runtime-built Lua binds with key `""` and keycode 0. Such a bind first takes its key from the text listing, joined on dispatcher, argument, modmask, submap, and description. The listing's `key:` string must have its modifiers (Hyprland's `modFromSv` names) first and equal to the modmask, followed by exactly one key segment; text keys that belong to binds the JSON already resolves are removed first. A multi-key bind (`SUPER + code:10 + code:11`) or an ambiguous join stays unresolved. An unresolved bind then takes its key from literal Lua hints with the same modmask and description, but only when all of those hints agree (for example `SUPER + code:20`). Otherwise the key is unresolved. An unresolved bind in the active submap with the query's modifiers is reported as a possible match (`UnresolvedBindingKey`), never as an exact one.
 4. Consider a binding active when it belongs to the active submap or has the universal-submap flag. Keep same-key bindings from inactive submaps in the evidence so mode-dependent shortcuts are visible without treating them as active.
 5. Determine handling and propagation separately. Use Hyprland's `non_consuming`, `auto_consuming`, `release`, and `longPress` flags, the `pass` and `submap` dispatchers, and any dispatcher result visible through the runtime API. A `pass` binding is reported as redirected because its target window is not necessarily the next layer in the inspected chain. `__lua` and plugin dispatchers follow the same rule as every other dispatcher. Hyprland consumes the key unless the bind is `non_consuming`; an `auto_consuming` bind stays uncertain. A Lua callback can forward the key only by returning `pass_event`, which whykey cannot observe, so the evidence says so.
-6. Include active same-key bindings with different modifiers as possible matches unless their `ignore_mods` value is known. Read `ignore_mods` from the runtime JSON field when present. Otherwise, use a Lua hint and then a declarative `.conf` hint for the exact modifier mask and key. A hint for another binding on the same key never applies, and a binding with no hint stays a possible match. For declarative config, follow literal `source`/`include` files and variables. `source` paths expand `*` and `?` per path component like glob(3): a leading dot matches only explicitly, and matches are read in byte-sorted order. Paths with `[` bracket classes are skipped. Configuration, `source`, and Lua files are read only when they are regular files of at most 1 MiB. The longest variable name wins; unknown names stay literal, and the bind is skipped. Read bind flags from the keyword suffix (`bindi`, `bindln`; letters `lremnatisodpcgukx`), skip multi-key `s` binds, and apply `unbind = MODS, KEY` in order. In discovered Lua files, scan balanced single- and multi-line literal `o.bind`/`hl.bind` calls in file order, without executing Lua. They supply source and description evidence and a literal `ignore_mods` value, including the helper default of `false`. `hl.unbind("COMBO")` removes earlier hints for that combo, a later bind adds it back, `hl.unbind("all")` clears every hint, and a non-literal unbind changes nothing. Globs and dynamic key or options expressions remain possible matches. Surface `locked`, `dont_inhibit`, and `allow_input_capture` when present, because they qualify inhibitor and capture behavior.
+6. Include active same-key bindings with different modifiers as possible matches unless their `ignore_mods` value is known. Read `ignore_mods` from the runtime JSON field when present. Otherwise, use a Lua hint and then a declarative `.conf` hint for the exact modifier mask and key. A hint for another binding on the same key never applies, and a binding with no hint stays a possible match. For declarative config, follow literal `source`/`include` files and variables. `source` paths expand `*` and `?` per path component like glob(3): a leading dot matches only explicitly, and matches are read in byte-sorted order. Bracket classes `[abc]`, `[a-z]`, `[!x]`, and `[^x]` are matched too (a `]` right after `[` or the negation is literal, an unterminated `[` is literal); POSIX named classes and backslash escapes are not supported, and ranges compare code points. Configuration, `source`, and Lua files are read only when they are regular files of at most 1 MiB. The longest variable name wins; unknown names stay literal, and the bind is skipped. Read bind flags from the keyword suffix (`bindi`, `bindln`; letters `lremnatisodpcgukx`), skip multi-key `s` binds, and apply `unbind = MODS, KEY` in order. In discovered Lua files, scan balanced single- and multi-line literal `o.bind`/`hl.bind` calls in file order, without executing Lua. They supply source and description evidence and a literal `ignore_mods` value, including the helper default of `false`. `hl.unbind("COMBO")` removes earlier hints for that combo, a later bind adds it back, `hl.unbind("all")` clears every hint, and a non-literal unbind changes nothing. Globs and dynamic key or options expressions remain possible matches. Surface `locked`, `dont_inhibit`, and `allow_input_capture` when present, because they qualify inhibitor and capture behavior.
 7. Report every active exact match, including its dispatcher, argument, and description when present. Never execute `__lua` or plugin dispatchers; the evidence states that their runtime action is not executed by whykey.
 8. Query `hyprctl devices -j` when available and include active keyboard names, main-device status, and keymap in the evidence. Accept both legacy string and structured per-device fields in `hyprctl binds -j`. Kernel keycodes enter as evdev and convert once to the XKB namespace (`+8`); Hyprland socket events and numeric binding fields are treated as already XKB. The native capture hook's keycode is XKB: Hyprland 0.56.2's `LuaEventHandler.cpp` pushes the libinput keycode plus 8. Missing RMLVO or layout data yields explicit uncertainty, never a guessed US layout.
 

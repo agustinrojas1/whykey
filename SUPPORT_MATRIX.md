@@ -26,7 +26,7 @@ contract shared by the capability registry and tests.
 | `capture.ndjson` | capture | Implemented | Emit one compact schema-v2 record per captured event. |
 | `capture.export` | capture | Implemented | Write replayable JSON or NDJSON capture records to an explicit file. |
 | `capture.evdev` | capture | Implemented | Capture Linux evdev keyboard events when a readable device is available. |
-| `remapper.pre-compositor` | input | Implemented | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions, kmonad, and input-remapper conditional. |
+| `remapper.pre-compositor` | input | Implemented | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, kmonad, input-remapper, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions and kmonad or input-remapper rules for unproven devices conditional. |
 | `input.ime-context` | input | Implemented | Detect IBus/Fcitx5 session context. |
 | `input.ime-runtime-engine` | input | Implemented | Query an active IBus/Fcitx5 engine through a read-only API when possible. |
 | `input.ime.fcitx5-safe-query` | safety | Implemented | Use bounded read-only Fcitx5 D-Bus calls without launching client helpers. |

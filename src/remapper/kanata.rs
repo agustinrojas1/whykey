@@ -6,47 +6,10 @@
 use std::path::Path;
 
 use super::keys::{self, ALT, ALTGR, CTRL, Press, SHIFT, SUPER};
+use super::sexp::{self, Dialect, Sexp};
 use super::{Effect, Finding, Rule};
 
 const MAX_ALIAS_DEPTH: usize = 8;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Sexp {
-    Atom(String, u32),
-    List(Vec<Sexp>, u32),
-}
-
-impl Sexp {
-    fn line(&self) -> u32 {
-        match self {
-            Self::Atom(_, line) | Self::List(_, line) => *line,
-        }
-    }
-
-    fn atom(&self) -> Option<&str> {
-        match self {
-            Self::Atom(text, _) => Some(text),
-            Self::List(..) => None,
-        }
-    }
-
-    fn head(&self) -> Option<&str> {
-        match self {
-            Self::List(items, _) => items.first().and_then(Sexp::atom),
-            Self::Atom(..) => None,
-        }
-    }
-
-    fn render(&self) -> String {
-        match self {
-            Self::Atom(text, _) => text.clone(),
-            Self::List(items, _) => format!(
-                "({})",
-                items.iter().map(Sexp::render).collect::<Vec<_>>().join(" ")
-            ),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Override {
@@ -549,106 +512,8 @@ fn key(name: &str) -> Option<u16> {
     Some(code)
 }
 
-/// Maximum list nesting; bounds recursion in evaluation and `Drop`.
-const MAX_NESTING: usize = 64;
-
-/// Parse kanata s-expressions: `;;` line comments, `#| |#` block comments,
-/// and double-quoted strings.
 fn parse(content: &str) -> Result<Vec<Sexp>, String> {
-    let mut stack: Vec<(Vec<Sexp>, u32)> = vec![(Vec::new(), 0)];
-    let mut line = 1u32;
-    let mut chars = content.chars().peekable();
-    while let Some(character) = chars.next() {
-        match character {
-            '\n' => line += 1,
-            c if c.is_whitespace() => {}
-            ';' if chars.peek() == Some(&';') => {
-                for next in chars.by_ref() {
-                    if next == '\n' {
-                        line += 1;
-                        break;
-                    }
-                }
-            }
-            '#' if chars.peek() == Some(&'|') => {
-                chars.next();
-                let mut previous = ' ';
-                let mut closed = false;
-                for next in chars.by_ref() {
-                    if next == '\n' {
-                        line += 1;
-                    }
-                    if previous == '|' && next == '#' {
-                        closed = true;
-                        break;
-                    }
-                    previous = next;
-                }
-                if !closed {
-                    return Err("unterminated block comment".into());
-                }
-            }
-            '(' => {
-                if stack.len() > MAX_NESTING {
-                    return Err(format!("line {line}: nesting deeper than {MAX_NESTING}"));
-                }
-                stack.push((Vec::new(), line));
-            }
-            ')' => {
-                let (items, start) = stack
-                    .pop()
-                    .filter(|_| !stack.is_empty())
-                    .ok_or_else(|| format!("line {line}: unbalanced ')'"))?;
-                stack
-                    .last_mut()
-                    .ok_or_else(|| format!("line {line}: unbalanced ')'"))?
-                    .0
-                    .push(Sexp::List(items, start));
-            }
-            '"' => {
-                let mut text = String::new();
-                let mut closed = false;
-                for next in chars.by_ref() {
-                    if next == '"' {
-                        closed = true;
-                        break;
-                    }
-                    if next == '\n' {
-                        line += 1;
-                    }
-                    text.push(next);
-                }
-                if !closed {
-                    return Err(format!("line {line}: unterminated string"));
-                }
-                push_atom(&mut stack, text, line)?;
-            }
-            first => {
-                let mut text = String::from(first);
-                while let Some(next) = chars.peek() {
-                    if next.is_whitespace() || matches!(next, '(' | ')') {
-                        break;
-                    }
-                    text.push(*next);
-                    chars.next();
-                }
-                push_atom(&mut stack, text, line)?;
-            }
-        }
-    }
-    if stack.len() != 1 {
-        return Err("unbalanced '('".into());
-    }
-    Ok(stack.pop().map(|(items, _)| items).unwrap_or_default())
-}
-
-fn push_atom(stack: &mut [(Vec<Sexp>, u32)], text: String, line: u32) -> Result<(), String> {
-    stack
-        .last_mut()
-        .ok_or_else(|| format!("line {line}: unexpected atom"))?
-        .0
-        .push(Sexp::Atom(text, line));
-    Ok(())
+    sexp::parse(content, Dialect::Kanata)
 }
 
 #[cfg(test)]

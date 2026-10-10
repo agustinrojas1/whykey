@@ -184,12 +184,34 @@ fn remote_session_without_compositor_state(ssh: bool, compositor_signature: bool
     ssh && !compositor_signature
 }
 
-include!("ipc.rs");
-include!("config.rs");
-include!("keyboard.rs");
-include!("matching.rs");
+mod config;
+mod ipc;
+mod keyboard;
+mod matching;
+use config::hyprland_config_paths;
+pub(crate) use ipc::{INVENTORY_SOURCE, collect_probe};
+pub use ipc::{applicable, binding_inventory, focused_pid, ipc_available};
+use ipc::{has_hyprland_signature, inspect_system, inspect_system_with_probe};
+pub(crate) use keyboard::{compile_main_xkb_keymap, main_keyboard_active_layout_index};
+use matching::deserialize_boolish;
+pub(crate) use matching::main_keyboard_lock_state;
+
 #[cfg(test)]
 mod tests {
+    use super::config::{
+        ConfigBindHint, LuaBindHint, collect_config_hints, extend_lua_bind_hints,
+        lua_literal_argument, parse_config_bind_hint, parse_lua_bind_hint, parse_lua_bind_hints,
+        resolve_config_path, resolve_inline_variables,
+    };
+    use super::ipc::{
+        collect_records, parse_hyprland_instances, recover_unreported_keys,
+        select_hyprland_instance,
+    };
+    use super::keyboard::{
+        parse_xkb_symbol_fragment, parse_xkb_symbol_key_name, parse_xkb_symbol_keycodes,
+        parse_xkb_symbol_keycodes_for_group, summarize_keyboards,
+    };
+    use super::matching::{inspect_json, inspect_json_with_keycode};
     use super::*;
 
     #[test]
@@ -1132,6 +1154,32 @@ xkb_symbols "pc" {
         }
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn expands_bracket_class_sources() {
+        let base = std::env::temp_dir().join(format!("whykey-hypr-bracket-{}", std::process::id()));
+        let parts = base.join("conf.d");
+        fs::create_dir_all(&parts).unwrap();
+        let root = base.join("hyprland.conf");
+        fs::write(&root, "source = conf.d/[0-9][!x]-binds.conf\n").unwrap();
+        fs::write(parts.join("10-binds.conf"), "bindi = SUPER, A, exec, a\n").unwrap();
+        fs::write(parts.join("1x-binds.conf"), "bindi = SUPER, X, exec, x\n").unwrap();
+        fs::write(parts.join("ab-binds.conf"), "bindi = SUPER, B, exec, b\n").unwrap();
+
+        let mut visited = HashSet::new();
+        let mut variables = HashMap::new();
+        let mut hints = Vec::new();
+        collect_config_hints(&root, &mut visited, &mut variables, &mut hints, 0);
+        let _ = fs::remove_dir_all(&base);
+
+        let keys: Vec<_> = hints.iter().map(|hint| hint.combo.to_string()).collect();
+        let super_a: KeyCombo = "super+a".parse().unwrap();
+        assert!(hints.iter().any(|hint| hint.combo == super_a), "{keys:?}");
+        for absent in ["super+x", "super+b"] {
+            let combo: KeyCombo = absent.parse().unwrap();
+            assert!(hints.iter().all(|hint| hint.combo != combo), "{keys:?}");
+        }
     }
 
     #[test]

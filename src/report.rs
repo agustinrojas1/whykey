@@ -69,6 +69,8 @@ struct NdjsonPathEntry<'a> {
     summary: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<&'a BindingEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dead_key: Option<&'a str>,
     evidence: Vec<NdjsonEvidence<'a>>,
 }
 
@@ -165,6 +167,7 @@ pub fn render_ndjson(
                 propagation: layer.propagation(),
                 summary: &layer.summary,
                 binding: layer.binding.as_ref(),
+                dead_key: layer.dead_key.as_deref(),
                 evidence: layer
                     .all_details()
                     .map(|detail| NdjsonEvidence {
@@ -554,6 +557,10 @@ fn diagnosis_text(
         Conclusion::ConfiguredConsumer { layer, .. } => {
             format!("{layer} is configured to consume the shortcut.")
         }
+        Conclusion::DeadKeyComposition { layer, keysym, .. } => format!(
+            "{} is a dead key ({keysym}) in the active layout; {layer} composes it with the next key before sending anything.",
+            style::human_key(key)
+        ),
         Conclusion::ConfiguredRedirect { layer, .. } => {
             format!("{layer} is configured to redirect the shortcut.")
         }
@@ -628,6 +635,9 @@ fn qualification_text(
     if matches!(
         conclusion,
         Conclusion::ConfiguredConsumer {
+            assumes_earlier_forward: true,
+            ..
+        } | Conclusion::DeadKeyComposition {
             assumes_earlier_forward: true,
             ..
         } | Conclusion::ConfiguredRedirect {
@@ -725,6 +735,9 @@ fn effect_text(
         Conclusion::ConfiguredConsumer { .. } => {
             "The configured consumer stops this shortcut before later layers can handle it.".into()
         }
+        Conclusion::DeadKeyComposition { .. } => {
+            "Nothing reaches the shell or application yet; the next key completes or cancels the composition, and only its result is sent.".into()
+        }
         Conclusion::ConfiguredRedirect { .. } => {
             "The configured redirect sends the shortcut to another window.".into()
         }
@@ -820,6 +833,7 @@ fn layer_line(
         (_, Outcome::Pass) => "No matching binding",
         (_, Outcome::HandledAndPassed) if terminal_observed => "Observed receipt",
         (_, Outcome::HandledAndPassed) => "Matching binding",
+        (_, Outcome::Consumed) if layer.dead_key.is_some() => "Dead key",
         (_, Outcome::Consumed) => "Configured to stop",
         (_, Outcome::Redirected) if layer.id == LayerId::Remapper => "Remapped",
         (_, Outcome::Redirected) => "Redirected",
@@ -845,6 +859,8 @@ fn layer_line(
                 "{candidates} binding{} with unreported keys",
                 if candidates == 1 { "" } else { "s" }
             )
+        } else if let Some(keysym) = &layer.dead_key {
+            format!("{keysym} starts composition; no bytes until the next key")
         } else if let Some(binding) = &layer.binding {
             binding
                 .description
@@ -947,6 +963,9 @@ fn uncertainty_text(
     if matches!(
         conclusion,
         Conclusion::ConfiguredConsumer {
+            assumes_earlier_forward: true,
+            ..
+        } | Conclusion::DeadKeyComposition {
             assumes_earlier_forward: true,
             ..
         } | Conclusion::ConfiguredRedirect {
@@ -1425,6 +1444,14 @@ pub enum Conclusion {
         layer: &'static str,
         assumes_earlier_forward: bool,
     },
+    /// The layer holds the key for dead-key composition (`keysym`, e.g.
+    /// `dead_acute`); it is not a binding, and the next key is composed with
+    /// it before anything is sent.
+    DeadKeyComposition {
+        layer: &'static str,
+        keysym: String,
+        assumes_earlier_forward: bool,
+    },
     ConfiguredRedirect {
         layer: &'static str,
         assumes_earlier_forward: bool,
@@ -1653,9 +1680,17 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
         .iter()
         .find(|l| l.propagation() == Propagation::Stops)
     {
+        let assumes_earlier_forward = !terminal_observed && prior_uncertainty(layers);
+        if let Some(keysym) = &layer.dead_key {
+            return Conclusion::DeadKeyComposition {
+                layer: layer.layer,
+                keysym: keysym.clone(),
+                assumes_earlier_forward,
+            };
+        }
         return Conclusion::ConfiguredConsumer {
             layer: layer.layer,
-            assumes_earlier_forward: !terminal_observed && prior_uncertainty(layers),
+            assumes_earlier_forward,
         };
     }
     if let Some(layer) = layers
@@ -1869,6 +1904,50 @@ mod tests {
 
         let verbose = render(&key, std::slice::from_ref(&layer), true);
         assert!(verbose.contains("active submap: default"));
+    }
+
+    #[test]
+    fn renders_a_dead_key_as_composition_not_a_binding() {
+        let key: KeyCombo = "altgr+apostrophe".parse().unwrap();
+        let mut kitty = LayerResult::new(
+            "Kitty",
+            LayerId::Terminal,
+            Outcome::Consumed,
+            "starts dead-key composition; no bytes are sent until the next key",
+            vec!["dead key dead_acute: composition sends no bytes until the next key".into()],
+        );
+        kitty.dead_key = Some("dead_acute".into());
+        let layers = [
+            LayerResult::pass("Hyprland", LayerId::Compositor, "no active binding", vec![]),
+            kitty,
+        ];
+
+        assert!(matches!(
+            evaluate_conclusion(&layers, None, false).conclusion,
+            Conclusion::DeadKeyComposition { layer: "Kitty", ref keysym, .. } if keysym == "dead_acute"
+        ));
+        let output = render(&key, &layers, false);
+        let flat = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains(
+                "AltGr+' is a dead key (dead_acute) in the active layout; Kitty composes it with the next key before sending anything."
+            ),
+            "{output}"
+        );
+        assert!(flat.contains("Kitty — Dead key: dead_acute starts composition"));
+        assert!(flat.contains("the next key completes or cancels the composition"));
+        assert!(!output.contains("configured to consume"), "{output}");
+        assert!(!output.contains("Configured to stop"), "{output}");
+
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 2)).unwrap();
+        assert_eq!(v2["path"][1]["dead_key"], "dead_acute");
+        let v1: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
+        assert!(v1["layers"][1].get("dead_key").is_none());
+        let ndjson: serde_json::Value =
+            serde_json::from_str(&render_ndjson(&key, &layers, None)).unwrap();
+        assert_eq!(ndjson["path"][1]["dead_key"], "dead_acute");
     }
 
     #[test]

@@ -1,12 +1,18 @@
+use super::output::run_observed_loop;
+#[cfg(target_os = "linux")]
+use super::terminal::EvdevBackend;
+use super::terminal::SignalGuard;
+use super::*;
+
 #[cfg(not(target_os = "linux"))]
-fn run_evdev(_options: Options) -> Result<(), ListenError> {
+pub(super) fn run_evdev(_options: Options) -> Result<(), ListenError> {
     Err(ListenError::Message(
         "evdev capture is only available on Linux".into(),
     ))
 }
 
 #[cfg(target_os = "linux")]
-fn run_evdev(options: Options) -> Result<(), ListenError> {
+pub(super) fn run_evdev(options: Options) -> Result<(), ListenError> {
     // Install first: the guard must outlive the capture session it protects.
     let signals = SignalGuard::install()?;
     let snapshot = ListenSession::capture();
@@ -21,41 +27,41 @@ fn run_evdev(options: Options) -> Result<(), ListenError> {
 #[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct LinuxInputEvent {
-    _time: libc::timeval,
-    event_type: u16,
-    code: u16,
-    value: i32,
+pub(super) struct LinuxInputEvent {
+    pub(super) _time: libc::timeval,
+    pub(super) event_type: u16,
+    pub(super) code: u16,
+    pub(super) value: i32,
 }
 
 #[cfg(target_os = "linux")]
-struct EvdevDevice {
-    path: PathBuf,
-    name: String,
-    file: File,
-    pressed_modifiers: Vec<u16>,
-    locked_modifiers: u32,
+pub(super) struct EvdevDevice {
+    pub(super) path: PathBuf,
+    pub(super) name: String,
+    pub(super) file: File,
+    pub(super) pressed_modifiers: Vec<u16>,
+    pub(super) locked_modifiers: u32,
     /// Set after `SYN_DROPPED`; all events through the following
     /// `SYN_REPORT` are discarded before querying the kernel's current state.
-    resync_required: bool,
+    pub(super) resync_required: bool,
 }
 
 #[cfg(target_os = "linux")]
-struct EvdevSession {
-    devices: Vec<EvdevDevice>,
-    requested: Option<PathBuf>,
-    last_hotplug_scan: Instant,
-    include_modifiers: bool,
+pub(super) struct EvdevSession {
+    pub(super) devices: Vec<EvdevDevice>,
+    pub(super) requested: Option<PathBuf>,
+    pub(super) last_hotplug_scan: Instant,
+    pub(super) include_modifiers: bool,
     /// Optional compositor-independent XKB map compiled from explicit RMLVO
     /// environment variables. Without one, retain the Linux key-name
     /// fallback and report the translation as conditional.
-    xkb_keymap: Option<String>,
-    xkb_group: usize,
+    pub(super) xkb_keymap: Option<String>,
+    pub(super) xkb_group: usize,
 }
 
 #[cfg(target_os = "linux")]
 impl EvdevSession {
-    fn open(requested: Option<&Path>) -> Result<Self, ListenError> {
+    pub(super) fn open(requested: Option<&Path>) -> Result<Self, ListenError> {
         let paths = if let Some(path) = requested {
             vec![path.to_owned()]
         } else {
@@ -130,7 +136,7 @@ impl EvdevSession {
         })
     }
 
-    fn key_name(&self, code: crate::xkb::EvdevKeycode) -> String {
+    pub(super) fn key_name(&self, code: crate::xkb::EvdevKeycode) -> String {
         self.xkb_keymap
             .as_deref()
             .and_then(|keymap| {
@@ -163,7 +169,7 @@ impl EvdevSession {
         }
     }
 
-    fn encoding_label(&self) -> &'static str {
+    pub(super) fn encoding_label(&self) -> &'static str {
         if self.xkb_keymap.is_some() {
             "evdev key event translated with explicit XKB RMLVO before compositor processing"
         } else {
@@ -171,7 +177,7 @@ impl EvdevSession {
         }
     }
 
-    fn read_key_event(&mut self, timeout_ms: i32) -> io::Result<Option<ObservedKey>> {
+    pub(super) fn read_key_event(&mut self, timeout_ms: i32) -> io::Result<Option<ObservedKey>> {
         self.maybe_add_hotplugged_devices();
         let mut pollfds = self
             .devices
@@ -449,7 +455,7 @@ fn read_linux_input_event(file: &mut File) -> io::Result<LinuxInputEvent> {
 }
 
 #[cfg(target_os = "linux")]
-fn set_nonblocking(file: &File) -> io::Result<()> {
+pub(super) fn set_nonblocking(file: &File) -> io::Result<()> {
     // SAFETY: the descriptor is owned by `file`; fcntl does not retain the
     // pointer and only changes the descriptor flags.
     let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
@@ -464,7 +470,7 @@ fn set_nonblocking(file: &File) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn evdev_device_name(path: &Path) -> String {
+pub(super) fn evdev_device_name(path: &Path) -> String {
     let fallback = path.display().to_string();
     let Some(event_name) = path.file_name().and_then(|value| value.to_str()) else {
         return fallback;
@@ -477,7 +483,7 @@ fn evdev_device_name(path: &Path) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn evdev_keyboard_capability(path: &Path) -> Option<bool> {
+pub(super) fn evdev_keyboard_capability(path: &Path) -> Option<bool> {
     let event_name = path.file_name()?.to_str()?;
     let contents = std::fs::read_to_string(format!(
         "/sys/class/input/{event_name}/device/capabilities/key"
@@ -489,7 +495,7 @@ fn evdev_keyboard_capability(path: &Path) -> Option<bool> {
 /// sysfs prints the capability bitmap most-significant word first
 /// (`input_print_bitmap` in drivers/input/input.c walks from the highest
 /// non-zero `unsigned long` down), so the last word holds bits 0-63.
-fn parse_evdev_keyboard_capability(contents: &str) -> bool {
+pub(super) fn parse_evdev_keyboard_capability(contents: &str) -> bool {
     let words = contents
         .split_whitespace()
         .rev()
@@ -504,16 +510,16 @@ fn parse_evdev_keyboard_capability(contents: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-const EV_KEY: u16 = 0x01;
+pub(super) const EV_KEY: u16 = 0x01;
 
 #[cfg(target_os = "linux")]
-const EV_SYN: u16 = 0x00;
+pub(super) const EV_SYN: u16 = 0x00;
 
 #[cfg(target_os = "linux")]
-const SYN_DROPPED: u16 = 0x03;
+pub(super) const SYN_DROPPED: u16 = 0x03;
 
 #[cfg(target_os = "linux")]
-const SYN_REPORT: u16 = 0x00;
+pub(super) const SYN_REPORT: u16 = 0x00;
 
 #[cfg(target_os = "linux")]
 fn evdev_pressed_modifiers_from_kernel(file: &File) -> Vec<u16> {
@@ -743,4 +749,3 @@ pub(crate) fn evdev_key_name(code: u16) -> Option<&'static str> {
         _ => return None,
     })
 }
-

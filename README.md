@@ -148,18 +148,21 @@ Each adapter uses read-only IPC or parses a small, known part of the relevant
 configuration. Missing tools and dynamic configuration are reported as
 uncertain evidence instead of guessed answers.
 
-keyd, kanata, and xremap configurations are evaluated for the queried key.
+keyd, kanata, kmonad, input-remapper, and xremap configurations are evaluated
+for the queried key.
 A remap sends the target key through the later layers ("keyd remaps Caps Lock
 to Esc. …"), and a layer switch, macro, or command consumes it. Tap-hold,
 one-shot, application-specific, and other timing- or state-dependent actions
-stay conditional. kmonad and input-remapper are detected but not evaluated.
+stay conditional, and so do kmonad and input-remapper rules unless the
+captured key came from the device they are configured for.
 Remapper rules name physical keys, so letters, digits, and punctuation are
 mapped by their US position and stay uncertain unless `WHYKEY_XKB_LAYOUT` or
 `XKB_DEFAULT_LAYOUT` is `us` with no variant.
 
 An `altgr+…` query predicts the text of the active layout's third level
 (fourth with Shift), for example `ä` for `altgr+q` on `us altgr-intl`. A dead
-key is reported as starting dead-key composition with no bytes sent. When
+key is reported as a dead key that starts composition, with no bytes sent
+(JSON v2 and NDJSON path entries carry its `dead_key` keysym). When
 the layout or level is unknown, the report says why the encoding is unknown.
 
 `whykey listen` captures the next deliberate shortcut to explain its path.
@@ -214,8 +217,8 @@ Whykey includes adapters for:
 - Ghostty, Kitty, Alacritty, Foot, WezTerm, Konsole, and generic terminals
 - Bash with Readline, Zsh with ZLE, Fish, tmux, GNU Screen, and Zellij
 - Neovim, Vim, Emacs, Helix, Kakoune, Micro, VS Code, and JetBrains IDEs
-- Fcitx5 and IBus; keyd, Kanata, and xremap (evaluated for the queried key);
-  KMonad and input-remapper (detected, not evaluated)
+- Fcitx5 and IBus; keyd, Kanata, KMonad, input-remapper, and xremap (evaluated
+  for the queried key)
 
 Support is best effort where a program does not expose its live keymap.
 Generated configuration, plugins, firmware mappings, browser shortcuts, and

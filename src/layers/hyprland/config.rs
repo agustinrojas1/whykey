@@ -1,31 +1,34 @@
+use super::matching::BindingKey;
+use super::*;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfigBindHint {
-    combo: KeyCombo,
-    ignore_mods: bool,
+    pub(super) combo: KeyCombo,
+    pub(super) ignore_mods: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LuaBindHint {
-    combo: KeyCombo,
-    description: Option<String>,
-    action: Option<String>,
-    ignore_mods: Option<bool>,
-    source: PathBuf,
-    line_number: usize,
+    pub(super) combo: KeyCombo,
+    pub(super) description: Option<String>,
+    pub(super) action: Option<String>,
+    pub(super) ignore_mods: Option<bool>,
+    pub(super) source: PathBuf,
+    pub(super) line_number: usize,
 }
 
 /// Static configuration evidence. Config files do not change during one
 /// process, so they are read once instead of on every inspected key.
 #[derive(Debug)]
-struct ConfigHints {
-    lua: Vec<LuaBindHint>,
-    declarative: Vec<ConfigBindHint>,
+pub(super) struct ConfigHints {
+    pub(super) lua: Vec<LuaBindHint>,
+    pub(super) declarative: Vec<ConfigBindHint>,
 }
 
 /// Upper bound on a single Hyprland config or Lua file read.
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
-static CONFIG_HINTS: LazyLock<ConfigHints> = LazyLock::new(|| ConfigHints {
+pub(super) static CONFIG_HINTS: LazyLock<ConfigHints> = LazyLock::new(|| ConfigHints {
     lua: lua_config_bindings(),
     declarative: declarative_config_hints(),
 });
@@ -50,7 +53,7 @@ fn declarative_config_hints() -> Vec<ConfigBindHint> {
     hints
 }
 
-fn hyprland_config_paths() -> Vec<PathBuf> {
+pub(super) fn hyprland_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(path) = env::var_os("HYPRLAND_CONFIG") {
         paths.push(PathBuf::from(path));
@@ -95,7 +98,7 @@ fn lua_config_bindings() -> Vec<LuaBindHint> {
 }
 
 #[cfg(test)]
-fn parse_lua_bind_hints(content: &str, source: &Path) -> Vec<LuaBindHint> {
+pub(super) fn parse_lua_bind_hints(content: &str, source: &Path) -> Vec<LuaBindHint> {
     let mut hints = Vec::new();
     extend_lua_bind_hints(&mut hints, content, source);
     hints
@@ -103,7 +106,7 @@ fn parse_lua_bind_hints(content: &str, source: &Path) -> Vec<LuaBindHint> {
 
 /// Apply one file's literal bind/unbind calls, in order, on top of the hints
 /// collected from earlier files.
-fn extend_lua_bind_hints(hints: &mut Vec<LuaBindHint>, content: &str, source: &Path) {
+pub(super) fn extend_lua_bind_hints(hints: &mut Vec<LuaBindHint>, content: &str, source: &Path) {
     const MAX_CALL_LENGTH: usize = 64 * 1024;
     let mut pending = String::new();
     let mut start_line = 0;
@@ -168,7 +171,11 @@ fn apply_lua_unbind(hints: &mut Vec<LuaBindHint>, call: &str) {
 /// with `code:` keys expose neither `key` nor `keycode`. Only literal hints
 /// with the same modifiers and description count, and only when they all
 /// agree on the key.
-fn lua_hint_key<'a>(modmask: u32, description: &str, hints: &'a [LuaBindHint]) -> Option<&'a str> {
+pub(super) fn lua_hint_key<'a>(
+    modmask: u32,
+    description: &str,
+    hints: &'a [LuaBindHint],
+) -> Option<&'a str> {
     if description.trim().is_empty() {
         return None;
     }
@@ -315,7 +322,11 @@ fn collect_lua_files(
     }
 }
 
-fn parse_lua_bind_hint(line: &str, source: &Path, line_number: usize) -> Option<LuaBindHint> {
+pub(super) fn parse_lua_bind_hint(
+    line: &str,
+    source: &Path,
+    line_number: usize,
+) -> Option<LuaBindHint> {
     let (prefix, open) = find_lua_bind_call(line)?;
     if prefix == "hl.unbind" {
         return None;
@@ -455,7 +466,7 @@ fn lua_call_arguments(input: &str) -> Option<Vec<&str>> {
     None
 }
 
-fn lua_literal_argument(argument: &str) -> Option<String> {
+pub(super) fn lua_literal_argument(argument: &str) -> Option<String> {
     let argument = argument.trim();
     let quote = matches!(argument.chars().next(), Some('"' | '\''));
     if !quote {
@@ -518,7 +529,7 @@ fn lua_ignore_mods_option(options: Option<&str>) -> Option<bool> {
 /// `ignore_mods` from the last literal Lua declaration of exactly this
 /// binding (same modifiers and key). A declaration of the same key with other
 /// modifiers says nothing about this binding.
-fn lua_ignore_mods_for_binding(
+pub(super) fn lua_ignore_mods_for_binding(
     binding: &Binding,
     key: &BindingKey,
     hints: &[LuaBindHint],
@@ -534,7 +545,7 @@ fn lua_ignore_mods_for_binding(
 }
 
 /// The `.conf` counterpart of [`lua_ignore_mods_for_binding`].
-fn config_ignore_mods_for_binding(
+pub(super) fn config_ignore_mods_for_binding(
     binding: &Binding,
     key: &BindingKey,
     hints: &[ConfigBindHint],
@@ -549,7 +560,7 @@ fn config_ignore_mods_for_binding(
         .map(|hint| hint.ignore_mods)
 }
 
-fn collect_config_hints(
+pub(super) fn collect_config_hints(
     path: &Path,
     visited: &mut HashSet<PathBuf>,
     variables: &mut HashMap<String, String>,
@@ -589,11 +600,8 @@ fn collect_config_hints(
         }
         if let Some(include) = parse_config_include(line) {
             let include = resolve_config_path(&include, &canonical, variables);
-            // Bracket classes are not expanded; skip rather than misread them.
-            if !include.to_string_lossy().contains('[') {
-                for include in expand_config_glob(&include) {
-                    collect_config_hints(&include, visited, variables, hints, depth + 1);
-                }
+            for include in expand_config_glob(&include) {
+                collect_config_hints(&include, visited, variables, hints, depth + 1);
             }
         }
         if let Some(hint) = parse_config_bind_hint(line, variables) {
@@ -623,14 +631,15 @@ fn parse_config_include(line: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-/// Expand `*` and `?` in each path component the way hyprlang's `source`
-/// does through glob(3): a leading dot only matches explicitly, and matches
-/// are returned in sorted order. A path without wildcards is returned as is.
+/// Expand `*`, `?`, and `[...]` in each path component the way hyprlang's
+/// `source` does through glob(3): a leading dot only matches explicitly, and
+/// matches are returned in sorted order. A path without wildcards is returned
+/// as is.
 fn expand_config_glob(path: &Path) -> Vec<PathBuf> {
     let mut matches = vec![PathBuf::new()];
     for component in path.components() {
-        let pattern: Vec<char> = component.as_os_str().to_string_lossy().chars().collect();
-        if !pattern.contains(&'*') && !pattern.contains(&'?') {
+        let pattern = GlobPattern::parse(&component.as_os_str().to_string_lossy());
+        if pattern.is_literal() {
             for path in &mut matches {
                 path.push(component);
             }
@@ -647,8 +656,8 @@ fn expand_config_glob(path: &Path) -> Vec<PathBuf> {
                     .map(|entry| entry.file_name())
                     .filter(|name| {
                         let name: Vec<char> = name.to_string_lossy().chars().collect();
-                        (name.first() != Some(&'.') || pattern.first() == Some(&'.'))
-                            && wildcard_matches(&pattern, &name)
+                        (name.first() != Some(&'.') || pattern.leading_literal_dot())
+                            && pattern.matches(&name)
                     })
                     .map(|name| directory.join(name)),
             );
@@ -659,35 +668,141 @@ fn expand_config_glob(path: &Path) -> Vec<PathBuf> {
     matches
 }
 
-/// `*` matches any run of characters and `?` exactly one. Linear-time
-/// two-pointer match: only the most recent `*` is ever backtracked to.
-fn wildcard_matches(pattern: &[char], name: &[char]) -> bool {
-    let (mut p, mut n) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while n < name.len() {
-        match pattern.get(p) {
-            Some('*') => {
-                star = Some((p, n));
-                p += 1;
-            }
-            Some(&c) if c == '?' || c == name[n] => {
-                p += 1;
-                n += 1;
-            }
-            _ => match star {
-                Some((star_p, star_n)) => {
-                    p = star_p + 1;
-                    n = star_n + 1;
-                    star = Some((star_p, star_n + 1));
-                }
-                None => return false,
-            },
-        }
-    }
-    pattern[p..].iter().all(|&c| c == '*')
+/// One glob(3) path-component pattern, tokenized once so matching never
+/// re-parses bracket expressions.
+struct GlobPattern {
+    tokens: Vec<GlobToken>,
 }
 
-fn resolve_config_path(
+enum GlobToken {
+    Literal(char),
+    AnyOne,
+    AnyRun,
+    /// `[...]`: inclusive character ranges (a single character is `c-c`).
+    Class {
+        negated: bool,
+        ranges: Vec<(char, char)>,
+    },
+}
+
+impl GlobPattern {
+    /// `*` matches any run, `?` one character, and `[...]` one character
+    /// from a class: `[abc]`, ranges `[a-z]`, negation `[!x]`/`[^x]`, and a
+    /// `]` directly after the opening (or negation) is literal. A `[` without
+    /// a closing `]` is a literal `[`, as in glob(3).
+    fn parse(pattern: &str) -> Self {
+        let chars: Vec<char> = pattern.chars().collect();
+        let mut tokens = Vec::with_capacity(chars.len());
+        let mut index = 0;
+        while index < chars.len() {
+            let token = match chars[index] {
+                '*' => GlobToken::AnyRun,
+                '?' => GlobToken::AnyOne,
+                '[' => match parse_glob_class(&chars[index + 1..]) {
+                    Some((token, consumed)) => {
+                        tokens.push(token);
+                        index += 1 + consumed;
+                        continue;
+                    }
+                    None => GlobToken::Literal('['),
+                },
+                character => GlobToken::Literal(character),
+            };
+            tokens.push(token);
+            index += 1;
+        }
+        Self { tokens }
+    }
+
+    fn is_literal(&self) -> bool {
+        self.tokens
+            .iter()
+            .all(|token| matches!(token, GlobToken::Literal(_)))
+    }
+
+    fn leading_literal_dot(&self) -> bool {
+        matches!(self.tokens.first(), Some(GlobToken::Literal('.')))
+    }
+
+    /// Two-pointer match: only the most recent `*` is ever backtracked to,
+    /// so there is no exponential blow-up on patterns like `a*a*a*b`.
+    fn matches(&self, name: &[char]) -> bool {
+        let tokens = &self.tokens;
+        let (mut p, mut n) = (0, 0);
+        let mut star: Option<(usize, usize)> = None;
+        while n < name.len() {
+            match tokens.get(p) {
+                Some(GlobToken::AnyRun) => {
+                    star = Some((p, n));
+                    p += 1;
+                }
+                Some(token) if token.matches_one(name[n]) => {
+                    p += 1;
+                    n += 1;
+                }
+                _ => match star {
+                    Some((star_p, star_n)) => {
+                        p = star_p + 1;
+                        n = star_n + 1;
+                        star = Some((star_p, star_n + 1));
+                    }
+                    None => return false,
+                },
+            }
+        }
+        tokens[p..]
+            .iter()
+            .all(|token| matches!(token, GlobToken::AnyRun))
+    }
+}
+
+impl GlobToken {
+    fn matches_one(&self, character: char) -> bool {
+        match self {
+            Self::Literal(literal) => *literal == character,
+            Self::AnyOne => true,
+            Self::AnyRun => false,
+            Self::Class { negated, ranges } => {
+                ranges
+                    .iter()
+                    .any(|&(low, high)| (low..=high).contains(&character))
+                    != *negated
+            }
+        }
+    }
+}
+
+/// Parse the body of a bracket expression (`rest` starts after `[`). Returns
+/// the class and the number of characters consumed including the closing `]`,
+/// or `None` when the expression is unterminated.
+fn parse_glob_class(rest: &[char]) -> Option<(GlobToken, usize)> {
+    let mut index = 0;
+    let negated = matches!(rest.first(), Some('!' | '^'));
+    if negated {
+        index += 1;
+    }
+    let mut ranges = Vec::new();
+    let mut first = true;
+    loop {
+        let low = *rest.get(index)?;
+        if low == ']' && !first {
+            return Some((GlobToken::Class { negated, ranges }, index + 1));
+        }
+        first = false;
+        match (rest.get(index + 1), rest.get(index + 2)) {
+            (Some('-'), Some(&high)) if high != ']' => {
+                ranges.push((low, high));
+                index += 3;
+            }
+            _ => {
+                ranges.push((low, low));
+                index += 1;
+            }
+        }
+    }
+}
+
+pub(super) fn resolve_config_path(
     raw: &str,
     relative_to: &Path,
     variables: &HashMap<String, String>,
@@ -728,7 +843,7 @@ fn resolve_config_path(
     }
 }
 
-fn parse_config_bind_hint(
+pub(super) fn parse_config_bind_hint(
     line: &str,
     variables: &HashMap<String, String>,
 ) -> Option<ConfigBindHint> {
@@ -787,7 +902,7 @@ fn parse_config_combo(
 /// Substitute `$name` variables the way hyprlang does: at each `$`, the
 /// longest defined name wins, so `$mod` never clobbers `$mainMod`. Unknown
 /// names stay literal and make the bind unparsable instead of guessed.
-fn resolve_inline_variables(raw: &str, variables: &HashMap<String, String>) -> String {
+pub(super) fn resolve_inline_variables(raw: &str, variables: &HashMap<String, String>) -> String {
     let mut value = String::with_capacity(raw.len());
     let mut rest = raw.trim();
     while let Some(start) = rest.find('$') {
@@ -813,7 +928,7 @@ fn resolve_inline_variables(raw: &str, variables: &HashMap<String, String>) -> S
 }
 
 #[cfg(test)]
-mod config_variable_tests {
+mod tests {
     use super::*;
 
     #[test]
@@ -845,16 +960,10 @@ mod config_variable_tests {
         let super_w: KeyCombo = "super+w".parse().unwrap();
         assert!(hints.iter().all(|hint| hint.combo != super_w));
     }
-}
-
-#[cfg(test)]
-mod wildcard_tests {
-    use super::wildcard_matches;
 
     fn matches(pattern: &str, name: &str) -> bool {
-        let pattern: Vec<char> = pattern.chars().collect();
         let name: Vec<char> = name.chars().collect();
-        wildcard_matches(&pattern, &name)
+        GlobPattern::parse(pattern).matches(&name)
     }
 
     #[test]
@@ -869,8 +978,44 @@ mod wildcard_tests {
     }
 
     #[test]
+    fn bracket_class_semantics() {
+        assert!(matches("[abc].conf", "b.conf"));
+        assert!(!matches("[abc].conf", "d.conf"));
+        assert!(matches("[a-z][0-9]", "q7"));
+        assert!(!matches("[a-z][0-9]", "Q7"));
+        assert!(matches("[!x]y", "zy"));
+        assert!(!matches("[!x]y", "xy"));
+        assert!(matches("[^x]y", "zy"));
+        assert!(!matches("[^x]y", "xy"));
+        // `]` first in the class (also after negation) is a literal member.
+        assert!(matches("[]a]", "]"));
+        assert!(matches("[!]a]", "b"));
+        assert!(!matches("[!]a]", "]"));
+        // `-` at either end of a class is literal.
+        assert!(matches("[-a]", "-"));
+        assert!(matches("[a-]", "-"));
+        assert!(!matches("[a-]", "b"));
+        // An unterminated `[` is a literal character, not a class.
+        assert!(matches("[ab", "[ab"));
+        assert!(!matches("[ab", "a"));
+        assert!(GlobPattern::parse("[ab").is_literal());
+        assert!(matches("*[0-9].conf", "binds10.conf"));
+        assert!(!matches("*[0-9].conf", "binds.conf"));
+    }
+
+    #[test]
     fn pathological_wildcard_is_linear() {
         let pattern = format!("{}b", "a*".repeat(64));
+        let name = "a".repeat(4096);
+        let started = std::time::Instant::now();
+        assert!(!matches(&pattern, &name));
+        assert!(matches(&pattern, &format!("{name}b")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn pathological_bracket_class_is_linear() {
+        let pattern = format!("{}b", "[a]*".repeat(64));
         let name = "a".repeat(4096);
         let started = std::time::Instant::now();
         assert!(!matches(&pattern, &name));

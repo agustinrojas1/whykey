@@ -59,8 +59,8 @@ pub fn context_for_environment(environment: &crate::environment::Environment) ->
 
 /// Schema v2 path entries. Schema v1 serializes `LayerResult` directly and
 /// remains schema-compatible, preserving its fields and complete evidence;
-/// only v2 gains the optional `binding` object.
-/// Replaying a report without one never invents typed evidence.
+/// only v2 gains the optional `binding` object and `dead_key` keysym.
+/// Replaying a report without them never invents typed evidence.
 pub fn path(layers: &[LayerResult]) -> Vec<Value> {
     layers
         .iter()
@@ -78,6 +78,9 @@ pub fn path(layers: &[LayerResult]) -> Vec<Value> {
             });
             if let Some(binding) = &layer.binding {
                 entry["binding"] = json!(binding);
+            }
+            if let Some(dead_key) = &layer.dead_key {
+                entry["dead_key"] = json!(dead_key);
             }
             entry
         })
@@ -134,6 +137,7 @@ mod tests {
         );
         let value = path(&[plain]);
         assert!(value[0].get("binding").is_none());
+        assert!(value[0].get("dead_key").is_none());
         let evidenced = LayerResult::new(
             "Hyprland",
             crate::layers::LayerId::Compositor,
@@ -154,5 +158,20 @@ mod tests {
         let value = path(&[evidenced]);
         assert_eq!(value[0]["binding"]["dispatcher"], "__lua");
         assert_eq!(value[0]["binding"]["scope"], "Universal");
+    }
+
+    #[test]
+    fn path_carries_the_dead_key_keysym() {
+        let mut layer = LayerResult::new(
+            "Kitty",
+            crate::layers::LayerId::Terminal,
+            crate::layers::Outcome::Consumed,
+            "starts dead-key composition; no bytes are sent until the next key",
+            vec![],
+        );
+        layer.dead_key = Some("dead_acute".into());
+        let value = path(&[layer]);
+        assert_eq!(value[0]["dead_key"], "dead_acute");
+        assert!(value[0].get("binding").is_none());
     }
 }

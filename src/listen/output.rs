@@ -1,9 +1,20 @@
-fn print_capture_dry_run(environment: &crate::environment::Environment, options: &Options) {
+use super::protocol::{flush_input, remaining_millis};
+use super::terminal::{SignalGuard, TerminalBackend, TerminalSession};
+use super::*;
+
+#[cfg(target_os = "linux")]
+pub(super) fn print_capture_dry_run(
+    environment: &crate::environment::Environment,
+    options: &Options,
+) {
     let write_line = |line: String| {
         if options.json {
             eprintln!("{line}");
         } else {
-            println!("{}", crate::style::RenderOptions::cli(options.color, false).accent(line));
+            println!(
+                "{}",
+                crate::style::RenderOptions::cli(options.color, false).accent(line)
+            );
         }
     };
     let forced = if options.evdev || options.device.is_some() {
@@ -33,7 +44,10 @@ fn print_capture_dry_run(environment: &crate::environment::Environment, options:
 }
 
 #[cfg(not(target_os = "linux"))]
-fn print_capture_dry_run(_environment: &crate::environment::Environment, options: &Options) {
+pub(super) fn print_capture_dry_run(
+    _environment: &crate::environment::Environment,
+    options: &Options,
+) {
     let backend = if options.evdev || options.device.is_some() {
         "Evdev"
     } else {
@@ -43,11 +57,14 @@ fn print_capture_dry_run(_environment: &crate::environment::Environment, options
     if options.json {
         eprintln!("{line}");
     } else {
-        println!("{}", crate::style::RenderOptions::cli(options.color, false).accent(line));
+        println!(
+            "{}",
+            crate::style::RenderOptions::cli(options.color, false).accent(line)
+        );
     }
 }
 
-fn print_capture_explanation(
+pub(super) fn print_capture_explanation(
     environment: &crate::environment::Environment,
     policy: CapturePolicy,
     color: crate::style::ColorChoice,
@@ -57,7 +74,10 @@ fn print_capture_explanation(
         if json {
             eprintln!("{line}");
         } else {
-            println!("{}", crate::style::RenderOptions::cli(color, false).accent(line));
+            println!(
+                "{}",
+                crate::style::RenderOptions::cli(color, false).accent(line)
+            );
         }
     };
     write_line(format!("capture detection (policy={policy})"));
@@ -71,8 +91,14 @@ fn print_capture_explanation(
             status.id, status.applicable, status.ipc, capture
         ));
     }
-    write_line(format!("selected compositor: {:?}", environment.selected_compositor));
-    write_line(format!("compositor candidates: {:?}", environment.compositor_candidates));
+    write_line(format!(
+        "selected compositor: {:?}",
+        environment.selected_compositor
+    ));
+    write_line(format!(
+        "compositor candidates: {:?}",
+        environment.compositor_candidates
+    ));
 }
 
 fn print_waiting_message(
@@ -110,7 +136,7 @@ fn print_waiting_message(
 
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
-struct SelectError {
+pub(super) struct SelectError {
     attempted: Vec<(String, String)>,
 }
 
@@ -128,12 +154,11 @@ impl fmt::Display for SelectError {
             .join(", ");
         write!(formatter, "tried {details}")
     }
-
 }
 
 #[cfg(target_os = "linux")]
 impl SelectError {
-    fn backend_display(&self) -> &str {
+    pub(super) fn backend_display(&self) -> &str {
         self.attempted
             .first()
             .map_or("native compositor", |(backend, _)| backend.as_str())
@@ -141,7 +166,7 @@ impl SelectError {
 }
 
 #[cfg(target_os = "linux")]
-fn select_native_backend(
+pub(super) fn select_native_backend(
     environment: &crate::environment::Environment,
 ) -> Result<Box<dyn NativeCaptureIo>, SelectError> {
     let mut attempted = Vec::new();
@@ -164,7 +189,7 @@ fn select_native_backend(
 }
 
 #[cfg(target_os = "linux")]
-fn run_native(
+pub(super) fn run_native(
     options: Options,
     mut capture_session: Box<dyn NativeCaptureIo>,
     snapshot: ListenSession,
@@ -407,7 +432,11 @@ fn run_native(
             last_renewed = Instant::now();
         }
         if !options.json {
-            println!("\n{}\n", crate::style::RenderOptions::cli(options.color, false).muted("--- next capture ---"));
+            println!(
+                "\n{}\n",
+                crate::style::RenderOptions::cli(options.color, false)
+                    .muted("--- next capture ---")
+            );
         }
     }
 
@@ -417,13 +446,13 @@ fn run_native(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_native(_options: Options) -> Result<(), ListenError> {
+pub(super) fn run_native(_options: Options) -> Result<(), ListenError> {
     Err(ListenError::Setup(
         "native compositor capture is only available on Linux".into(),
     ))
 }
 
-fn run_terminal(options: Options) -> Result<(), ListenError> {
+pub(super) fn run_terminal(options: Options) -> Result<(), ListenError> {
     // Install first: the guard must outlive the raw-mode session it protects.
     let signals = SignalGuard::install()?;
     let snapshot = ListenSession::capture();
@@ -439,7 +468,7 @@ fn run_terminal(options: Options) -> Result<(), ListenError> {
 
 /// Answer a SIGTSTP request: release the capture (restoring the terminal),
 /// stop the process, and re-enter capture once the job is continued.
-fn suspend_for_job_control<B: CaptureBackend + ?Sized>(
+pub(super) fn suspend_for_job_control<B: CaptureBackend + ?Sized>(
     backend: &mut B,
     stop: impl FnOnce() -> io::Result<()>,
 ) -> Result<(), ListenError> {
@@ -450,7 +479,7 @@ fn suspend_for_job_control<B: CaptureBackend + ?Sized>(
         .map_err(ListenError::Setup)
 }
 
-fn run_observed_loop<B: CaptureBackend>(
+pub(super) fn run_observed_loop<B: CaptureBackend>(
     options: Options,
     mut backend: B,
     snapshot: ListenSession,
@@ -531,7 +560,11 @@ fn run_observed_loop<B: CaptureBackend>(
             .arm(CapturePolicy::PassThrough)
             .map_err(ListenError::Setup)?;
         if !options.json {
-            println!("\n{}\n", crate::style::RenderOptions::cli(options.color, false).muted("--- next capture ---"));
+            println!(
+                "\n{}\n",
+                crate::style::RenderOptions::cli(options.color, false)
+                    .muted("--- next capture ---")
+            );
         }
         print_waiting_message(
             backend.display(),
@@ -544,12 +577,12 @@ fn run_observed_loop<B: CaptureBackend>(
     }
 }
 
-fn is_cancel_key(observed: &ObservedKey) -> bool {
+pub(super) fn is_cancel_key(observed: &ObservedKey) -> bool {
     (observed.combo.key() == "ESCAPE" && observed.combo.modmask() == 0)
         || (observed.combo.key() == "C" && observed.combo.modmask() & 4 != 0)
 }
 
-fn is_terminal_modifier_key(observed: &ObservedKey) -> bool {
+pub(super) fn is_terminal_modifier_key(observed: &ObservedKey) -> bool {
     matches!(
         observed.combo.key(),
         "LEFT_SHIFT"
@@ -569,7 +602,7 @@ fn is_terminal_modifier_key(observed: &ObservedKey) -> bool {
     )
 }
 
-fn inspect_with_session(
+pub(super) fn inspect_with_session(
     observed: &ObservedKey,
     terminal_termios: Option<&libc::termios>,
     session: &ListenSession,

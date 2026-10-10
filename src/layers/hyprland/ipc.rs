@@ -1,20 +1,46 @@
-fn query_previous_submap_from_lua() -> Option<String> {
-    let output = run_hyprctl(&[
-        "repl",
-        "return (_G.__whykey_capture and _G.__whykey_capture.previous_submap ~= \"\" and _G.__whykey_capture.previous_submap) or \"default\"",
-    ])
-    .ok()?;
-    let trimmed = output.trim().to_string();
-    if trimmed.is_empty()
-        || trimmed == "default"
-        || trimmed == "unknown request"
-        || trimmed == "none"
-        || trimmed == "\"default\""
-    {
-        Some("default".into())
-    } else {
-        Some(trimmed)
+use super::config::{CONFIG_HINTS, LuaBindHint, lua_hint_key};
+use super::keyboard::{
+    compile_main_xkb_keymap, main_keyboard_active_layout_index, summarize_keyboards,
+    xkb_keycodes_for_key, xkb_symbols_for_physical_key,
+};
+use super::matching::{analyze, boolish_value, filter_whykey_capture_bindings};
+use super::*;
+
+/// Lua that reads whykey's capture state without touching compositor or
+/// global state (only locals, `type`, and string concatenation) and reports
+/// the submap saved before entering `__whykey_capture`. The tag separates a
+/// genuine answer, including a real submap literally named `none` or
+/// `default`, from Lua errors, an unset value, or a Hyprland build without
+/// `repl`.
+const PREVIOUS_SUBMAP_LUA: &str = "local s = _G.__whykey_capture; \
+     local p = s and s.previous_submap; \
+     if type(p) == \"string\" then return \"whykey-submap:\" .. p end; \
+     return \"whykey-submap-unset:\" .. type(p)";
+
+fn query_previous_submap_from_lua() -> Result<String, String> {
+    let reply = run_hyprctl(&["repl", PREVIOUS_SUBMAP_LUA])
+        .map_err(|error| format!("`hyprctl repl` failed: {error}"))?;
+    parse_previous_submap_reply(&reply)
+}
+
+fn parse_previous_submap_reply(reply: &str) -> Result<String, String> {
+    let reply = reply.strip_suffix('\n').unwrap_or(reply);
+    let reply = reply.strip_suffix('\r').unwrap_or(reply);
+    if let Some(submap) = reply.strip_prefix("whykey-submap:") {
+        // `hl.get_current_submap()` reports the default submap as "".
+        return Ok(if submap.is_empty() {
+            "default".into()
+        } else {
+            submap.to_owned()
+        });
     }
+    if let Some(kind) = reply.strip_prefix("whykey-submap-unset:") {
+        return Err(format!(
+            "whykey capture state holds no previous submap (Lua value: {kind})"
+        ));
+    }
+    let first_line = reply.lines().next().unwrap_or_default();
+    Err(format!("unexpected `hyprctl repl` reply: {first_line:?}"))
 }
 
 /// Check Hyprland IPC using the same instance selection as key inspection.
@@ -67,7 +93,7 @@ fn key_unreported(entry: &serde_json::Value) -> bool {
     entry.get("key").and_then(serde_json::Value::as_str) == Some("")
         && entry
             .get("keycode")
-            .and_then(super::json_u32)
+            .and_then(crate::layers::json_u32)
             .is_none_or(|keycode| keycode == 0)
         && !entry
             .get("catch_all")
@@ -97,7 +123,7 @@ impl BindIdentity {
         Some(Self {
             dispatcher: text("dispatcher")?,
             arg: text("arg").unwrap_or_default(),
-            modmask: entry.get("modmask").and_then(super::json_u32)?,
+            modmask: entry.get("modmask").and_then(crate::layers::json_u32)?,
             submap: text("submap").unwrap_or_default(),
             description: text("description").unwrap_or_default(),
         })
@@ -107,7 +133,7 @@ impl BindIdentity {
 /// Return `bindings_json` with keys recovered from the text listing, or
 /// `None` when nothing was recovered. A key is filled in only when every
 /// text block with the same identity agrees on one single-key display.
-fn recover_unreported_keys(
+pub(super) fn recover_unreported_keys(
     bindings_json: &str,
     text: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
@@ -255,7 +281,7 @@ fn lua_modifier_bit(name: &str) -> Option<u32> {
 
 /// `keymap` is the main keyboard's compiled keymap and active layout group;
 /// with it, `code:N` keys are displayed as the key that layout produces.
-fn collect_records(
+pub(super) fn collect_records(
     value: &serde_json::Value,
     lua_hints: &[LuaBindHint],
     keymap: Option<(&str, usize)>,
@@ -270,7 +296,7 @@ fn collect_records(
         };
         let mask = binding
             .get("modmask")
-            .and_then(super::json_u32)
+            .and_then(crate::layers::json_u32)
             .unwrap_or_default();
         let description = binding
             .get("description")
@@ -278,7 +304,7 @@ fn collect_records(
             .filter(|description| !description.is_empty());
         let keycode = binding
             .get("keycode")
-            .and_then(super::json_u32)
+            .and_then(crate::layers::json_u32)
             .filter(|keycode| *keycode != 0);
         let catch_all = binding
             .get("catch_all")
@@ -304,15 +330,18 @@ fn collect_records(
         };
         let mut certainty = certainty.to_owned();
         let key = match raw_key {
-            None => format!("{}<key not reported>", super::combo_display(mask, "")),
+            None => format!(
+                "{}<key not reported>",
+                crate::layers::combo_display(mask, "")
+            ),
             Some(raw_key) => match code_key_symbol(&raw_key, keymap) {
                 Some((code, symbol)) => {
                     certainty.push_str(&format!(
                         "; code:{code} shown as its key in the active XKB layout"
                     ));
-                    super::combo_display(mask, &symbol)
+                    crate::layers::combo_display(mask, &symbol)
                 }
-                None => super::combo_display(mask, &raw_key),
+                None => crate::layers::combo_display(mask, &raw_key),
             },
         };
         let action = binding
@@ -429,7 +458,7 @@ pub(crate) fn collect_probe() -> Option<Probe> {
     })
 }
 
-fn inspect_system(
+pub(super) fn inspect_system(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
 ) -> Result<LayerResult, String> {
@@ -445,7 +474,7 @@ fn inspect_system(
     )
 }
 
-fn inspect_system_with_probe(
+pub(super) fn inspect_system_with_probe(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
     probe: &Probe,
@@ -469,8 +498,17 @@ fn inspect_system_with_values(
     let mut active_submap: String = serde_json::from_str(&active_submap_json)
         .map_err(|error| format!("hyprctl returned an invalid submap: {error}"))?;
 
+    let mut submap_note = None;
     let bindings_json = if active_submap == "__whykey_capture" {
-        active_submap = query_previous_submap_from_lua().unwrap_or_else(|| "default".into());
+        active_submap = match query_previous_submap_from_lua() {
+            Ok(submap) => submap,
+            Err(reason) => {
+                submap_note = Some(format!(
+                    "Hyprland is in whykey's capture submap and the pre-capture submap is unknown ({reason}); bindings were evaluated as in the default submap"
+                ));
+                "default".into()
+            }
+        };
         filter_whykey_capture_bindings(&bindings_raw)
     } else {
         bindings_raw
@@ -491,6 +529,7 @@ fn inspect_system_with_values(
         &hints.declarative,
         physical_input,
     )?;
+    result.details.extend(submap_note);
     if let Some(instance) = instance_override() {
         result
             .details
@@ -625,7 +664,7 @@ fn discover_hyprland_instance() -> Option<String> {
 /// Parse the instance inventory conservatively. Hyprland's inventory has
 /// gained fields across releases, and a malformed/stale entry should not
 /// hide otherwise usable instances from a multi-instance session.
-fn parse_hyprland_instances(bytes: &[u8]) -> Option<Vec<HyprlandInstance>> {
+pub(super) fn parse_hyprland_instances(bytes: &[u8]) -> Option<Vec<HyprlandInstance>> {
     let values: Vec<serde_json::Value> = serde_json::from_slice(bytes).ok()?;
     Some(
         values
@@ -636,7 +675,7 @@ fn parse_hyprland_instances(bytes: &[u8]) -> Option<Vec<HyprlandInstance>> {
     )
 }
 
-fn has_hyprland_signature() -> bool {
+pub(super) fn has_hyprland_signature() -> bool {
     env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|value| !value.is_empty())
 }
 
@@ -675,7 +714,7 @@ fn wayland_session_evidence() -> bool {
             .is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
 }
 
-fn select_hyprland_instance(
+pub(super) fn select_hyprland_instance(
     instances: &[HyprlandInstance],
     wayland_display: Option<&str>,
 ) -> Option<String> {
@@ -689,4 +728,36 @@ fn select_hyprland_instance(
         }
     }
     (instances.len() == 1).then(|| instances[0].instance.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previous_submap_reply_separates_answers_from_failures() {
+        // Genuine answers, including names the old sentinels swallowed.
+        assert_eq!(
+            parse_previous_submap_reply("whykey-submap:\n").as_deref(),
+            Ok("default")
+        );
+        assert_eq!(
+            parse_previous_submap_reply("whykey-submap:none\n").as_deref(),
+            Ok("none")
+        );
+        assert_eq!(
+            parse_previous_submap_reply("whykey-submap:resize").as_deref(),
+            Ok("resize")
+        );
+        // Failures never become a submap name.
+        for reply in [
+            "whykey-submap-unset:nil\n",
+            "unknown request\n",
+            "default\n",
+            "",
+            "error: [string \"...\"]:1: attempt to index a nil value\n",
+        ] {
+            assert!(parse_previous_submap_reply(reply).is_err(), "{reply:?}");
+        }
+    }
 }

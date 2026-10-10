@@ -313,6 +313,21 @@ pub(crate) fn evdev_name(code: u16) -> String {
         .map_or_else(|| format!("code {code}"), |(_, name)| format!("KEY_{name}"))
 }
 
+/// The key code of an X keysym name that every XKB layout places on the
+/// same key, e.g. `Escape` or `Control_L`.
+pub(crate) fn keysym_code(name: &str) -> Option<u16> {
+    let upper = name.to_ascii_uppercase();
+    let upper = match upper.as_str() {
+        "PRIOR" => "PAGE_UP",
+        "NEXT" => "PAGE_DOWN",
+        other => other,
+    };
+    LAYOUT_INVARIANT
+        .iter()
+        .find(|(candidate, ..)| *candidate == upper)
+        .map(|(_, code, _)| *code)
+}
+
 /// The modifier bit a held modifier key contributes.
 pub(crate) fn modifier_bit(code: u16) -> Option<u32> {
     match code {

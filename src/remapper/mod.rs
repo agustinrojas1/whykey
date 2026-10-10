@@ -1,13 +1,16 @@
 //! Pre-compositor remappers: keyd, kanata, kmonad, input-remapper, xremap.
 //!
 //! Detection finds running daemons and their configuration without opening
-//! input devices. keyd, kanata, and xremap configurations are evaluated for
-//! the queried key where their syntax is static; everything else, and any
-//! configuration that cannot be read, stays uncertain with the reason.
+//! input devices. Each configuration is evaluated for the queried key where
+//! its syntax is static; everything else, and any configuration that cannot
+//! be read, stays uncertain with the reason.
 
+mod input_remapper;
 mod kanata;
 mod keyd;
 mod keys;
+mod kmonad;
+mod sexp;
 mod xremap;
 
 use std::collections::BTreeMap;
@@ -79,7 +82,8 @@ impl Rule {
 
     fn render(&self) -> String {
         match &self.file {
-            Some(file) => format!("{} ({file}:{})", self.text, self.line),
+            Some(file) if self.line > 0 => format!("{} ({file}:{})", self.text, self.line),
+            Some(file) => format!("{} ({file})", self.text),
             None => self.text.clone(),
         }
     }
@@ -118,6 +122,97 @@ impl Finding {
     }
 }
 
+/// The input device a configuration is limited to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceScope {
+    /// How the configuration names the device.
+    label: String,
+    /// Device names that identify the device; empty when unknown.
+    names: Vec<String>,
+}
+
+impl DeviceScope {
+    /// An evdev device file such as `/dev/input/by-id/…`. Its name
+    /// identifies it only while no other present device shares the name.
+    pub(crate) fn device_file(path: &str) -> Self {
+        let name = evdev_device_name(Path::new(path)).filter(|name| {
+            present_device_names().is_some_and(|names| {
+                names
+                    .iter()
+                    .filter(|other| same_device_name(other, name))
+                    .count()
+                    == 1
+            })
+        });
+        Self {
+            label: path.to_owned(),
+            names: name.into_iter().collect(),
+        }
+    }
+
+    /// Every input device with this name.
+    pub(crate) fn named(name: &str) -> Self {
+        Self {
+            label: name.to_owned(),
+            names: vec![name.to_owned()],
+        }
+    }
+
+    /// Whether the captured input device is provably this device.
+    pub(crate) fn includes(&self, captured: Option<&str>) -> bool {
+        captured.is_some_and(|captured| {
+            self.names
+                .iter()
+                .any(|name| same_device_name(name, captured))
+        })
+    }
+
+    /// The configuration does not apply to keys from other devices.
+    pub(crate) fn finding(&self, remapper: &str) -> Finding {
+        Finding::untouched_because(&format!(
+            "{remapper} reads only {}, and the queried key is not known to come from it",
+            self.label
+        ))
+    }
+}
+
+/// Device names compare without case and punctuation, so a compositor's
+/// `at-translated-set-2-keyboard` matches `AT Translated Set 2 keyboard`.
+fn same_device_name(left: &str, right: &str) -> bool {
+    let normalize = |name: &str| {
+        name.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|character| character.to_ascii_lowercase())
+            .collect::<String>()
+    };
+    normalize(left) == normalize(right)
+}
+
+/// The kernel name of the evdev device behind a device file.
+fn evdev_device_name(path: &Path) -> Option<String> {
+    let target = fs::canonicalize(path).ok()?;
+    let node = target.file_name()?.to_str()?;
+    if !node.starts_with("event") {
+        return None;
+    }
+    let name = fs::read_to_string(format!("/sys/class/input/{node}/device/name")).ok()?;
+    Some(name.trim().to_owned())
+}
+
+/// Names of the present input devices.
+fn present_device_names() -> Option<Vec<String>> {
+    let content = fs::read_to_string("/proc/bus/input/devices").ok()?;
+    Some(
+        content
+            .lines()
+            .filter_map(|line| {
+                let name = line.strip_prefix("N: Name=")?;
+                Some(name.trim_matches('"').to_owned())
+            })
+            .collect(),
+    )
+}
+
 /// The static model of one detected remapper.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Analysis {
@@ -137,6 +232,10 @@ enum Engine {
     Keyd(keyd::Keymap),
     /// Each entry is one configuration kanata may be running.
     Kanata(Vec<kanata::Config>),
+    /// Each entry is the configuration of one kmonad process.
+    Kmonad(Vec<kmonad::Config>),
+    /// Each entry is one autoloaded preset.
+    InputRemapper(Vec<input_remapper::Preset>),
     /// Each entry is one merged xremap invocation or candidate file.
     Xremap(Vec<xremap::Config>),
 }
@@ -149,12 +248,18 @@ struct Located {
     groups: Vec<Group>,
     unreadable: Vec<String>,
     keyd_app_config: Option<PathBuf>,
+    /// input-remapper's `xmodmap.json`, the session layout's symbol names.
+    layout_symbols: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
 struct Group {
     paths: Vec<PathBuf>,
     device_scoped: bool,
+    /// The input devices an input-remapper preset applies to.
+    device: Option<DeviceScope>,
+    /// Settings from the kmonad command line.
+    kmonad: kmonad::Cli,
 }
 
 /// Detect common Linux remappers without opening or changing input devices.
@@ -201,7 +306,11 @@ pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Dete
             || !detection.configurations.is_empty()
             || !located.unreadable.is_empty()
         {
-            detection.analysis = analyze(name, !detection.processes.is_empty(), located);
+            let running = match name {
+                "input-remapper" => input_remapper_service_running(&pids),
+                _ => !detection.processes.is_empty(),
+            };
+            detection.analysis = analyze(name, running, located);
             detection.processes.sort();
             detection.configurations.sort();
             detection.transformations.sort();
@@ -263,9 +372,15 @@ fn inspect_detections(
         return uncertain(details);
     };
 
+    let device = physical_input.and_then(|input| input.device.as_deref());
     let active: Vec<(&Detection, Verdict)> = detections
         .iter()
-        .map(|detection| (detection, detection.analysis.verdict(&query, &shown)))
+        .map(|detection| {
+            (
+                detection,
+                detection.analysis.verdict(&query, &shown, device),
+            )
+        })
         .filter(|(_, verdict)| !matches!(verdict, Verdict::Pass))
         .collect();
     match active.as_slice() {
@@ -491,13 +606,21 @@ enum Verdict {
 }
 
 impl Analysis {
-    fn evaluate(&self, press: Press) -> Vec<Finding> {
+    fn evaluate(&self, press: Press, device: Option<&str>) -> Vec<Finding> {
         match &self.engine {
             Engine::Idle => vec![Finding::untouched()],
             Engine::Keyd(keymap) => keymap.evaluate(press),
             Engine::Kanata(configs) => configs
                 .iter()
                 .flat_map(|config| config.evaluate(press))
+                .collect(),
+            Engine::Kmonad(configs) => configs
+                .iter()
+                .flat_map(|config| config.evaluate(press, device))
+                .collect(),
+            Engine::InputRemapper(presets) => presets
+                .iter()
+                .flat_map(|preset| preset.evaluate(press, device))
                 .collect(),
             Engine::Xremap(configs) => configs
                 .iter()
@@ -506,7 +629,8 @@ impl Analysis {
         }
     }
 
-    fn verdict(&self, query: &QueryPresses, key: &str) -> Verdict {
+    /// `device` is the captured input device of the query, when known.
+    fn verdict(&self, query: &QueryPresses, key: &str, device: Option<&str>) -> Verdict {
         if !self.unreadable.is_empty() {
             return Verdict::Unavailable(self.unreadable.clone());
         }
@@ -517,12 +641,14 @@ impl Analysis {
             .presses
             .iter()
             .flat_map(|press| {
-                self.evaluate(*press).into_iter().map(|mut finding| {
-                    if finding.effect == Effect::Remap(*press) {
-                        finding.effect = Effect::Untouched;
-                    }
-                    finding
-                })
+                self.evaluate(*press, device)
+                    .into_iter()
+                    .map(|mut finding| {
+                        if finding.effect == Effect::Remap(*press) {
+                            finding.effect = Effect::Untouched;
+                        }
+                        finding
+                    })
             })
             .collect();
         let Some(first) = findings.first() else {
@@ -589,6 +715,7 @@ fn analyze(name: &str, running: bool, located: Located) -> Analysis {
         groups,
         mut unreadable,
         keyd_app_config,
+        layout_symbols,
     } = located;
     let mut unevaluated = Vec::new();
     let engine = match name {
@@ -642,35 +769,69 @@ fn analyze(name: &str, running: bool, located: Located) -> Analysis {
             Engine::Xremap(configs)
         }
         "kmonad" => {
-            unevaluated.push(
-                "kmonad configurations are not evaluated; their input device, layer stack, and tap-hold behavior are not parsed"
-                    .into(),
-            );
-            Engine::Idle
+            let mut configs = Vec::new();
+            for group in &groups {
+                for path in &group.paths {
+                    match read_config(path) {
+                        Ok(content) => match kmonad::load(path, &content, &group.kmonad) {
+                            Ok(config) => configs.push(config),
+                            Err(reason) => unevaluated.push(reason),
+                        },
+                        Err(reason) => unreadable.push(reason),
+                    }
+                }
+            }
+            Engine::Kmonad(configs)
         }
         "input-remapper" => {
-            unevaluated.push(
-                "input-remapper presets are per device and applied by its service; whykey does not know which preset is active"
-                    .into(),
-            );
-            Engine::Idle
+            let symbols = layout_symbols.as_deref().and_then(|path| {
+                let loaded = read_config(path).and_then(|content| {
+                    input_remapper::layout_symbols(&content)
+                        .map_err(|reason| format!("{}: {reason}", path.display()))
+                });
+                loaded.map_err(|reason| unreadable.push(reason)).ok()
+            });
+            let mut presets = Vec::new();
+            for group in &groups {
+                let device = group
+                    .device
+                    .clone()
+                    .unwrap_or_else(|| DeviceScope::named(""));
+                for path in &group.paths {
+                    match read_config(path) {
+                        Ok(content) => {
+                            match input_remapper::load(path, &content, &device, symbols.as_deref())
+                            {
+                                Ok(preset) => presets.push(preset),
+                                Err(reason) => unevaluated.push(reason),
+                            }
+                        }
+                        Err(reason) => unreadable.push(reason),
+                    }
+                }
+            }
+            Engine::InputRemapper(presets)
         }
         _ => Engine::Idle,
     };
     let engine = match engine {
         Engine::Kanata(configs) if configs.is_empty() => Engine::Idle,
+        Engine::Kmonad(configs) if configs.is_empty() => Engine::Idle,
+        Engine::InputRemapper(presets) if presets.is_empty() => Engine::Idle,
         Engine::Xremap(configs) if configs.is_empty() => Engine::Idle,
         engine => engine,
     };
-    if matches!(name, "kanata" | "xremap")
-        && engine == Engine::Idle
-        && running
-        && unreadable.is_empty()
-        && unevaluated.is_empty()
-    {
-        unevaluated.push(format!(
-            "no {name} configuration was found for the running process"
-        ));
+    if engine == Engine::Idle && running && unreadable.is_empty() && unevaluated.is_empty() {
+        match name {
+            "kanata" | "xremap" | "kmonad" => unevaluated.push(format!(
+                "no {name} configuration was found for the running process"
+            )),
+            "input-remapper" => unevaluated.push(
+                "the running input-remapper service autoloads no preset; a preset applied from its window is not known"
+                    .into(),
+            ),
+            _ => {}
+        }
     }
     Analysis {
         running,
@@ -690,7 +851,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                 Some(path) => {
                     located.groups.push(Group {
                         paths: vec![path],
-                        device_scoped: false,
+                        ..Group::default()
                     });
                     return located;
                 }
@@ -710,7 +871,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                     paths.truncate(MAX_CONFIG_FILES);
                     located.groups.push(Group {
                         paths,
-                        device_scoped: false,
+                        ..Group::default()
                     });
                 }
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -734,7 +895,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                     match resolve_process_path(*pid, &path) {
                         Ok(path) => located.groups.push(Group {
                             paths: vec![path],
-                            device_scoped: false,
+                            ..Group::default()
                         }),
                         Err(reason) => located.unreadable.push(reason),
                     }
@@ -759,8 +920,8 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                 };
                 let (paths, device_scoped) = xremap_config_args(&args);
                 let mut group = Group {
-                    paths: Vec::new(),
                     device_scoped,
+                    ..Group::default()
                 };
                 for path in paths {
                     match resolve_process_path(*pid, &path) {
@@ -780,6 +941,68 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                 located.groups.extend(single_file_groups(candidates));
             }
         }
+        "kmonad" => {
+            for pid in pids {
+                let Some(args) = process_args(*pid) else {
+                    continue;
+                };
+                let (Some(path), cli) = kmonad::command_line(&args) else {
+                    continue;
+                };
+                match resolve_process_path(*pid, &path) {
+                    Ok(path) => located.groups.push(Group {
+                        paths: vec![path],
+                        kmonad: cli,
+                        ..Group::default()
+                    }),
+                    Err(reason) => located.unreadable.push(reason),
+                }
+            }
+            // kmonad has no default configuration; a stopped one may run
+            // any of these.
+            if pids.is_empty() {
+                let candidates = match env::var_os(config_env) {
+                    Some(path) => vec![PathBuf::from(path)],
+                    None => files_with_extensions("~/.config/kmonad", &["kbd"]),
+                };
+                located.groups.extend(single_file_groups(candidates));
+            }
+        }
+        "input-remapper" => {
+            let Some(dir) = input_remapper_dir(config_env) else {
+                return located;
+            };
+            let config = dir.join("config.json");
+            match read_config(&config) {
+                Ok(content) => match input_remapper::autoload(&content) {
+                    Ok(entries) => {
+                        let groups = fs::read_to_string("/proc/bus/input/devices")
+                            .ok()
+                            .map(|devices| input_remapper::present_groups(&devices));
+                        located
+                            .groups
+                            .extend(entries.into_iter().map(|(key, preset)| {
+                                let (name, device) =
+                                    input_remapper::resolve_group(&key, groups.as_deref());
+                                Group {
+                                    paths: vec![input_remapper::preset_path(&dir, &name, &preset)],
+                                    device: Some(device),
+                                    ..Group::default()
+                                }
+                            }));
+                    }
+                    Err(reason) => located
+                        .unreadable
+                        .push(format!("{}: {reason}", config.display())),
+                },
+                Err(_)
+                    if fs::metadata(&config)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) => {}
+                Err(reason) => located.unreadable.push(reason),
+            }
+            let symbols = dir.join("xmodmap.json");
+            located.layout_symbols = symbols.exists().then_some(symbols);
+        }
         _ => {}
     }
     located
@@ -791,8 +1014,38 @@ fn single_file_groups(paths: Vec<PathBuf>) -> impl Iterator<Item = Group> {
         .filter(|path| path.exists())
         .map(|path| Group {
             paths: vec![path],
-            device_scoped: false,
+            ..Group::default()
         })
+}
+
+/// input-remapper's configuration directory: `config_env` (a directory or
+/// its `config.json`), else `$XDG_CONFIG_HOME/input-remapper-2`.
+fn input_remapper_dir(config_env: &str) -> Option<PathBuf> {
+    if let Some(path) = env::var_os(config_env).map(PathBuf::from) {
+        if path.is_dir() {
+            return Some(path);
+        }
+        return path.parent().map(Path::to_path_buf);
+    }
+    match env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        Some(config) => Some(PathBuf::from(config).join("input-remapper-2")),
+        None => expand_home("~/.config/input-remapper-2"),
+    }
+}
+
+/// Whether one of the matched processes is the input-remapper service, the
+/// root daemon that injects presets. The window and the reader service
+/// share its truncated process name.
+fn input_remapper_service_running(pids: &[u32]) -> bool {
+    pids.iter().any(|pid| {
+        process_args(*pid).is_some_and(|args| {
+            args.iter().take(2).any(|arg| {
+                Path::new(arg)
+                    .file_name()
+                    .is_some_and(|name| name == "input-remapper-service")
+            })
+        })
+    })
 }
 
 /// `-c PATH`, `-cPATH`, `--cfg PATH`, or `--cfg=PATH`; kanata runs the first.
@@ -951,7 +1204,12 @@ fn known_remappers() -> [(
         ),
         (
             "input-remapper",
-            &["input-remapper", "input-remapper-service"],
+            // The kernel truncates the service's process name to 15 bytes.
+            &[
+                "input-remapper",
+                "input-remapper-service",
+                "input-remapper-",
+            ],
             "INPUT_REMAPPER_CONFIG",
             &["~/.config/input-remapper-2"],
         ),
@@ -1297,6 +1555,17 @@ mod tests {
     /// A detection built from configuration files written to a fresh
     /// directory, as `detect` would build it for those paths.
     fn detection(name: &str, running: bool, files: &[(&str, &str)]) -> Detection {
+        device_detection(name, running, files, None)
+    }
+
+    /// As `detection`, for a configuration that applies to one named input
+    /// device.
+    fn device_detection(
+        name: &str,
+        running: bool,
+        files: &[(&str, &str)],
+        device: Option<&str>,
+    ) -> Detection {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = env::temp_dir().join(format!("whykey-remapper-{}-{id}", std::process::id()));
@@ -1312,7 +1581,8 @@ mod tests {
         let located = Located {
             groups: vec![Group {
                 paths: paths.clone(),
-                device_scoped: false,
+                device: device.map(DeviceScope::named),
+                ..Group::default()
             }],
             ..Located::default()
         };
@@ -1440,7 +1710,7 @@ mod tests {
         let located = Located {
             groups: vec![Group {
                 paths: vec![env::temp_dir().join("whykey-remapper-missing/never.kbd")],
-                device_scoped: false,
+                ..Group::default()
             }],
             ..Located::default()
         };
@@ -1488,6 +1758,145 @@ mod tests {
         );
         let result = inspect_detections(&query("caps_lock"), None, &[keyd], false);
         assert_eq!(result.outcome, Outcome::HandledUncertain);
+    }
+
+    fn captured(device: &str, keycode: u16) -> PhysicalInput {
+        PhysicalInput {
+            device: Some(device.into()),
+            keycode: crate::xkb::EvdevKeycode::new(keycode),
+        }
+    }
+
+    #[test]
+    fn kmonad_first_layer_is_evaluated_for_its_keyboard() {
+        let mut kmonad = detection(
+            "kmonad",
+            true,
+            &[(
+                "laptop.kbd",
+                "(defcfg input (device-file \"/dev/input/by-id/laptop-kbd\") output (uinput-sink \"kmonad out\") fallthrough true)\n(defalias nav (layer-toggle nav) th (tap-hold 200 s lctl))\n(defsrc caps a s)\n(deflayer base esc @nav @th)\n(deflayer nav _ _ left)\n",
+            )],
+        );
+        // The device file is not present, so the key is conditional on
+        // coming from that keyboard.
+        let unscoped =
+            inspect_with_detections(&query("caps_lock"), None, std::slice::from_ref(&kmonad));
+        assert_eq!(unscoped.outcome, Outcome::HandledUncertain);
+        assert!(
+            unscoped
+                .details
+                .iter()
+                .any(|detail| detail.contains("reads only /dev/input/by-id/laptop-kbd")),
+            "{unscoped:?}"
+        );
+
+        let Engine::Kmonad(configs) = &mut kmonad.analysis.engine else {
+            panic!("kmonad is evaluated: {:?}", kmonad.analysis);
+        };
+        for config in configs.iter_mut() {
+            *config = config
+                .clone()
+                .with_device(DeviceScope::named("Laptop Keyboard"));
+        }
+        let kmonad = std::slice::from_ref(&kmonad);
+        let keyboard = |code| captured("laptop-keyboard", code);
+        let redirected = inspect_with_detections(&query("caps_lock"), Some(&keyboard(58)), kmonad);
+        assert_eq!(redirected.outcome, Outcome::Redirected);
+        assert_eq!(action(&redirected), Some("ESCAPE"));
+        assert_eq!(
+            inspect_with_detections(&query("a"), Some(&keyboard(30)), kmonad).outcome,
+            Outcome::Consumed
+        );
+        assert_eq!(
+            inspect_with_detections(&query("s"), Some(&keyboard(31)), kmonad).outcome,
+            Outcome::HandledUncertain
+        );
+        // Fallthrough passes keys outside defsrc.
+        assert_eq!(
+            inspect_with_detections(&query("f5"), Some(&keyboard(63)), kmonad).outcome,
+            Outcome::Pass
+        );
+
+        let located = Located {
+            groups: vec![Group {
+                paths: vec![env::temp_dir().join("whykey-remapper-missing/kmonad.kbd")],
+                ..Group::default()
+            }],
+            ..Located::default()
+        };
+        let unreadable = Detection {
+            analysis: analyze("kmonad", true, located),
+            ..kmonad[0].clone()
+        };
+        assert_eq!(
+            inspect_with_detections(&query("caps_lock"), None, &[unreadable]).outcome,
+            Outcome::Unavailable
+        );
+    }
+
+    #[test]
+    fn input_remapper_autoloaded_preset_is_evaluated_for_its_device() {
+        let preset = r#"[
+            {"input_combination": [{"type": 1, "code": 58, "origin_hash": "1a2b"}], "target_uinput": "keyboard", "output_symbol": "Escape"},
+            {"input_combination": [{"type": 1, "code": 30}], "target_uinput": "keyboard", "output_symbol": "key(KEY_B).key(KEY_C)"},
+            {"input_combination": [{"type": 1, "code": 29}, {"type": 1, "code": 31}], "target_uinput": "keyboard", "output_symbol": "KEY_X"}
+        ]"#;
+        let remapper = device_detection(
+            "input-remapper",
+            true,
+            &[("work.json", preset)],
+            Some("AT Translated Set 2 keyboard"),
+        );
+        let remapper = std::slice::from_ref(&remapper);
+        let keyboard = |code| captured("at-translated-set-2-keyboard", code);
+        let redirected =
+            inspect_with_detections(&query("caps_lock"), Some(&keyboard(58)), remapper);
+        assert_eq!(redirected.outcome, Outcome::Redirected);
+        assert_eq!(action(&redirected), Some("ESCAPE"));
+        assert_eq!(
+            inspect_with_detections(&query("a"), Some(&keyboard(30)), remapper).outcome,
+            Outcome::Consumed
+        );
+        // The combination fires only while Control is held.
+        assert_eq!(
+            inspect_with_detections(&query("s"), Some(&keyboard(31)), remapper).outcome,
+            Outcome::HandledUncertain
+        );
+        // Another keyboard, or an unknown one, may not use this preset.
+        for other in [None, Some(captured("usb-keyboard", 58))] {
+            assert_eq!(
+                inspect_with_detections(&query("caps_lock"), other.as_ref(), remapper).outcome,
+                Outcome::HandledUncertain
+            );
+        }
+
+        let missing = Located {
+            groups: vec![Group {
+                paths: vec![env::temp_dir().join("whykey-remapper-missing/preset.json")],
+                device: Some(DeviceScope::named("AT Translated Set 2 keyboard")),
+                ..Group::default()
+            }],
+            ..Located::default()
+        };
+        let unreadable = Detection {
+            analysis: analyze("input-remapper", true, missing),
+            ..remapper[0].clone()
+        };
+        assert_eq!(
+            inspect_with_detections(&query("caps_lock"), Some(&keyboard(58)), &[unreadable])
+                .outcome,
+            Outcome::Unavailable
+        );
+        // A running service with no autoloaded preset may run one applied
+        // from its window.
+        let idle = Detection {
+            analysis: analyze("input-remapper", true, Located::default()),
+            ..remapper[0].clone()
+        };
+        assert_eq!(
+            inspect_with_detections(&query("caps_lock"), None, &[idle]).outcome,
+            Outcome::UncertainContinues
+        );
     }
 
     #[test]
