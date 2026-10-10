@@ -142,6 +142,191 @@ pub const fn api_unavailable() -> Cause {
     Cause::ApiDoesNotExpose
 }
 
+/// One way whykey can watch a key right now, in the order `whykey listen`
+/// tries them, followed by the opt-in taps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ObservationTap {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub available: bool,
+    pub detail: String,
+    /// The exact step that makes an unavailable tap usable, when one exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable: Option<String>,
+}
+
+/// What doctor found about each tap; gathered by the caller so the
+/// classification stays a pure function.
+#[derive(Debug, Clone, Default)]
+pub struct TapInputs {
+    /// The native capture backend that accepted a connection.
+    pub native: Option<&'static str>,
+    /// `WAYLAND_DISPLAY` when its socket exists.
+    pub wayland: Option<String>,
+    /// `DISPLAY` when set.
+    pub x11: Option<String>,
+    /// The X server is XWayland inside a Wayland session.
+    pub xwayland: bool,
+    /// Remote session without a local display server.
+    pub remote: bool,
+    pub tty: bool,
+    pub evdev_readable: bool,
+    pub evdev_detail: &'static str,
+    /// The exact step that makes evdev readable (temporary ACL command).
+    pub evdev_enable: Option<String>,
+}
+
+pub fn observation_taps(inputs: &TapInputs) -> Vec<ObservationTap> {
+    let tap = |id, name, available, detail: String, enable: Option<String>| ObservationTap {
+        id,
+        name,
+        available,
+        detail,
+        enable,
+    };
+    let displays = [
+        inputs
+            .wayland
+            .as_ref()
+            .map(|display| format!("Wayland ({display})")),
+        inputs
+            .x11
+            .as_ref()
+            .map(|display| format!("X11 ({display})")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let (grab, grab_detail) = match (&inputs.x11, inputs.remote) {
+        (None, _) => (false, "DISPLAY is not set".to_owned()),
+        (Some(_), true) => (
+            false,
+            "remote session: DISPLAY does not name a local X server".to_owned(),
+        ),
+        (Some(display), false) if inputs.xwayland => (
+            true,
+            format!("asks XWayland on {display}; covers X11 clients' grabs only"),
+        ),
+        (Some(display), false) => (
+            true,
+            format!("asks the X server on {display} which shortcuts a client has grabbed"),
+        ),
+    };
+    vec![
+        tap(
+            "native-compositor",
+            "native compositor capture",
+            inputs.native.is_some(),
+            match inputs.native {
+                Some(backend) => format!("{backend} IPC accepted the capture connection"),
+                None => "no Hyprland or Sway capture IPC is reachable".into(),
+            },
+            None,
+        ),
+        tap(
+            "probe-window",
+            "probe window",
+            !displays.is_empty(),
+            if displays.is_empty() {
+                "no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY".into()
+            } else {
+                format!(
+                    "{} available; `whykey listen --window` opens it",
+                    displays.join(" and ")
+                )
+            },
+            None,
+        ),
+        tap("x11-grab", "X11 grab probe", grab, grab_detail, None),
+        tap(
+            "terminal",
+            "terminal capture",
+            inputs.tty,
+            if inputs.tty {
+                "controlling /dev/tty is readable".into()
+            } else {
+                "no controlling terminal".into()
+            },
+            None,
+        ),
+        tap(
+            "evdev",
+            "evdev (`whykey listen --evdev`)",
+            inputs.evdev_readable,
+            inputs.evdev_detail.to_owned(),
+            (!inputs.evdev_readable)
+                .then(|| inputs.evdev_enable.clone())
+                .flatten(),
+        ),
+    ]
+}
+
+/// Where a layer's answer comes from in this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    /// The running program is asked.
+    LiveQuery,
+    /// Configuration files (or built-in defaults) are parsed.
+    ConfigFile,
+    /// Nothing answers for this layer.
+    None,
+}
+
+impl SourceKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::LiveQuery => "live query",
+            Self::ConfigFile => "config file",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LayerSource {
+    pub layer: &'static str,
+    pub source: SourceKind,
+    pub detail: String,
+}
+
+impl LayerSource {
+    pub fn new(layer: &'static str, source: SourceKind, detail: impl Into<String>) -> Self {
+        Self {
+            layer,
+            source,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Desktop adapters that ask the running program (compositor IPC,
+/// gsettings, xfconf, kglobalaccel D-Bus, herbstclient) once reachable;
+/// every other adapter parses configuration files.
+const LIVE_DESKTOPS: &[&str] = &[
+    "hyprland",
+    "sway",
+    "i3",
+    "kde",
+    "xfce",
+    "cinnamon",
+    "mate",
+    "gnome",
+    "herbstluftwm",
+];
+
+/// The source of a desktop adapter's answer given whether its source is
+/// reachable. KDE falls back to kglobalshortcutsrc when kglobalaccel is not
+/// running.
+pub fn desktop_source(id: &str, reachable: bool) -> SourceKind {
+    match (LIVE_DESKTOPS.contains(&id), reachable) {
+        (true, true) => SourceKind::LiveQuery,
+        (true, false) if id == "kde" => SourceKind::ConfigFile,
+        (false, true) => SourceKind::ConfigFile,
+        (_, false) => SourceKind::None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +414,60 @@ mod tests {
         );
         assert!(!command.contains("event4") && !command.contains("event5"));
         assert!(command.contains("replugged") && command.contains("reboots"));
+    }
+
+    #[test]
+    fn observation_taps_follow_the_listen_chain_and_say_how_to_enable_evdev() {
+        let taps = observation_taps(&TapInputs {
+            wayland: Some("wayland-1".into()),
+            x11: Some(":0".into()),
+            xwayland: true,
+            tty: true,
+            evdev_detail: EvdevScan::KeyboardDevices { readable: false }.detail(),
+            evdev_enable: Some("run `sudo setfacl -m u:\"$USER\":r '/dev/input/event3'`".into()),
+            ..TapInputs::default()
+        });
+        let ids = taps.iter().map(|tap| tap.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "native-compositor",
+                "probe-window",
+                "x11-grab",
+                "terminal",
+                "evdev"
+            ]
+        );
+        assert!(!taps[0].available);
+        assert!(taps[1].available);
+        assert!(taps[1].detail.contains("Wayland (wayland-1) and X11 (:0)"));
+        assert!(taps[2].available && taps[2].detail.contains("X11 clients' grabs only"));
+        assert!(taps[3].available);
+        assert!(!taps[4].available);
+        assert!(taps[4].enable.as_deref().unwrap().contains("sudo setfacl"));
+
+        let headless = observation_taps(&TapInputs {
+            native: Some("Sway"),
+            x11: Some(":0".into()),
+            remote: true,
+            evdev_readable: true,
+            evdev_enable: Some("unused".into()),
+            ..TapInputs::default()
+        });
+        assert!(headless[0].available);
+        assert!(headless[1].available && headless[1].detail.contains("X11 (:0)"));
+        assert!(!headless[2].available);
+        assert!(!headless[3].available);
+        assert!(headless[4].available && headless[4].enable.is_none());
+    }
+
+    #[test]
+    fn desktop_sources_distinguish_live_queries_from_files() {
+        assert_eq!(desktop_source("hyprland", true), SourceKind::LiveQuery);
+        assert_eq!(desktop_source("gnome", true), SourceKind::LiveQuery);
+        assert_eq!(desktop_source("sway", false), SourceKind::None);
+        assert_eq!(desktop_source("kde", false), SourceKind::ConfigFile);
+        assert_eq!(desktop_source("openbox", true), SourceKind::ConfigFile);
+        assert_eq!(desktop_source("openbox", false), SourceKind::None);
     }
 }

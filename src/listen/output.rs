@@ -2,11 +2,116 @@ use super::protocol::{flush_input, remaining_millis};
 use super::terminal::{SignalGuard, TerminalBackend, TerminalSession};
 use super::*;
 
-#[cfg(target_os = "linux")]
-pub(super) fn print_capture_dry_run(
-    environment: &crate::environment::Environment,
-    options: &Options,
-) {
+/// One stage of the default capture chain and why it is (not) used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ChainStage {
+    pub(super) name: &'static str,
+    pub(super) verdict: String,
+}
+
+/// The default capture chain as `listen` would walk it: native compositor
+/// capture, then the probe window, then the controlling terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CapturePlan {
+    pub(super) stages: Vec<ChainStage>,
+    /// The backend the chain settles on, or why no backend can be used.
+    pub(super) selected: Result<String, String>,
+}
+
+/// Decide the default chain from what each stage reported. `native` is the
+/// native backend that accepted a connection, or why none did; `display` is
+/// the display protocol a probe window would use.
+pub(super) fn plan_default_chain(
+    native: Result<&str, &str>,
+    display: Option<&str>,
+    tty: bool,
+    policy: CapturePolicy,
+    events_all: bool,
+) -> CapturePlan {
+    let stage = |name, verdict: String| ChainStage { name, verdict };
+    let native_error = match native {
+        Ok(backend) => {
+            return CapturePlan {
+                stages: vec![
+                    stage(
+                        "native compositor",
+                        format!("selected: {backend} IPC accepted the capture connection"),
+                    ),
+                    stage("probe window", "not needed".into()),
+                    stage("terminal", "not needed".into()),
+                ],
+                selected: Ok(backend.to_owned()),
+            };
+        }
+        Err(error) => error,
+    };
+    let mut stages = vec![stage(
+        "native compositor",
+        format!("unavailable: {native_error}"),
+    )];
+    if policy == CapturePolicy::Suppress {
+        stages.push(stage(
+            "probe window",
+            "not tried: --suppress never falls back to capture that cannot suppress".into(),
+        ));
+        stages.push(stage(
+            "terminal",
+            "not tried: --suppress never falls back to capture that cannot suppress".into(),
+        ));
+        return CapturePlan {
+            stages,
+            selected: Err(format!(
+                "--suppress requires native compositor capture: {native_error}"
+            )),
+        };
+    }
+    if let Some(display) = display {
+        stages.push(stage(
+            "probe window",
+            format!(
+                "selected: opens a probe window ({display}); press the shortcut there (keys the desktop consumes never reach it)"
+            ),
+        ));
+        stages.push(stage(
+            "terminal",
+            "used only if the probe window cannot be opened".into(),
+        ));
+        return CapturePlan {
+            stages,
+            selected: Ok(format!("Probe window via {display}")),
+        };
+    }
+    stages.push(stage(
+        "probe window",
+        format!("unavailable: {}", super::NO_PROBE_DISPLAY),
+    ));
+    let selected = if events_all {
+        stages.push(stage(
+            "terminal",
+            "not usable: --events all requires native compositor, probe window, or evdev capture"
+                .into(),
+        ));
+        Err("--events all requires native compositor, probe window, or evdev capture".into())
+    } else if tty {
+        stages.push(stage(
+            "terminal",
+            "selected: reads the controlling terminal; shortcuts consumed above it will not appear"
+                .into(),
+        ));
+        Ok(CaptureBackendId::Terminal.display().to_owned())
+    } else {
+        stages.push(stage(
+            "terminal",
+            "unavailable: no controlling terminal".into(),
+        ));
+        Err("no capture backend is usable".into())
+    };
+    CapturePlan { stages, selected }
+}
+
+/// Print the capture chain for `--dry-run`/`--explain-capture`. Nothing is
+/// armed; native capture is only probed by connecting to its IPC.
+pub(super) fn print_capture_plan(environment: &crate::environment::Environment, options: &Options) {
     let write_line = |line: String| {
         if options.json {
             eprintln!("{line}");
@@ -17,65 +122,59 @@ pub(super) fn print_capture_dry_run(
             );
         }
     };
+    let armed = if options.dry_run {
+        "dry-run; not armed"
+    } else {
+        "arming now"
+    };
     let forced = if options.evdev || options.device.is_some() {
-        Some("Evdev".to_owned())
+        Some(("Evdev".to_owned(), "--evdev/--device"))
     } else if options.terminal {
-        Some("Terminal".to_owned())
+        Some(("Terminal".to_owned(), "--terminal"))
     } else if options.window {
-        Some(match crate::probe::available_display() {
-            Some(display) => format!("Probe window via {display}"),
-            None => "Probe window (no Wayland or X11 display found)".to_owned(),
-        })
+        Some((
+            match crate::probe::available_display() {
+                Some(display) => format!("Probe window via {display}"),
+                None => format!("Probe window ({})", super::NO_PROBE_DISPLAY),
+            },
+            "--window",
+        ))
     } else {
         None
     };
-    if let Some(backend) = forced {
-        write_line(format!("capture backend: {backend} (dry-run; not armed)"));
+    if let Some((backend, flag)) = forced {
+        write_line(format!("capture chain: skipped; {flag} forces one backend"));
+        write_line(format!("capture backend: {backend} ({armed})"));
         return;
     }
-    match select_native_backend(environment) {
-        Ok(session) => write_line(format!(
-            "capture backend: {} (dry-run; not armed; policy={})",
-            session.display(),
+    #[cfg(target_os = "linux")]
+    let native = select_native_backend(environment)
+        .map(|session| session.display().to_owned())
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "linux"))]
+    let native: Result<String, String> = Err(super::NATIVE_UNSUPPORTED.to_owned());
+    let plan = plan_default_chain(
+        native.as_deref().map_err(String::as_str),
+        crate::probe::available_display(),
+        environment.tty_available,
+        options.capture_policy,
+        options.events_all,
+    );
+    write_line("capture chain (first usable backend wins):".to_owned());
+    for (index, stage) in plan.stages.iter().enumerate() {
+        write_line(format!(
+            "  {}. {}: {}",
+            index + 1,
+            stage.name,
+            stage.verdict
+        ));
+    }
+    match plan.selected {
+        Ok(backend) => write_line(format!(
+            "capture backend: {backend} ({armed}; policy={})",
             options.capture_policy
         )),
-        Err(error) if options.capture_policy == CapturePolicy::Suppress => write_line(format!(
-            "capture backend: none (dry-run; --suppress requires native compositor capture: {error})"
-        )),
-        Err(error) => write_line(format!(
-            "capture backend: terminal fallback (dry-run; native unavailable: {error})"
-        )),
-    }
-    match crate::probe::available_display() {
-        Some(display) => write_line(format!(
-            "window capture: available via --window ({display} probe window)"
-        )),
-        None => {
-            write_line("window capture: unavailable (no Wayland or X11 display found)".to_owned())
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(super) fn print_capture_dry_run(
-    _environment: &crate::environment::Environment,
-    options: &Options,
-) {
-    let backend = if options.evdev || options.device.is_some() {
-        "Evdev"
-    } else if options.window {
-        "Probe window"
-    } else {
-        "Terminal"
-    };
-    let line = format!("capture backend: {backend} (dry-run; not armed)");
-    if options.json {
-        eprintln!("{line}");
-    } else {
-        println!(
-            "{}",
-            crate::style::RenderOptions::cli(options.color, false).accent(line)
-        );
+        Err(reason) => write_line(format!("capture backend: none ({armed}; {reason})")),
     }
 }
 
@@ -161,7 +260,13 @@ pub(super) struct SelectError {
 impl fmt::Display for SelectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.attempted.is_empty() {
-            return formatter.write_str("no registered native compositor backend");
+            let backends = crate::registry::DESKTOPS
+                .iter()
+                .filter(|entry| entry.capture.is_some())
+                .map(|entry| entry.display)
+                .collect::<Vec<_>>()
+                .join(" or ");
+            return write!(formatter, "no {backends} session detected");
         }
         let details = self
             .attempted

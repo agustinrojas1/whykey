@@ -1,0 +1,54 @@
+{
+  "id": "sway-window-unbound",
+  "description": "listen --window under Sway: an unbound Super combo reaches whykey's probe window",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "bindsym Mod4+Return exec sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+x"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "vkbd": [
+        "super+x"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--window",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": "window",
+    "observation": true,
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    },
+    "combo": {
+      "key": "X",
+      "modifiers": 64
+    }
+  }
+}

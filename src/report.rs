@@ -67,6 +67,7 @@ struct NdjsonPathEntry<'a> {
     status: LayerStatus,
     propagation: Propagation,
     summary: &'a str,
+    tier: Option<EvidenceTier>,
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<&'a BindingEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,6 +168,7 @@ pub fn render_ndjson(
                 status: layer.status(),
                 propagation: layer.propagation(),
                 summary: &layer.summary,
+                tier: evidence_tier(layer, observed),
                 binding: layer.binding.as_ref(),
                 dead_key: layer.dead_key.as_deref(),
                 evidence: layer
@@ -206,7 +208,7 @@ fn render_json_v2(
             "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
         },
         "observation": observed.and_then(observation_value_v2),
-        "path": schema::path(layers),
+        "path": schema::path(layers, observed),
     }))
     .expect("whykey v2 report types are serializable")
         + "\n"
@@ -376,7 +378,7 @@ pub fn render_sequence_json(
                     "assessment": {
                         "confidence": confidence_label(layers, false),
                     },
-                    "path": schema::path(layers),
+                    "path": schema::path(layers, None),
                 }))
                 .collect::<Vec<_>>(),
         }))
@@ -508,12 +510,15 @@ fn render_inner(
         output.push('\n');
     }
 
-    if let Some(next) = next_step(key, layers, observation, &evaluated.conclusion) {
+    let next = next_steps(key, layers, observation, &evaluated.conclusion);
+    if !next.is_empty() {
         output.push_str(&options.accent("Next"));
         output.push('\n');
-        for line in style::wrap_hanging(&next, options.width, "  ", "  ") {
-            output.push_str(&line);
-            output.push('\n');
+        for step in &next {
+            for line in style::wrap_hanging(step, options.width, "  ", "  ") {
+                output.push_str(&line);
+                output.push('\n');
+            }
         }
         output.push('\n');
     }
@@ -955,7 +960,19 @@ fn layer_line(
         } else {
             concise_summary(&layer.summary)
         };
-    format!("{} — {status}: {explanation}", layer.layer)
+    // An unverified default already names its tier in the status.
+    let tier = match reason {
+        Some(UncertaintyReason::UnverifiedDefault) => None,
+        _ => evidence_tier(layer, observation),
+    };
+    match tier {
+        Some(tier) => format!(
+            "{} — {status}: {explanation} {}",
+            layer.layer,
+            options.muted(format!("[{}]", tier.label()))
+        ),
+        None => format!("{} — {status}: {explanation}", layer.layer),
+    }
 }
 
 fn concise_binding_evidence(layer: &LayerResult) -> Option<String> {
@@ -1103,53 +1120,190 @@ fn shell_init_command(layer: &str) -> Option<&'static str> {
     }
 }
 
-fn next_step(
+/// The observation that settles a compositor/desktop layer whose answer is
+/// uncertain or unavailable.
+const OBSERVE_DESKTOP_STEP: &str = "Observe it: `whykey listen --window` opens a probe window; press the shortcut there. If the key arrives, the desktop delivered it; if only its modifiers arrive, something above the window consumed it.";
+
+/// Whether a compositor/desktop answer leaves the key's fate open.
+fn desktop_unsettled(layer: &LayerResult) -> bool {
+    layer.id == LayerId::Compositor
+        && (matches!(
+            layer.status(),
+            LayerStatus::Indeterminate | LayerStatus::Unavailable
+        ) || layer.propagation() == Propagation::Indeterminate)
+}
+
+fn next_steps(
     _key: &KeyCombo,
     layers: &[LayerResult],
     observation: Option<&ObservedKey>,
     conclusion: &Conclusion,
-) -> Option<String> {
+) -> Vec<String> {
     if observation.is_some_and(|value| value.source.proves_compositor_receipt()) {
-        return Some("Use --suppress only when you need to inspect a compositor binding without letting its normal action run.".into());
+        return vec!["Use --suppress only when you need to inspect a compositor binding without letting its normal action run.".into()];
     }
     if let Conclusion::Remapped {
         then: Some(then), ..
     } = conclusion
     {
-        return next_step(_key, layers, observation, then);
+        return next_steps(_key, layers, observation, then);
+    }
+    let mut steps = Vec::new();
+    let observe_desktop = observation.is_none() && layers.iter().any(desktop_unsettled);
+    if observe_desktop {
+        steps.push(OBSERVE_DESKTOP_STEP.to_owned());
     }
     if let Some(command) = layers
         .iter()
         .filter(|layer| {
-            layer
-                .binding
-                .as_ref()
-                .and_then(|binding| binding.uncertainty)
-                == Some(UncertaintyReason::UnverifiedDefault)
+            layer.id == LayerId::Shell
+                && matches!(
+                    evidence_tier(layer, observation),
+                    Some(EvidenceTier::Default | EvidenceTier::ConfigFile)
+                )
         })
         .find_map(|layer| shell_init_command(layer.layer))
     {
-        return Some(format!("Load live shell bindings: {command}"));
+        steps.push(format!("Load live shell bindings: {command}"));
     }
-    if matches!(
-        conclusion,
-        Conclusion::ConfiguredConsumer {
-            assumes_earlier_forward: true,
-            ..
-        }
-    ) {
-        return Some(
+    if !observe_desktop
+        && matches!(
+            conclusion,
+            Conclusion::ConfiguredConsumer {
+                assumes_earlier_forward: true,
+                ..
+            }
+        )
+    {
+        steps.push(
             "Run `whykey listen` to observe whether the shortcut reaches the configured consumer."
                 .into(),
         );
     }
-    if layers
-        .iter()
-        .any(|layer| layer.status() == LayerStatus::Unavailable)
-    {
-        return Some("Run `whykey doctor` to see which integration is unavailable.".into());
+    // The desktop observation step already covers an unavailable desktop.
+    if layers.iter().any(|layer| {
+        layer.status() == LayerStatus::Unavailable
+            && !(observe_desktop && layer.id == LayerId::Compositor)
+    }) {
+        steps.push("Run `whykey doctor` to see which integration is unavailable.".into());
     }
-    None
+    steps
+}
+
+/// How directly a layer's answer was established, strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceTier {
+    /// A capture saw the key pass (or stop at) this layer.
+    Observed,
+    /// The running program answered: compositor IPC, gsettings, kglobalaccel,
+    /// a shell runtime dump, tmux, or the X server's grab state.
+    LiveQuery,
+    /// Parsed from configuration files; the running program may differ.
+    ConfigFile,
+    /// Built-in defaults; the running program may differ.
+    Default,
+}
+
+impl EvidenceTier {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::LiveQuery => "live query",
+            Self::ConfigFile => "config file (static)",
+            Self::Default => "default (unverified)",
+        }
+    }
+}
+
+/// Detail labels adapters attach when the running program answered. Order
+/// matters only for readability; any match settles the tier.
+const LIVE_QUERY_LABELS: &[&str] = &[
+    // X11 passive-grab probe.
+    "observed:",
+    // GNOME gsettings, KDE kglobalaccel D-Bus.
+    "source: live ",
+    // Shell runtime dumps loaded by shell-init.
+    "binding source: live ",
+    "binding source: current ",
+    // Sway/i3 get_config + get_binding_state IPC.
+    "source: parsed from running config via ",
+    "binding mode: ",
+    // Hyprland hyprctl IPC.
+    "active submap: ",
+    // tmux client state.
+    "active client key table: ",
+    // Other programs queried at runtime.
+    "source: gsettings ",
+    "source: xfconf-query ",
+    "source: herbstclient ",
+    "source: wezterm show-keys",
+    "source: zellij setup --dump-config",
+    "runtime mapping: ",
+    "runtime state: ",
+    // termios read from the terminal device.
+    "special character: ",
+];
+
+/// The evidence tier of one layer's answer, derived from the layer data:
+/// the capture that observed it, the typed binding uncertainty, then the
+/// adapter's labelled source details. `None` when nothing answered (an
+/// unavailable integration or a layer with no recorded source).
+pub fn evidence_tier(
+    layer: &LayerResult,
+    observation: Option<&ObservedKey>,
+) -> Option<EvidenceTier> {
+    if observation.is_some_and(|observed| observation_covers(observed, layer.id)) {
+        return Some(EvidenceTier::Observed);
+    }
+    if let Some(binding) = &layer.binding {
+        if binding.uncertainty == Some(UncertaintyReason::UnverifiedDefault) {
+            return Some(if binding.source.is_some() {
+                EvidenceTier::ConfigFile
+            } else {
+                EvidenceTier::Default
+            });
+        }
+    }
+    if layer.status() == LayerStatus::Unavailable {
+        return None;
+    }
+    let details = || layer.all_details();
+    if details().any(|detail| {
+        LIVE_QUERY_LABELS
+            .iter()
+            .any(|label| detail.starts_with(label))
+    }) {
+        return Some(EvidenceTier::LiveQuery);
+    }
+    details().find_map(|detail| {
+        if let Some(source) = detail.strip_prefix("binding source: ") {
+            Some(if source.contains("default") {
+                EvidenceTier::Default
+            } else {
+                EvidenceTier::ConfigFile
+            })
+        } else if detail.starts_with("config: ") || detail.starts_with("source: ") {
+            Some(EvidenceTier::ConfigFile)
+        } else {
+            None
+        }
+    })
+}
+
+/// Layers a capture proves the key passed: everything above the point
+/// where it was observed.
+fn observation_covers(observed: &ObservedKey, layer: LayerId) -> bool {
+    if observed.source.proves_compositor_delivery() {
+        matches!(layer, LayerId::Remapper | LayerId::Compositor)
+    } else if observed.source.confirms_terminal() {
+        matches!(
+            layer,
+            LayerId::Remapper | LayerId::Compositor | LayerId::Terminal
+        )
+    } else {
+        observed.source.proves_compositor_receipt() && layer == LayerId::Compositor
+    }
 }
 
 fn render_verbose_evidence(
@@ -3524,5 +3678,172 @@ mod tests {
         assert!(output.starts_with("AltGr+Q · Inspect"), "{output}");
         let json = render_json(&key, &[], None, 1);
         assert!(json.contains("\"modifiers\": 128"), "{json}");
+    }
+
+    fn probe_window_observation(key: &KeyCombo) -> ObservedKey {
+        ObservedKey {
+            combo: key.clone(),
+            raw: vec![],
+            raw_display: None,
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: None,
+            encoding: "probe window key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::ProbeWindow,
+            disposition: crate::listen::CaptureDisposition::ObservedOnly,
+        }
+    }
+
+    fn sway_bind() -> LayerResult {
+        LayerResult::consumed(
+            "Sway",
+            LayerId::Compositor,
+            "active binding found",
+            vec![
+                "source: parsed from running config via `swaymsg -t get_config`".into(),
+                "binding: bindsym Mod4+t exec foot (/etc/sway/config:3)".into(),
+            ],
+        )
+    }
+
+    #[test]
+    fn evidence_tier_is_derived_from_layer_data() {
+        let tier = |layer: &LayerResult| evidence_tier(layer, None);
+        assert_eq!(tier(&sway_bind()), Some(EvidenceTier::LiveQuery));
+        let grab = LayerResult::consumed(
+            "Openbox",
+            LayerId::Compositor,
+            "an X11 client holds a grab on this shortcut (WM or hotkey daemon)",
+            vec![
+                "observed: the X server refused a core GrabKey on keycode 28 with Mod4 (BadAccess)"
+                    .into(),
+                "config: /root/.config/openbox/rc.xml".into(),
+            ],
+        );
+        assert_eq!(tier(&grab), Some(EvidenceTier::LiveQuery));
+        let static_only = LayerResult::new(
+            "sxhkd",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching sxhkd shortcut configured",
+            vec!["config: /root/.config/sxhkd/sxhkdrc".into()],
+        );
+        assert_eq!(tier(&static_only), Some(EvidenceTier::ConfigFile));
+        assert_eq!(tier(&readline_default(None)), Some(EvidenceTier::Default));
+        assert_eq!(
+            tier(&readline_default(Some(crate::layers::SourceLocation::new(
+                "/home/user/.inputrc",
+                None
+            )))),
+            Some(EvidenceTier::ConfigFile)
+        );
+        let snapshot = LayerResult::new(
+            "Bash / Readline",
+            LayerId::Shell,
+            Outcome::Consumed,
+            "bound to forward-word",
+            vec!["binding source: current Bash bind -p snapshot".into()],
+        );
+        assert_eq!(tier(&snapshot), Some(EvidenceTier::LiveQuery));
+        let default_pass = LayerResult::pass(
+            "Bash / Readline",
+            LayerId::Shell,
+            "not bound",
+            vec!["binding source: Readline default".into()],
+        );
+        assert_eq!(tier(&default_pass), Some(EvidenceTier::Default));
+        let unavailable = LayerResult::unavailable(
+            "tmux",
+            LayerId::Multiplexer,
+            "tmux server is unreachable",
+            vec!["config: /home/user/.tmux.conf".into()],
+        );
+        assert_eq!(tier(&unavailable), None);
+        assert_eq!(tier(&unevaluated_byte_layers()[3]), None);
+    }
+
+    #[test]
+    fn a_probe_window_observation_is_the_observed_tier_above_the_window() {
+        let key: KeyCombo = "super+t".parse().unwrap();
+        let observed = probe_window_observation(&key);
+        assert_eq!(
+            evidence_tier(&sway_bind(), Some(&observed)),
+            Some(EvidenceTier::Observed)
+        );
+        let shell = LayerResult::new(
+            "Bash / Readline",
+            LayerId::Shell,
+            Outcome::Consumed,
+            "bound to forward-word",
+            vec!["binding source: current Bash bind -p snapshot".into()],
+        );
+        assert_eq!(
+            evidence_tier(&shell, Some(&observed)),
+            Some(EvidenceTier::LiveQuery)
+        );
+    }
+
+    #[test]
+    fn rows_carry_the_evidence_tier_and_v2_paths_carry_it_additively() {
+        let layers = [sway_bind(), readline_default(None)];
+        let output = render_wide("super+t", &layers);
+        assert!(
+            output.contains("Sway — Configured to stop: active binding found [live query]"),
+            "{output}"
+        );
+        // The unverified status already names the tier.
+        assert!(!output.contains("[default (unverified)]"), "{output}");
+
+        let key: KeyCombo = "super+t".parse().unwrap();
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 2)).unwrap();
+        assert_eq!(v2["path"][0]["tier"], "live_query");
+        assert_eq!(v2["path"][1]["tier"], "default");
+        let ndjson: serde_json::Value =
+            serde_json::from_str(&render_ndjson(&key, &layers, None)).unwrap();
+        assert_eq!(ndjson["path"][0]["tier"], "live_query");
+        let v1: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
+        assert!(v1["layers"][0].get("tier").is_none());
+    }
+
+    #[test]
+    fn next_names_the_observation_for_an_uncertain_desktop_and_shell_init() {
+        let desktop = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::UncertainContinues,
+            "Hyprland IPC is unavailable; effective binding state is unknown",
+            vec![],
+        );
+        let output = render_wide("ctrl+t", &[desktop.clone(), readline_default(None)]);
+        let next = output.split("\nNext\n").nth(1).expect("a Next section");
+        assert!(next.contains(
+            "Observe it: `whykey listen --window` opens a probe window; press the shortcut there."
+        ));
+        assert!(next.contains("Load live shell bindings: eval \"$(whykey shell-init bash)\""));
+
+        let unavailable = LayerResult::unavailable(
+            "Desktop compositor",
+            LayerId::Compositor,
+            "no read-only adapter is available",
+            vec![],
+        );
+        let output = render_wide("super+t", &[unavailable]);
+        assert!(output.contains("press the shortcut there"));
+        assert!(!output.contains("whykey doctor"));
+
+        let settled = render_wide("super+t", &[sway_bind()]);
+        assert!(!settled.contains("probe window"));
+        let observed = render_observed_with_options(
+            &probe_window_observation(&"ctrl+t".parse().unwrap()),
+            &[desktop],
+            RenderOptions::plain(false),
+        );
+        assert!(!observed.contains("Observe it"));
     }
 }

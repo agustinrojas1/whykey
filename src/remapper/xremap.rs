@@ -1,9 +1,12 @@
-//! Static evaluation of the simple xremap YAML subset: `modmap` and
-//! `keymap` lists whose `remap` maps use scalar keys. YAML features outside
-//! that subset (anchors, block scalars, tags) make the whole file
-//! unevaluated rather than half-read.
+//! Static evaluation of xremap configurations: `modmap` and `keymap` lists
+//! whose `remap` maps use scalar keys. The YAML is read with yaml-rust2;
+//! aliases, several documents, complex mapping keys, and nesting deeper than
+//! [`MAX_NESTING`] make the whole file unevaluated rather than half-read.
 
 use std::path::Path;
+
+use yaml_rust2::parser::{Event, Parser};
+use yaml_rust2::scanner::TScalarStyle;
 
 use super::keys::{self, ALT, ALTGR, CTRL, Press, SHIFT, SUPER};
 use super::{Effect, Finding, Rule};
@@ -383,323 +386,81 @@ fn entry(item: &Yaml, path: &str, section: &str) -> Result<Entry, String> {
     Ok(entry)
 }
 
-struct Line<'a> {
-    indent: usize,
-    text: &'a str,
-    number: u32,
-}
-
-/// Maximum combined block/flow nesting; bounds recursion in parsing and `Drop`.
+/// Maximum mapping/sequence nesting; bounds recursion in evaluation and `Drop`.
 const MAX_NESTING: usize = 64;
 
-/// Parse the block-style YAML subset xremap examples use.
+/// A collection whose end event has not arrived yet.
+enum Open {
+    Seq(Vec<Yaml>),
+    /// Entries so far, plus the key (and its line) awaiting a value.
+    Map(Vec<(String, Yaml, u32)>, Option<(String, u32)>),
+}
+
+/// Parse one YAML document into the [`Yaml`] tree, recording each mapping
+/// key's line.
 fn parse(content: &str) -> Result<Yaml, String> {
-    let mut lines = Vec::new();
-    for (index, raw) in content.lines().enumerate() {
-        let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
-        let without_comment = strip_comment(raw);
-        let text = without_comment.trim_end();
-        if text.trim().is_empty() {
-            continue;
-        }
-        if text.trim_start() == "---" && lines.is_empty() {
-            continue;
-        }
-        let indent = text.len() - text.trim_start().len();
-        if text[..indent].contains('\t') {
-            return Err(format!("line {number}: tab indentation"));
-        }
-        lines.push(Line {
-            indent,
-            text: text.trim_start(),
-            number,
-        });
-    }
-    if lines.is_empty() {
-        return Ok(Yaml::Null);
-    }
-    let mut index = 0;
-    let value = block(&lines, &mut index, lines[0].indent, 0)?;
-    if index != lines.len() {
-        return Err(format!(
-            "line {}: unexpected indentation",
-            lines[index].number
-        ));
-    }
-    Ok(value)
-}
-
-fn strip_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut previous = ' ';
-    for (index, character) in line.char_indices() {
-        match (quote, character) {
-            (None, '"' | '\'') => quote = Some(character),
-            (Some(open), c) if c == open => quote = None,
-            (None, '#') if previous.is_whitespace() => return &line[..index],
-            _ => {}
-        }
-        previous = character;
-    }
-    line
-}
-
-fn block(
-    lines: &[Line<'_>],
-    index: &mut usize,
-    indent: usize,
-    depth: usize,
-) -> Result<Yaml, String> {
-    if depth >= MAX_NESTING {
-        return Err(format!(
-            "line {}: nesting deeper than {MAX_NESTING}",
-            lines[*index].number
-        ));
-    }
-    let depth = depth + 1;
-    if lines[*index].text == "-" || lines[*index].text.starts_with("- ") {
-        sequence(lines, index, indent, depth)
-    } else {
-        mapping(lines, index, indent, None, depth)
-    }
-}
-
-fn sequence(
-    lines: &[Line<'_>],
-    index: &mut usize,
-    indent: usize,
-    depth: usize,
-) -> Result<Yaml, String> {
-    let mut items = Vec::new();
-    while *index < lines.len() && lines[*index].indent == indent {
-        let line = &lines[*index];
-        let Some(rest) = line.text.strip_prefix('-') else {
-            break;
-        };
-        if !(rest.is_empty() || rest.starts_with(' ')) {
-            break;
-        }
-        let item = rest.trim_start();
-        if item.is_empty() {
-            *index += 1;
-            items.push(nested(lines, index, indent, depth)?);
-        } else if split_key(item).is_some() && !item.starts_with(['[', '{', '"', '\'']) {
-            // `- key: value` opens a mapping at the item's column.
-            let column = indent + (line.text.len() - item.len());
-            items.push(mapping(
-                lines,
-                index,
-                column,
-                Some((item, line.number)),
-                depth,
-            )?);
-        } else {
-            items.push(scalar(item, line.number, depth)?);
-            *index += 1;
-        }
-    }
-    Ok(Yaml::Seq(items))
-}
-
-fn mapping(
-    lines: &[Line<'_>],
-    index: &mut usize,
-    indent: usize,
-    first: Option<(&str, u32)>,
-    depth: usize,
-) -> Result<Yaml, String> {
-    let mut entries = Vec::new();
-    let mut pending = first;
+    let mut parser = Parser::new_from_str(content);
+    let mut stack: Vec<Open> = Vec::new();
+    let mut document = None;
+    let mut documents = 0;
     loop {
-        let (text, number) = match pending.take() {
-            Some(first) => first,
-            None => {
-                if *index >= lines.len() || lines[*index].indent != indent {
-                    break;
+        let (event, marker) = parser.next_token().map_err(|error| error.to_string())?;
+        let line = u32::try_from(marker.line()).unwrap_or(u32::MAX);
+        let awaiting_key = matches!(stack.last(), Some(Open::Map(_, None)));
+        let value = match event {
+            Event::StreamEnd => break,
+            Event::DocumentStart => {
+                documents += 1;
+                if documents > 1 {
+                    return Err(format!("line {line}: several YAML documents"));
                 }
-                let line = &lines[*index];
-                if line.text.starts_with("- ") || line.text == "-" {
-                    break;
+                continue;
+            }
+            Event::Nothing | Event::StreamStart | Event::DocumentEnd => continue,
+            Event::Alias(_) => {
+                return Err(format!("line {line}: YAML aliases are not evaluated"));
+            }
+            Event::SequenceStart(..) | Event::MappingStart(..) => {
+                if awaiting_key {
+                    return Err(format!(
+                        "line {line}: complex mapping keys are not evaluated"
+                    ));
                 }
-                (line.text, line.number)
+                if stack.len() >= MAX_NESTING {
+                    return Err(format!("line {line}: nesting deeper than {MAX_NESTING}"));
+                }
+                stack.push(match event {
+                    Event::SequenceStart(..) => Open::Seq(Vec::new()),
+                    _ => Open::Map(Vec::new(), None),
+                });
+                continue;
+            }
+            Event::SequenceEnd | Event::MappingEnd => match stack.pop() {
+                Some(Open::Seq(items)) => Yaml::Seq(items),
+                Some(Open::Map(entries, _)) => Yaml::Map(entries),
+                None => return Err(format!("line {line}: unbalanced YAML collection")),
+            },
+            Event::Scalar(text, style, ..) => {
+                if let Some(Open::Map(_, key @ None)) = stack.last_mut() {
+                    *key = Some((text, line));
+                    continue;
+                }
+                let null = style == TScalarStyle::Plain
+                    && matches!(text.as_str(), "" | "~" | "null" | "Null" | "NULL");
+                if null { Yaml::Null } else { Yaml::Scalar(text) }
             }
         };
-        let (key, value) =
-            split_key(text).ok_or_else(|| format!("line {number}: expected `key: value`"))?;
-        *index += 1;
-        let value = if value.is_empty() {
-            nested(lines, index, indent, depth)?
-        } else {
-            scalar(value, number, depth)?
-        };
-        entries.push((unquote(key), value, number));
-    }
-    Ok(Yaml::Map(entries))
-}
-
-/// The block under `key:` or `-`: deeper lines, or a sequence at the same
-/// indentation under a mapping key.
-fn nested(
-    lines: &[Line<'_>],
-    index: &mut usize,
-    indent: usize,
-    depth: usize,
-) -> Result<Yaml, String> {
-    match lines.get(*index) {
-        Some(next) if next.indent > indent => block(lines, index, next.indent, depth),
-        Some(next)
-            if next.indent == indent && (next.text.starts_with("- ") || next.text == "-") =>
-        {
-            block(lines, index, indent, depth)
-        }
-        _ => Ok(Yaml::Null),
-    }
-}
-
-/// Split `key: value` at the first `: ` (or a trailing `:`) outside quotes.
-fn split_key(text: &str) -> Option<(&str, &str)> {
-    let mut quote = None;
-    let bytes = text.as_bytes();
-    for (index, character) in text.char_indices() {
-        match (quote, character) {
-            (None, '"' | '\'') if index == 0 => quote = Some(character),
-            (Some(open), c) if c == open => quote = None,
-            (None, ':') if bytes.get(index + 1).is_none_or(|next| *next == b' ') => {
-                let key = text[..index].trim();
-                return (!key.is_empty()).then(|| (key, text[index + 1..].trim()));
-            }
-            (None, '{' | '[') if index == 0 => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
-fn unquote(text: &str) -> String {
-    let text = text.trim();
-    for quote in ['"', '\''] {
-        if let Some(inner) = text
-            .strip_prefix(quote)
-            .and_then(|rest| rest.strip_suffix(quote))
-        {
-            return inner.to_owned();
-        }
-    }
-    text.to_owned()
-}
-
-fn scalar(text: &str, number: u32, depth: usize) -> Result<Yaml, String> {
-    let text = text.trim();
-    if text.starts_with(['&', '*', '!', '|', '>', '%', '@', '`']) {
-        return Err(format!(
-            "line {number}: YAML feature `{text}` is not evaluated"
-        ));
-    }
-    if text.starts_with(['[', '{']) {
-        let mut chars = text.chars().peekable();
-        let value = flow(&mut chars, number, depth)?;
-        if chars.any(|character| !character.is_whitespace()) {
-            return Err(format!("line {number}: trailing text after a flow value"));
-        }
-        return Ok(value);
-    }
-    Ok(match text {
-        "null" | "~" => Yaml::Null,
-        _ => Yaml::Scalar(unquote(text)),
-    })
-}
-
-fn flow(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-    number: u32,
-    depth: usize,
-) -> Result<Yaml, String> {
-    if depth >= MAX_NESTING {
-        return Err(format!("line {number}: nesting deeper than {MAX_NESTING}"));
-    }
-    let depth = depth + 1;
-    skip_spaces(chars);
-    match chars.peek().copied() {
-        Some('[') => {
-            chars.next();
-            let mut items = Vec::new();
-            loop {
-                skip_spaces(chars);
-                if chars.peek() == Some(&']') {
-                    chars.next();
-                    return Ok(Yaml::Seq(items));
-                }
-                items.push(flow(chars, number, depth)?);
-                skip_spaces(chars);
-                match chars.next() {
-                    Some(',') => {}
-                    Some(']') => return Ok(Yaml::Seq(items)),
-                    _ => return Err(format!("line {number}: malformed flow sequence")),
+        match stack.last_mut() {
+            None => document = Some(value),
+            Some(Open::Seq(items)) => items.push(value),
+            Some(Open::Map(entries, key)) => {
+                if let Some((key, key_line)) = key.take() {
+                    entries.push((key, value, key_line));
                 }
             }
         }
-        Some('{') => {
-            chars.next();
-            let mut entries = Vec::new();
-            loop {
-                skip_spaces(chars);
-                if chars.peek() == Some(&'}') {
-                    chars.next();
-                    return Ok(Yaml::Map(entries));
-                }
-                let key = flow_scalar(chars, &[':']);
-                if chars.next() != Some(':') {
-                    return Err(format!("line {number}: malformed flow mapping"));
-                }
-                let value = flow(chars, number, depth)?;
-                entries.push((key, value, number));
-                skip_spaces(chars);
-                match chars.next() {
-                    Some(',') => {}
-                    Some('}') => return Ok(Yaml::Map(entries)),
-                    _ => return Err(format!("line {number}: malformed flow mapping")),
-                }
-            }
-        }
-        _ => {
-            let text = flow_scalar(chars, &[',', ']', '}']);
-            scalar(&text, number, depth)
-        }
     }
-}
-
-fn flow_scalar(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, stops: &[char]) -> String {
-    skip_spaces(chars);
-    let mut text = String::new();
-    let quote = chars.peek().copied().filter(|c| matches!(c, '"' | '\''));
-    if let Some(quote) = quote {
-        chars.next();
-        for character in chars.by_ref() {
-            if character == quote {
-                break;
-            }
-            text.push(character);
-        }
-        skip_spaces(chars);
-        return text;
-    }
-    while let Some(character) = chars.peek() {
-        if stops.contains(character) {
-            break;
-        }
-        text.push(*character);
-        chars.next();
-    }
-    text.trim().to_owned()
-}
-
-fn skip_spaces(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    while chars
-        .peek()
-        .is_some_and(|character| character.is_whitespace())
-    {
-        chars.next();
-    }
+    Ok(document.unwrap_or(Yaml::Null))
 }
 
 #[cfg(test)]
@@ -748,7 +509,7 @@ mod tests {
     fn deep_nesting_is_rejected_not_overflowed() {
         let path = Path::new("/home/u/.config/xremap/config.yml");
         let flow = format!("keymap: {}{}\n", "[".repeat(100_000), "]".repeat(100_000));
-        let dashes = "-\n".repeat(100_000);
+        let dashes = format!("{}x\n", "- ".repeat(100_000));
         let mut indented = String::new();
         for depth in 0..2_000 {
             indented.push_str(&" ".repeat(depth));
@@ -756,11 +517,22 @@ mod tests {
         }
         for content in [flow, dashes, indented] {
             let error = Config::default().extend(path, &content).unwrap_err();
-            assert!(error.contains("nesting"), "{error}");
+            // Flow nesting hits the scanner's own limit first.
+            assert!(
+                error.contains("nesting") || error.contains("recursion limit"),
+                "{error}"
+            );
         }
         // Moderate nesting still parses.
         let shallow = format!("x: {}{}\n", "[".repeat(10), "]".repeat(10));
         assert!(Config::default().extend(path, &shallow).is_ok());
+    }
+
+    #[test]
+    fn rules_keep_their_key_lines() {
+        let config = config("# header\n\nkeymap:\n  - remap:\n      # note\n      C-a: C-b\n");
+        let finding = config.evaluate(Press::new(CTRL, 30)).remove(0);
+        assert_eq!(finding.rule.map(|rule| rule.line), Some(6));
     }
 
     #[test]

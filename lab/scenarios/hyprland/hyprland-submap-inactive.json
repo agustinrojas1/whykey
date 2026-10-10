@@ -1,0 +1,35 @@
+{
+  "id": "hyprland-submap-inactive",
+  "description": "a submap binding does not fire while the default submap is active",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, R, submap, lab",
+      "submap = lab",
+      "bind = , T, exec, touch /tmp/fired",
+      "bind = , escape, submap, reset",
+      "submap = reset"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "t"
+    ],
+    "layer": "Hyprland"
+  }
+}

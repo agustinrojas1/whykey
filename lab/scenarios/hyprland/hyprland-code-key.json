@@ -1,0 +1,32 @@
+{
+  "id": "hyprland-code-key",
+  "description": "bind = SUPER, code:28 (XKB keycode of T on a US keyboard) fires for Super+T",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, code:28, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "Hyprland",
+    "detail": "exec touch /tmp/fired"
+  }
+}

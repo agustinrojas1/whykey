@@ -1,108 +1,42 @@
-//! Minimal X11 wire-protocol client (no Xlib/xcb dependency).
+//! X11 client (x11rb) for the probe window and passive-grab checks.
 //!
-//! It speaks just enough of the core protocol (plus XInput2 passive grabs)
-//! to open a probe window that reports the keys the X server delivers to it,
-//! and to ask the server whether another client already holds a passive key
-//! grab. A passive grab is how every X11 window manager and hotkey daemon
+//! It opens a probe window that reports the keys the X server delivers to
+//! it, and asks the server whether another client already holds a passive
+//! key grab. A passive grab is how every X11 window manager and hotkey daemon
 //! (i3, Openbox, xbindkeys, sxhkd, KWin, Mutter, ...) claims a shortcut, and
 //! the server refuses a second client's grab on the same combination with
 //! `BadAccess`. That refusal is observed server state, not a prediction from
 //! configuration files.
 
 use std::collections::{HashMap, VecDeque};
-use std::env;
-use std::fs::File;
-use std::io::{self, Read, Write};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
-use std::os::fd::{AsRawFd, RawFd};
-use std::os::linux::net::SocketAddrExt;
-use std::os::unix::net::{SocketAddr, UnixStream};
-use std::path::PathBuf;
+use std::io;
+use std::os::fd::AsRawFd;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
+
+use x11rb::connection::{Connection as _, RequestConnection as _};
+use x11rb::errors::{ConnectError, ConnectionError, ReplyError, ReplyOrIdError};
+use x11rb::protocol::xinput::{self, ConnectionExt as _};
+use x11rb::protocol::xproto::{self, ConnectionExt as _};
+use x11rb::protocol::{ErrorKind, Event};
+use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
+use x11rb::x11_utils::X11Error;
 
 use crate::key::KeyCombo;
 use crate::probe::{ProbeEvent, ProbeKind, ProbeWindow};
 
-/// Bound on every request/reply exchange and on connection setup.
-const IO_TIMEOUT: Duration = Duration::from_secs(2);
-/// Largest reply/setup payload accepted from the server.
-const MAX_PACKET: usize = 4 << 20;
-/// Largest Xauthority file read.
-const MAX_XAUTHORITY: u64 = 1 << 20;
-/// Events buffered while waiting for a reply.
-const MAX_QUEUED_EVENTS: usize = 4096;
+/// How long the probe window waits for the window manager to map it.
+const MAP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub const SHIFT_MASK: u16 = 1;
 pub const LOCK_MASK: u16 = 2;
 
-const OP_CREATE_WINDOW: u8 = 1;
-const OP_MAP_WINDOW: u8 = 8;
-const OP_INTERN_ATOM: u8 = 16;
-const OP_CHANGE_PROPERTY: u8 = 18;
-const OP_GRAB_KEY: u8 = 33;
-const OP_UNGRAB_KEY: u8 = 34;
-const OP_QUERY_POINTER: u8 = 38;
-const OP_SET_INPUT_FOCUS: u8 = 42;
-const OP_GET_INPUT_FOCUS: u8 = 43;
-const OP_QUERY_EXTENSION: u8 = 98;
-const OP_GET_KEYBOARD_MAPPING: u8 = 101;
-const OP_GET_MODIFIER_MAPPING: u8 = 119;
-
-const XI_QUERY_VERSION: u8 = 47;
-const XI_PASSIVE_GRAB_DEVICE: u8 = 54;
-const XI_PASSIVE_UNGRAB_DEVICE: u8 = 55;
 /// The X server's virtual core keyboard (always device 3); Mutter grabs on it.
 const XI_VIRTUAL_CORE_KEYBOARD: u16 = 3;
-const XI_GRABTYPE_KEYCODE: u8 = 1;
-const XI_GRAB_MODE_ASYNC: u8 = 1;
-
-const ERROR_ACCESS: u8 = 10;
-const ERROR_NAMES: [&str; 18] = [
-    "Success",
-    "BadRequest",
-    "BadValue",
-    "BadWindow",
-    "BadPixmap",
-    "BadAtom",
-    "BadCursor",
-    "BadFont",
-    "BadMatch",
-    "BadDrawable",
-    "BadAccess",
-    "BadAlloc",
-    "BadColormap",
-    "BadGContext",
-    "BadIDChoice",
-    "BadName",
-    "BadLength",
-    "BadImplementation",
-];
-
-const EVENT_KEY_PRESS: u8 = 2;
-const EVENT_KEY_RELEASE: u8 = 3;
-const EVENT_FOCUS_IN: u8 = 9;
-const EVENT_FOCUS_OUT: u8 = 10;
-const EVENT_MAP_NOTIFY: u8 = 19;
-const EVENT_MAPPING_NOTIFY: u8 = 34;
-const EVENT_GENERIC: u8 = 35;
-
-const MASK_KEY_PRESS: u32 = 1 << 0;
-const MASK_KEY_RELEASE: u32 = 1 << 1;
-const MASK_STRUCTURE_NOTIFY: u32 = 1 << 17;
-const MASK_FOCUS_CHANGE: u32 = 1 << 21;
-
-const ATOM_CARDINAL: u32 = 6;
-const ATOM_STRING: u32 = 31;
-const ATOM_WM_HINTS: u32 = 35;
-const ATOM_WM_NAME: u32 = 39;
-const ATOM_WM_CLASS: u32 = 67;
-
-const FAMILY_INTERNET: u16 = 0;
-const FAMILY_INTERNET6: u16 = 6;
-const FAMILY_LOCAL: u16 = 256;
-const FAMILY_WILD: u16 = 65535;
-const MIT_MAGIC_COOKIE: &[u8] = b"MIT-MAGIC-COOKIE-1";
+/// XIPassiveGrabDevice reports a combination another client holds with the
+/// BadAccess error code as its status.
+const XI_STATUS_ACCESS: u8 = 10;
 
 const KEYSYM_NUM_LOCK: u32 = 0xff7f;
 
@@ -184,380 +118,53 @@ fn invalid_input(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
-fn malformed(what: &str) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("malformed X11 {what} from the server"),
-    )
-}
-
-fn le16(bytes: &[u8], offset: usize) -> Option<u16> {
-    let slice = bytes.get(offset..offset.checked_add(2)?)?;
-    Some(u16::from_le_bytes([slice[0], slice[1]]))
-}
-
-fn le32(bytes: &[u8], offset: usize) -> Option<u32> {
-    let slice = bytes.get(offset..offset.checked_add(4)?)?;
-    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
-}
-
-fn pad4(length: usize) -> usize {
-    (4 - length % 4) % 4
-}
-
-// ---------------------------------------------------------------------------
-// DISPLAY and Xauthority
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Endpoint {
-    /// Local server: `/tmp/.X11-unix/X<n>`, then the abstract socket.
-    Local,
-    /// Explicit Unix socket path (`/path/to/socket:N`).
-    Path(String),
-    Tcp(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DisplayName {
-    endpoint: Endpoint,
-    display: u32,
-    screen: usize,
-}
-
-fn parse_display(value: &str) -> Option<DisplayName> {
-    let value = value.trim();
-    let (protocol, rest) = match value.split_once('/') {
-        Some((protocol, rest))
-            if matches!(protocol, "unix" | "local" | "tcp" | "inet" | "inet6") =>
-        {
-            (Some(protocol), rest)
+fn connect_error(error: ConnectError) -> io::Error {
+    match error {
+        ConnectError::IoError(error) => error,
+        ConnectError::DisplayParsingError(error) => invalid_input(format!("DISPLAY: {error}")),
+        ConnectError::SetupFailed(xproto::SetupFailed { reason, .. })
+        | ConnectError::SetupAuthenticate(xproto::SetupAuthenticate { reason, .. }) => {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "X server refused the connection: {}",
+                    String::from_utf8_lossy(&reason)
+                        .trim_end_matches('\0')
+                        .trim()
+                ),
+            )
         }
-        _ => (None, value),
-    };
-    let (host, number) = rest.rsplit_once(':')?;
-    let (display, screen) = match number.split_once('.') {
-        Some((display, screen)) => (display, screen.parse().ok()?),
-        None => (number, 0),
-    };
-    let display = display.parse().ok()?;
-    let endpoint = match protocol {
-        Some("unix" | "local") => Endpoint::Local,
-        Some(_) if host.is_empty() => return None,
-        Some(_) => Endpoint::Tcp(host.trim_matches(['[', ']']).to_owned()),
-        None if host.is_empty() || host == "unix" => Endpoint::Local,
-        None if host.starts_with('/') => Endpoint::Path(host.to_owned()),
-        None => Endpoint::Tcp(host.trim_matches(['[', ']']).to_owned()),
-    };
-    Some(DisplayName {
-        endpoint,
-        display,
-        screen,
-    })
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct XauthEntry {
-    family: u16,
-    address: Vec<u8>,
-    number: Vec<u8>,
-    name: Vec<u8>,
-    data: Vec<u8>,
-}
-
-fn parse_xauthority(bytes: &[u8]) -> Vec<XauthEntry> {
-    fn counted<'a>(bytes: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
-        let length = usize::from(u16::from_be_bytes([
-            *bytes.get(*offset)?,
-            *bytes.get(*offset + 1)?,
-        ]));
-        let start = *offset + 2;
-        let field = bytes.get(start..start + length)?;
-        *offset = start + length;
-        Some(field)
-    }
-    let mut entries = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let Some(family) = bytes
-            .get(offset..offset + 2)
-            .map(|family| u16::from_be_bytes([family[0], family[1]]))
-        else {
-            break;
-        };
-        offset += 2;
-        let mut field = || counted(bytes, &mut offset).map(<[u8]>::to_vec);
-        let (Some(address), Some(number), Some(name), Some(data)) =
-            (field(), field(), field(), field())
-        else {
-            break;
-        };
-        entries.push(XauthEntry {
-            family,
-            address,
-            number,
-            name,
-            data,
-        });
-    }
-    entries
-}
-
-/// The server address as Xauthority families describe it.
-enum AuthAddress {
-    Local(Vec<u8>),
-    Ip(IpAddr),
-}
-
-fn select_cookie(
-    entries: &[XauthEntry],
-    address: &AuthAddress,
-    display: u32,
-) -> Option<(Vec<u8>, Vec<u8>)> {
-    let number = display.to_string();
-    entries
-        .iter()
-        .find(|entry| {
-            let address_matches = match (entry.family, address) {
-                (FAMILY_WILD, _) => true,
-                (FAMILY_LOCAL, AuthAddress::Local(hostname)) => entry.address == *hostname,
-                (FAMILY_INTERNET, AuthAddress::Ip(IpAddr::V4(ip))) => entry.address == ip.octets(),
-                (FAMILY_INTERNET6, AuthAddress::Ip(IpAddr::V6(ip))) => entry.address == ip.octets(),
-                _ => false,
-            };
-            address_matches
-                && (entry.number.is_empty() || entry.number == number.as_bytes())
-                && entry.name == MIT_MAGIC_COOKIE
-        })
-        .map(|entry| (entry.name.clone(), entry.data.clone()))
-}
-
-fn xauthority_path() -> Option<PathBuf> {
-    match env::var_os("XAUTHORITY") {
-        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
-        _ => env::var_os("HOME").map(|home| PathBuf::from(home).join(".Xauthority")),
+        error => io::Error::other(format!("cannot connect to the X server: {error}")),
     }
 }
 
-fn read_xauthority() -> Vec<XauthEntry> {
-    let Some(path) = xauthority_path() else {
-        return Vec::new();
-    };
-    let Ok(file) = File::open(path) else {
-        return Vec::new();
-    };
-    let mut bytes = Vec::new();
-    if file.take(MAX_XAUTHORITY).read_to_end(&mut bytes).is_err() {
-        return Vec::new();
-    }
-    parse_xauthority(&bytes)
-}
-
-fn hostname() -> Vec<u8> {
-    let mut buffer = [0u8; 256];
-    // SAFETY: the buffer is valid for its full length; gethostname writes at
-    // most that many bytes.
-    let status = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
-    if status != 0 {
-        return Vec::new();
-    }
-    let length = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
-    buffer[..length].to_vec()
-}
-
-// ---------------------------------------------------------------------------
-// Transport
-
-enum Transport {
-    Unix(UnixStream),
-    Tcp(TcpStream),
-}
-
-impl Transport {
-    fn connect(display: &DisplayName) -> io::Result<(Self, AuthAddress)> {
-        let local = || AuthAddress::Local(hostname());
-        match &display.endpoint {
-            Endpoint::Local => {
-                let path = format!("/tmp/.X11-unix/X{}", display.display);
-                let stream = UnixStream::connect(&path).or_else(|path_error| {
-                    SocketAddr::from_abstract_name(path.as_bytes())
-                        .and_then(|address| UnixStream::connect_addr(&address))
-                        .map_err(|_| {
-                            io::Error::new(path_error.kind(), format!("{path}: {path_error}"))
-                        })
-                })?;
-                Ok((Self::Unix(stream), local()))
-            }
-            Endpoint::Path(path) => {
-                let stream = UnixStream::connect(path)
-                    .map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?;
-                Ok((Self::Unix(stream), local()))
-            }
-            Endpoint::Tcp(host) => {
-                let port = u16::try_from(6000 + display.display).map_err(|_| {
-                    invalid_input(format!("X11 display {} is too large", display.display))
-                })?;
-                let mut last_error = None;
-                for address in (host.as_str(), port).to_socket_addrs()? {
-                    match TcpStream::connect_timeout(&address, IO_TIMEOUT) {
-                        Ok(stream) => {
-                            let ip = address.ip();
-                            let auth = if ip.is_loopback() {
-                                local()
-                            } else {
-                                AuthAddress::Ip(ip)
-                            };
-                            return Ok((Self::Tcp(stream), auth));
-                        }
-                        Err(error) => last_error = Some(error),
-                    }
-                }
-                Err(last_error.unwrap_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, format!("{host}: no address"))
-                }))
-            }
-        }
-    }
-
-    fn set_write_timeout(&self, timeout: Duration) -> io::Result<()> {
-        match self {
-            Self::Unix(stream) => stream.set_write_timeout(Some(timeout)),
-            Self::Tcp(stream) => stream.set_write_timeout(Some(timeout)),
-        }
+fn connection_error(error: ConnectionError) -> io::Error {
+    match error {
+        ConnectionError::IoError(error) => error,
+        error => io::Error::other(format!("X11 connection failed: {error}")),
     }
 }
 
-impl AsRawFd for Transport {
-    fn as_raw_fd(&self) -> RawFd {
-        match self {
-            Self::Unix(stream) => stream.as_raw_fd(),
-            Self::Tcp(stream) => stream.as_raw_fd(),
-        }
+fn x11_error(error: &X11Error) -> io::Error {
+    io::Error::other(format!(
+        "X11 request {}.{} failed: {:?} ({})",
+        error.major_opcode, error.minor_opcode, error.error_kind, error.error_code
+    ))
+}
+
+fn reply_error(error: ReplyError) -> io::Error {
+    match error {
+        ReplyError::ConnectionError(error) => connection_error(error),
+        ReplyError::X11Error(error) => x11_error(&error),
     }
 }
 
-impl Read for Transport {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Unix(stream) => stream.read(buffer),
-            Self::Tcp(stream) => stream.read(buffer),
-        }
+fn id_error(error: ReplyOrIdError) -> io::Error {
+    match error {
+        ReplyOrIdError::IdsExhausted => io::Error::other("X11 resource IDs exhausted"),
+        ReplyOrIdError::ConnectionError(error) => connection_error(error),
+        ReplyOrIdError::X11Error(error) => x11_error(&error),
     }
-}
-
-impl Write for Transport {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Unix(stream) => stream.write(buffer),
-            Self::Tcp(stream) => stream.write(buffer),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::Unix(stream) => stream.flush(),
-            Self::Tcp(stream) => stream.flush(),
-        }
-    }
-}
-
-/// Waits until `fd` is readable or `deadline` passes (`Ok(false)`).
-fn wait_readable(fd: RawFd, deadline: Instant) -> io::Result<bool> {
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(false);
-        }
-        let millis = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
-        let mut poll = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: `poll` points to one valid pollfd for the duration of the call.
-        let ready = unsafe { libc::poll(&mut poll, 1, millis) };
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error);
-        }
-        if ready > 0 {
-            return Ok(true);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Requests and packets
-
-struct Request(Vec<u8>);
-
-impl Request {
-    fn new(opcode: u8, data: u8) -> Self {
-        Self(vec![opcode, data, 0, 0])
-    }
-
-    fn u8(&mut self, value: u8) -> &mut Self {
-        self.0.push(value);
-        self
-    }
-
-    fn u16(&mut self, value: u16) -> &mut Self {
-        self.0.extend_from_slice(&value.to_le_bytes());
-        self
-    }
-
-    fn u32(&mut self, value: u32) -> &mut Self {
-        self.0.extend_from_slice(&value.to_le_bytes());
-        self
-    }
-
-    fn padded(&mut self, bytes: &[u8]) -> &mut Self {
-        self.0.extend_from_slice(bytes);
-        self.0.resize(self.0.len() + pad4(bytes.len()), 0);
-        self
-    }
-
-    fn finish(&mut self) -> io::Result<Vec<u8>> {
-        let padding = pad4(self.0.len());
-        self.0.resize(self.0.len() + padding, 0);
-        let units = u16::try_from(self.0.len() / 4)
-            .map_err(|_| invalid_input("X11 request is too long".into()))?;
-        self.0[2..4].copy_from_slice(&units.to_le_bytes());
-        Ok(std::mem::take(&mut self.0))
-    }
-}
-
-/// An X protocol error the server reported for one request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct XError {
-    code: u8,
-    sequence: u16,
-    major: u8,
-    minor: u16,
-}
-
-impl XError {
-    fn into_io(self) -> io::Error {
-        let name = ERROR_NAMES
-            .get(usize::from(self.code))
-            .copied()
-            .unwrap_or("extension error");
-        io::Error::other(format!(
-            "X11 request {}.{} failed: {name} ({})",
-            self.major, self.minor, self.code
-        ))
-    }
-}
-
-enum Packet {
-    Reply { sequence: u16, bytes: Vec<u8> },
-    Error(XError),
-    Event([u8; 32]),
 }
 
 /// Core keysym table: one row of `per_keycode` keysyms per keycode.
@@ -641,311 +248,90 @@ impl ModifierMap {
 
 /// One connection to an X server.
 pub struct Connection {
-    transport: Transport,
-    sequence: u16,
-    root: u32,
+    conn: RustConnection,
+    root: xproto::Window,
     white_pixel: u32,
-    id_base: u32,
-    id_mask: u32,
-    id_next: u32,
     min_keycode: u8,
     max_keycode: u8,
-    events: VecDeque<[u8; 32]>,
-    errors: Vec<XError>,
-    xinput: Option<Option<u8>>,
+    /// Whether the server speaks XInput 2, once asked.
+    xinput: Option<bool>,
 }
 
 impl Connection {
     /// Connects to `$DISPLAY`, authenticating with the matching
-    /// MIT-MAGIC-COOKIE-1 from `$XAUTHORITY`/`~/.Xauthority` when present.
+    /// Xauthority entry (`$XAUTHORITY`, else `~/.Xauthority`).
     pub fn connect_from_env() -> io::Result<Self> {
-        let value = env::var("DISPLAY")
-            .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "DISPLAY is not set"))?;
-        let display = parse_display(&value).ok_or_else(|| {
-            invalid_input(format!("DISPLAY '{value}' is not a valid X11 display"))
-        })?;
-        let (transport, address) = Transport::connect(&display)?;
-        let cookie = select_cookie(&read_xauthority(), &address, display.display);
-        Self::setup(transport, cookie, display.screen)
-    }
-
-    fn setup(
-        transport: Transport,
-        cookie: Option<(Vec<u8>, Vec<u8>)>,
-        screen: usize,
-    ) -> io::Result<Self> {
-        transport.set_write_timeout(IO_TIMEOUT)?;
-        let mut connection = Self {
-            transport,
-            sequence: 0,
-            root: 0,
-            white_pixel: 0,
-            id_base: 0,
-            id_mask: 0,
-            id_next: 0,
-            min_keycode: 0,
-            max_keycode: 0,
-            events: VecDeque::new(),
-            errors: Vec::new(),
-            xinput: None,
-        };
-        let (name, data) = cookie.unwrap_or_default();
-        let mut request = vec![b'l', 0];
-        request.extend_from_slice(&11u16.to_le_bytes());
-        request.extend_from_slice(&0u16.to_le_bytes());
-        request.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        request.extend_from_slice(&(data.len() as u16).to_le_bytes());
-        request.extend_from_slice(&[0, 0]);
-        request.extend_from_slice(&name);
-        request.resize(request.len() + pad4(name.len()), 0);
-        request.extend_from_slice(&data);
-        request.resize(request.len() + pad4(data.len()), 0);
-        connection.transport.write_all(&request)?;
-
-        let deadline = Instant::now() + IO_TIMEOUT;
-        let mut header = [0u8; 8];
-        connection.read_exact_until(&mut header, deadline)?;
-        let extra = usize::from(u16::from_le_bytes([header[6], header[7]])) * 4;
-        let mut body = vec![0u8; extra];
-        connection.read_exact_until(&mut body, deadline)?;
-        match header[0] {
-            1 => {}
-            status => {
-                let reason_length = if status == 0 {
-                    usize::from(header[1])
-                } else {
-                    body.len()
-                };
-                let reason = String::from_utf8_lossy(&body[..reason_length.min(body.len())]);
-                let reason = reason.trim_end_matches('\0').trim();
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("X server refused the connection: {reason}"),
-                ));
-            }
-        }
-        connection.parse_setup(&body, screen)?;
-        Ok(connection)
-    }
-
-    fn parse_setup(&mut self, body: &[u8], screen: usize) -> io::Result<()> {
-        let setup = || malformed("connection setup");
-        self.id_base = le32(body, 4).ok_or_else(setup)?;
-        self.id_mask = le32(body, 8).ok_or_else(setup)?;
-        let vendor_length = usize::from(le16(body, 16).ok_or_else(setup)?);
-        let screens = usize::from(*body.get(20).ok_or_else(setup)?);
-        let formats = usize::from(*body.get(21).ok_or_else(setup)?);
-        self.min_keycode = *body.get(26).ok_or_else(setup)?;
-        self.max_keycode = *body.get(27).ok_or_else(setup)?;
-        if self.id_mask == 0 || self.min_keycode > self.max_keycode {
-            return Err(setup());
-        }
-        if screen >= screens {
-            return Err(invalid_input(format!(
-                "X11 screen {screen} does not exist (the server has {screens})"
-            )));
-        }
-        let mut offset = 32 + vendor_length + pad4(vendor_length) + 8 * formats;
-        for index in 0..=screen {
-            let depths = usize::from(*body.get(offset + 39).ok_or_else(setup)?);
-            if index == screen {
-                self.root = le32(body, offset).ok_or_else(setup)?;
-                self.white_pixel = le32(body, offset + 8).ok_or_else(setup)?;
-            }
-            offset += 40;
-            for _ in 0..depths {
-                let visuals = usize::from(le16(body, offset + 2).ok_or_else(setup)?);
-                offset += 8 + 24 * visuals;
-            }
-        }
-        Ok(())
-    }
-
-    fn generate_id(&mut self) -> io::Result<u32> {
-        let step = self.id_mask & self.id_mask.wrapping_neg();
-        let id = self.id_next;
-        if id & !self.id_mask != 0 || (id != 0 && id & self.id_mask == 0) {
-            return Err(io::Error::other("X11 resource IDs exhausted"));
-        }
-        self.id_next = self.id_next.wrapping_add(step);
-        Ok(self.id_base | id)
-    }
-
-    /// Reads exactly `buffer.len()` bytes before `deadline`.
-    fn read_exact_until(&mut self, buffer: &mut [u8], deadline: Instant) -> io::Result<()> {
-        if !self.read_until(buffer, deadline, false)? {
+        if std::env::var_os("DISPLAY").is_none_or(|value| value.is_empty()) {
             return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "X server did not answer in time",
+                io::ErrorKind::NotFound,
+                "DISPLAY is not set",
             ));
         }
-        Ok(())
-    }
-
-    /// Fills `buffer`; `Ok(false)` when idle until `deadline` and nothing was
-    /// read (only allowed when `idle_ok`).
-    fn read_until(
-        &mut self,
-        buffer: &mut [u8],
-        deadline: Instant,
-        idle_ok: bool,
-    ) -> io::Result<bool> {
-        let mut filled = 0;
-        while filled < buffer.len() {
-            if !wait_readable(self.transport.as_raw_fd(), deadline)? {
-                if filled == 0 && idle_ok {
-                    return Ok(false);
-                }
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "X server did not answer in time",
-                ));
-            }
-            match self.transport.read(&mut buffer[filled..]) {
-                Ok(0) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "X server closed the connection",
-                    ));
-                }
-                Ok(read) => filled += read,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) => return Err(error),
-            }
+        let (conn, screen) = RustConnection::connect(None).map_err(connect_error)?;
+        let setup = conn.setup();
+        let (min_keycode, max_keycode) = (setup.min_keycode, setup.max_keycode);
+        if min_keycode < 8 || min_keycode > max_keycode {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("X server reports an invalid keycode range {min_keycode}..={max_keycode}"),
+            ));
         }
-        Ok(true)
-    }
-
-    fn read_packet(&mut self, deadline: Instant, idle_ok: bool) -> io::Result<Option<Packet>> {
-        let mut header = [0u8; 32];
-        if !self.read_until(&mut header, deadline, idle_ok)? {
-            return Ok(None);
-        }
-        let sequence = u16::from_le_bytes([header[2], header[3]]);
-        let kind = header[0] & 0x7f;
-        let extra = if kind == 1 || kind == EVENT_GENERIC {
-            let units = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-            usize::try_from(units)
-                .ok()
-                .and_then(|units| units.checked_mul(4))
-                .filter(|extra| *extra <= MAX_PACKET)
-                .ok_or_else(|| malformed("reply length"))?
-        } else {
-            0
-        };
-        let mut bytes = header.to_vec();
-        if extra > 0 {
-            bytes.resize(32 + extra, 0);
-            let deadline = deadline.max(Instant::now() + IO_TIMEOUT);
-            self.read_exact_until(&mut bytes[32..], deadline)?;
-        }
-        Ok(Some(match header[0] {
-            0 => Packet::Error(XError {
-                code: header[1],
-                sequence,
-                minor: u16::from_le_bytes([header[8], header[9]]),
-                major: header[10],
-            }),
-            1 => Packet::Reply { sequence, bytes },
-            _ => Packet::Event(header),
-        }))
-    }
-
-    fn queue_event(&mut self, event: [u8; 32]) {
-        if self.events.len() >= MAX_QUEUED_EVENTS {
-            self.events.pop_front();
-        }
-        self.events.push_back(event);
-    }
-
-    fn send(&mut self, mut request: Request) -> io::Result<u16> {
-        let bytes = request.finish()?;
-        self.transport.write_all(&bytes)?;
-        self.sequence = self.sequence.wrapping_add(1);
-        Ok(self.sequence)
-    }
-
-    /// Waits for the reply to request `sequence`, queueing events and
-    /// remembering errors for other requests.
-    fn reply(&mut self, sequence: u16) -> io::Result<Vec<u8>> {
-        let deadline = Instant::now() + IO_TIMEOUT;
-        loop {
-            match self.read_packet(deadline, false)? {
-                Some(Packet::Reply {
-                    sequence: got,
-                    bytes,
-                }) if got == sequence => return Ok(bytes),
-                Some(Packet::Reply { .. }) | None => {}
-                Some(Packet::Error(error)) if error.sequence == sequence => {
-                    return Err(error.into_io());
-                }
-                Some(Packet::Error(error)) => self.errors.push(error),
-                Some(Packet::Event(event)) => self.queue_event(event),
-            }
-        }
-    }
-
-    fn request_reply(&mut self, request: Request) -> io::Result<Vec<u8>> {
-        let sequence = self.send(request)?;
-        self.reply(sequence)
-    }
-
-    /// Round trip: every earlier request is processed when this returns the
-    /// errors they produced.
-    fn sync(&mut self) -> io::Result<Vec<XError>> {
-        let sequence = self.send(Request::new(OP_GET_INPUT_FOCUS, 0))?;
-        self.reply(sequence)?;
-        Ok(std::mem::take(&mut self.errors))
-    }
-
-    fn intern_atom(&mut self, name: &str) -> io::Result<u32> {
-        let mut request = Request::new(OP_INTERN_ATOM, 0);
-        request
-            .u16(
-                u16::try_from(name.len())
-                    .map_err(|_| invalid_input("atom name too long".into()))?,
-            )
-            .u16(0)
-            .padded(name.as_bytes());
-        let reply = self.request_reply(request)?;
-        le32(&reply, 8).ok_or_else(|| malformed("InternAtom reply"))
-    }
-
-    fn keyboard_mapping(&mut self) -> io::Result<Keymap> {
-        let count = self.max_keycode - self.min_keycode + 1;
-        let mut request = Request::new(OP_GET_KEYBOARD_MAPPING, 0);
-        request.u8(self.min_keycode).u8(count).u16(0);
-        let reply = self.request_reply(request)?;
-        let per_keycode = usize::from(reply[1]);
-        let total = per_keycode * usize::from(count);
-        let keysyms = (0..total)
-            .map(|index| le32(&reply, 32 + index * 4))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| malformed("GetKeyboardMapping reply"))?;
-        Ok(Keymap {
-            min_keycode: self.min_keycode,
-            per_keycode,
-            keysyms,
+        let root = setup
+            .roots
+            .get(screen)
+            .ok_or_else(|| invalid_input(format!("X11 screen {screen} does not exist")))?;
+        let (root, white_pixel) = (root.root, root.white_pixel);
+        Ok(Self {
+            conn,
+            root,
+            white_pixel,
+            min_keycode,
+            max_keycode,
+            xinput: None,
         })
     }
 
-    fn modifier_mapping(&mut self) -> io::Result<ModifierMap> {
-        let reply = self.request_reply(Request::new(OP_GET_MODIFIER_MAPPING, 0))?;
-        let per_modifier = usize::from(reply[1]);
-        let keycodes = reply
-            .get(32..32 + 8 * per_modifier)
-            .ok_or_else(|| malformed("GetModifierMapping reply"))?
-            .to_vec();
+    fn intern_atom(&self, name: &str) -> io::Result<xproto::Atom> {
+        Ok(self
+            .conn
+            .intern_atom(false, name.as_bytes())
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?
+            .atom)
+    }
+
+    fn keyboard_mapping(&self) -> io::Result<Keymap> {
+        let count = self.max_keycode - self.min_keycode + 1;
+        let reply = self
+            .conn
+            .get_keyboard_mapping(self.min_keycode, count)
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?;
+        Ok(Keymap {
+            min_keycode: self.min_keycode,
+            per_keycode: usize::from(reply.keysyms_per_keycode),
+            keysyms: reply.keysyms,
+        })
+    }
+
+    fn modifier_mapping(&self) -> io::Result<ModifierMap> {
+        let reply = self
+            .conn
+            .get_modifier_mapping()
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?;
         Ok(ModifierMap {
-            per_modifier,
-            keycodes,
+            per_modifier: usize::from(reply.keycodes_per_modifier()),
+            keycodes: reply.keycodes,
         })
     }
 
     /// Keycodes that produce `key`'s keysym in the server's current keymap.
     /// `CODE:N` names keycode N directly.
-    pub fn key_targets(&mut self, key: &KeyCombo) -> io::Result<Vec<KeyTarget>> {
+    pub fn key_targets(&self, key: &KeyCombo) -> io::Result<Vec<KeyTarget>> {
         if let Some(code) = key.key().strip_prefix("CODE:") {
             let keycode = code
                 .parse::<u32>()
@@ -963,7 +349,7 @@ impl Connection {
         Ok(self.keyboard_mapping()?.targets(&keysyms))
     }
 
-    fn lock_variants(&mut self, modmask: u16) -> io::Result<Vec<u16>> {
+    fn lock_variants(&self, modmask: u16) -> io::Result<Vec<u16>> {
         let keymap = self.keyboard_mapping()?;
         let num_lock = self.modifier_mapping()?.num_lock_mask(&keymap);
         let mut variants = vec![modmask, modmask | LOCK_MASK];
@@ -991,49 +377,50 @@ impl Connection {
             )));
         }
         let variants = self.lock_variants(modmask)?;
-        self.sync()?;
 
-        let mut sequences = Vec::with_capacity(variants.len());
+        let mut grabs = Vec::with_capacity(variants.len());
         for &variant in &variants {
-            let mut request = Request::new(OP_GRAB_KEY, 0);
-            request
-                .u32(self.root)
-                .u16(variant)
-                .u8(keycode)
-                .u8(1)
-                .u8(1)
-                .u8(0)
-                .u16(0);
-            sequences.push((self.send(request)?, variant));
+            let cookie = self
+                .conn
+                .grab_key(
+                    false,
+                    self.root,
+                    xproto::ModMask::from(variant),
+                    keycode,
+                    xproto::GrabMode::ASYNC,
+                    xproto::GrabMode::ASYNC,
+                )
+                .map_err(connection_error)?;
+            grabs.push((variant, cookie));
         }
         let mut core_conflicts = Vec::new();
-        for error in self.sync()? {
-            let Some(&(_, variant)) = sequences
-                .iter()
-                .find(|(sequence, _)| *sequence == error.sequence)
-            else {
-                continue;
-            };
-            if error.code != ERROR_ACCESS {
-                return Err(error.into_io());
+        for (variant, cookie) in grabs {
+            match cookie.check() {
+                Ok(()) => {}
+                Err(ReplyError::X11Error(error)) if error.error_kind == ErrorKind::Access => {
+                    core_conflicts.push(variant);
+                }
+                Err(error) => return Err(reply_error(error)),
             }
-            core_conflicts.push(variant);
         }
+        let mut ungrabs = Vec::with_capacity(variants.len());
         for &variant in &variants {
-            if core_conflicts.contains(&variant) {
-                continue;
+            if !core_conflicts.contains(&variant) {
+                ungrabs.push(
+                    self.conn
+                        .ungrab_key(keycode, self.root, xproto::ModMask::from(variant))
+                        .map_err(connection_error)?,
+                );
             }
-            let mut request = Request::new(OP_UNGRAB_KEY, keycode);
-            request.u32(self.root).u16(variant).u16(0);
-            self.send(request)?;
         }
-        if let Some(error) = self.sync()?.into_iter().next() {
-            return Err(error.into_io());
+        for cookie in ungrabs {
+            cookie.check().map_err(reply_error)?;
         }
 
-        let xi2_conflicts = match self.xinput_opcode()? {
-            Some(opcode) => Some(self.check_xi2_grab(opcode, keycode, &variants)?),
-            None => None,
+        let xi2_conflicts = if self.xinput2_available()? {
+            Some(self.check_xi2_grab(keycode, &variants)?)
+        } else {
+            None
         };
         Ok(GrabCheck {
             keycode,
@@ -1043,79 +430,67 @@ impl Connection {
         })
     }
 
-    /// The XInput extension's major opcode when the server supports XI 2.0.
-    fn xinput_opcode(&mut self) -> io::Result<Option<u8>> {
-        if let Some(opcode) = self.xinput {
-            return Ok(opcode);
+    /// Whether the server supports XInput 2.0.
+    fn xinput2_available(&mut self) -> io::Result<bool> {
+        if let Some(available) = self.xinput {
+            return Ok(available);
         }
-        let name = b"XInputExtension";
-        let mut request = Request::new(OP_QUERY_EXTENSION, 0);
-        request.u16(name.len() as u16).u16(0).padded(name);
-        let reply = self.request_reply(request)?;
-        let opcode = match (reply.get(8), reply.get(9)) {
-            (Some(1), Some(&opcode)) => {
-                let mut request = Request::new(opcode, XI_QUERY_VERSION);
-                request.u16(2).u16(0);
-                match self.request_reply(request) {
-                    Ok(reply) if le16(&reply, 8).is_some_and(|major| major >= 2) => Some(opcode),
-                    Ok(_) => None,
-                    Err(error) if error.kind() == io::ErrorKind::Other => None,
-                    Err(error) => return Err(error),
-                }
-            }
-            _ => None,
-        };
-        self.xinput = Some(opcode);
-        Ok(opcode)
+        let present = self
+            .conn
+            .extension_information(xinput::X11_EXTENSION_NAME)
+            .map_err(connection_error)?
+            .is_some();
+        let available = present
+            && match self
+                .conn
+                .xinput_xi_query_version(2, 0)
+                .map_err(connection_error)?
+                .reply()
+            {
+                Ok(reply) => reply.major_version >= 2,
+                Err(ReplyError::X11Error(_)) => false,
+                Err(error) => return Err(reply_error(error)),
+            };
+        self.xinput = Some(available);
+        Ok(available)
     }
 
-    fn check_xi2_grab(
-        &mut self,
-        opcode: u8,
-        keycode: u8,
-        variants: &[u16],
-    ) -> io::Result<Vec<u16>> {
-        let count = u16::try_from(variants.len())
-            .map_err(|_| invalid_input("too many modifier variants".into()))?;
-        let mut request = Request::new(opcode, XI_PASSIVE_GRAB_DEVICE);
-        request
-            .u32(0) // time: CurrentTime
-            .u32(self.root)
-            .u32(0) // cursor: None
-            .u32(u32::from(keycode))
-            .u16(XI_VIRTUAL_CORE_KEYBOARD)
-            .u16(count)
-            .u16(1) // mask_len
-            .u8(XI_GRABTYPE_KEYCODE)
-            .u8(XI_GRAB_MODE_ASYNC)
-            .u8(XI_GRAB_MODE_ASYNC)
-            .u8(0) // owner_events
-            .u16(0)
-            .u32((1 << 2) | (1 << 3)); // XI_KeyPress | XI_KeyRelease
-        for &variant in variants {
-            request.u32(u32::from(variant));
-        }
-        let reply = self.request_reply(request)?;
-        let failed =
-            usize::from(le16(&reply, 8).ok_or_else(|| malformed("XIPassiveGrabDevice reply"))?);
+    fn check_xi2_grab(&self, keycode: u8, variants: &[u16]) -> io::Result<Vec<u16>> {
+        let modifiers: Vec<u32> = variants.iter().map(|&variant| u32::from(variant)).collect();
+        let mask = [u32::from(
+            xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE,
+        )];
+        let reply = self
+            .conn
+            .xinput_xi_passive_grab_device(
+                x11rb::CURRENT_TIME,
+                self.root,
+                x11rb::NONE,
+                u32::from(keycode),
+                XI_VIRTUAL_CORE_KEYBOARD,
+                xinput::GrabType::KEYCODE,
+                xinput::GrabMode22::ASYNC,
+                xproto::GrabMode::ASYNC,
+                xinput::GrabOwner::NO_OWNER,
+                &mask,
+                &modifiers,
+            )
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?;
         let mut conflicts = Vec::new();
-        let mut held = variants.to_vec();
-        for index in 0..failed {
-            let offset = 32 + index * 8;
-            let modifiers =
-                le32(&reply, offset).ok_or_else(|| malformed("XIPassiveGrabDevice reply"))?;
-            let status = *reply
-                .get(offset + 4)
-                .ok_or_else(|| malformed("XIPassiveGrabDevice reply"))?;
+        let mut held = modifiers;
+        for failed in reply.modifiers {
             let Some(variant) = variants
                 .iter()
                 .copied()
-                .find(|variant| u32::from(*variant) == modifiers)
+                .find(|variant| u32::from(*variant) == failed.modifiers)
             else {
                 continue;
             };
-            held.retain(|held| *held != variant);
-            if status == ERROR_ACCESS {
+            held.retain(|held| *held != failed.modifiers);
+            let status = u8::from(failed.status);
+            if status == XI_STATUS_ACCESS {
                 conflicts.push(variant);
             } else {
                 return Err(io::Error::other(format!(
@@ -1124,37 +499,30 @@ impl Connection {
             }
         }
         if !held.is_empty() {
-            let mut request = Request::new(opcode, XI_PASSIVE_UNGRAB_DEVICE);
-            request
-                .u32(self.root)
-                .u32(u32::from(keycode))
-                .u16(XI_VIRTUAL_CORE_KEYBOARD)
-                .u16(held.len() as u16)
-                .u8(XI_GRABTYPE_KEYCODE)
-                .u8(0)
-                .u16(0);
-            for variant in held {
-                request.u32(u32::from(variant));
-            }
-            self.send(request)?;
-            if let Some(error) = self.sync()?.into_iter().next() {
-                return Err(error.into_io());
-            }
+            self.conn
+                .xinput_xi_passive_ungrab_device(
+                    self.root,
+                    u32::from(keycode),
+                    XI_VIRTUAL_CORE_KEYBOARD,
+                    xinput::GrabType::KEYCODE,
+                    &held,
+                )
+                .map_err(connection_error)?
+                .check()
+                .map_err(reply_error)?;
         }
         Ok(conflicts)
     }
 
     /// Next event before `deadline`, or `None`.
-    fn next_event(&mut self, deadline: Instant) -> io::Result<Option<[u8; 32]>> {
-        if let Some(event) = self.events.pop_front() {
-            return Ok(Some(event));
-        }
+    fn next_event(&self, deadline: Instant) -> io::Result<Option<Event>> {
+        self.conn.flush().map_err(connection_error)?;
         loop {
-            match self.read_packet(deadline, true)? {
-                None => return Ok(None),
-                Some(Packet::Event(event)) => return Ok(Some(event)),
-                Some(Packet::Error(error)) => self.errors.push(error),
-                Some(Packet::Reply { .. }) => {}
+            if let Some(event) = self.conn.poll_for_event().map_err(connection_error)? {
+                return Ok(Some(event));
+            }
+            if !super::wait_readable(self.conn.stream().as_raw_fd(), deadline)? {
+                return Ok(None);
             }
         }
     }
@@ -1166,10 +534,12 @@ impl Connection {
 /// A whykey-owned X11 toplevel that reports the keys it receives.
 pub struct X11Window {
     connection: Connection,
-    window: u32,
+    window: xproto::Window,
     focused: bool,
     keymap: Keymap,
     modifiers: ModifierMap,
+    /// Events read while waiting for the window to be mapped.
+    deferred: VecDeque<Event>,
     pending: VecDeque<ProbeEvent>,
     /// Modifier state after the last reported event.
     modmask: u16,
@@ -1177,65 +547,84 @@ pub struct X11Window {
 
 impl X11Window {
     fn open(title: &str) -> io::Result<Self> {
-        let mut connection = Connection::connect_from_env()?;
+        let connection = Connection::connect_from_env()?;
         let net_wm_name = connection.intern_atom("_NET_WM_NAME")?;
         let utf8_string = connection.intern_atom("UTF8_STRING")?;
         let net_wm_pid = connection.intern_atom("_NET_WM_PID")?;
         let keymap = connection.keyboard_mapping()?;
         let modifiers = connection.modifier_mapping()?;
 
-        let window = connection.generate_id()?;
-        let mut request = Request::new(OP_CREATE_WINDOW, 0);
-        request
-            .u32(window)
-            .u32(connection.root)
-            .u16(0)
-            .u16(0)
-            .u16(480)
-            .u16(160)
-            .u16(0)
-            .u16(1) // InputOutput
-            .u32(0) // visual: CopyFromParent
-            .u32(0x2 | 0x800) // background-pixel | event-mask
-            .u32(connection.white_pixel)
-            .u32(MASK_KEY_PRESS | MASK_KEY_RELEASE | MASK_FOCUS_CHANGE | MASK_STRUCTURE_NOTIFY);
-        connection.send(request)?;
-
+        let conn = &connection.conn;
+        let window = conn.generate_id().map_err(id_error)?;
         let latin1 = title
             .chars()
             .map(|character| u8::try_from(u32::from(character)).unwrap_or(b'?'))
             .collect::<Vec<_>>();
-        let pid = std::process::id().to_le_bytes();
-        let mut hints = Vec::with_capacity(36);
-        hints.extend_from_slice(&1u32.to_le_bytes()); // flags: InputHint
-        hints.extend_from_slice(&1u32.to_le_bytes()); // input: True
-        hints.resize(36, 0);
-        let properties: [(u32, u32, u8, &[u8]); 5] = [
-            (ATOM_WM_NAME, ATOM_STRING, 8, &latin1),
-            (net_wm_name, utf8_string, 8, title.as_bytes()),
-            (ATOM_WM_CLASS, ATOM_STRING, 8, b"whykey-probe\0whykey\0"),
-            (net_wm_pid, ATOM_CARDINAL, 32, &pid),
-            (ATOM_WM_HINTS, ATOM_WM_HINTS, 32, &hints),
+        // WM_HINTS: flags = InputHint, input = True, the other seven fields 0.
+        let hints = [1, 1, 0, 0, 0, 0, 0, 0, 0];
+        let requests = [
+            conn.create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                connection.root,
+                0,
+                0,
+                480,
+                160,
+                0,
+                xproto::WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &xproto::CreateWindowAux::new()
+                    .background_pixel(connection.white_pixel)
+                    .event_mask(
+                        xproto::EventMask::KEY_PRESS
+                            | xproto::EventMask::KEY_RELEASE
+                            | xproto::EventMask::FOCUS_CHANGE
+                            | xproto::EventMask::STRUCTURE_NOTIFY,
+                    ),
+            ),
+            conn.change_property8(
+                xproto::PropMode::REPLACE,
+                window,
+                xproto::AtomEnum::WM_NAME,
+                xproto::AtomEnum::STRING,
+                &latin1,
+            ),
+            conn.change_property8(
+                xproto::PropMode::REPLACE,
+                window,
+                net_wm_name,
+                utf8_string,
+                title.as_bytes(),
+            ),
+            conn.change_property8(
+                xproto::PropMode::REPLACE,
+                window,
+                xproto::AtomEnum::WM_CLASS,
+                xproto::AtomEnum::STRING,
+                b"whykey-probe\0whykey\0",
+            ),
+            conn.change_property32(
+                xproto::PropMode::REPLACE,
+                window,
+                net_wm_pid,
+                xproto::AtomEnum::CARDINAL,
+                &[std::process::id()],
+            ),
+            conn.change_property32(
+                xproto::PropMode::REPLACE,
+                window,
+                xproto::AtomEnum::WM_HINTS,
+                xproto::AtomEnum::WM_HINTS,
+                &hints,
+            ),
+            conn.map_window(window),
         ];
-        for (property, kind, format, data) in properties {
-            let units = data.len() / usize::from(format / 8);
-            let mut request = Request::new(OP_CHANGE_PROPERTY, 0);
+        for request in requests {
             request
-                .u32(window)
-                .u32(property)
-                .u32(kind)
-                .u8(format)
-                .u8(0)
-                .u16(0)
-                .u32(units as u32)
-                .padded(data);
-            connection.send(request)?;
-        }
-        let mut request = Request::new(OP_MAP_WINDOW, 0);
-        request.u32(window);
-        connection.send(request)?;
-        if let Some(error) = connection.sync()?.into_iter().next() {
-            return Err(error.into_io());
+                .map_err(connection_error)?
+                .check()
+                .map_err(reply_error)?;
         }
 
         let mut probe = Self {
@@ -1244,23 +633,21 @@ impl X11Window {
             focused: false,
             keymap,
             modifiers,
+            deferred: VecDeque::new(),
             pending: VecDeque::new(),
             modmask: 0,
         };
         // A window manager maps the window when it handles the MapRequest;
         // focus can only be set once the window is viewable.
-        let deadline = Instant::now() + IO_TIMEOUT;
-        let mut deferred = Vec::new();
+        let deadline = Instant::now() + MAP_TIMEOUT;
         let mut mapped = false;
         while let Some(event) = probe.connection.next_event(deadline)? {
-            deferred.push(event);
-            if event[0] & 0x7f == EVENT_MAP_NOTIFY && le32(&event, 8) == Some(window) {
+            let map_notify = matches!(&event, Event::MapNotify(notify) if notify.window == window);
+            probe.deferred.push_back(event);
+            if map_notify {
                 mapped = true;
                 break;
             }
-        }
-        for event in deferred.into_iter().rev() {
-            probe.connection.events.push_front(event);
         }
         if !mapped {
             return Err(io::Error::new(
@@ -1268,16 +655,27 @@ impl X11Window {
                 "the X11 probe window was not mapped in time",
             ));
         }
-        let mut request = Request::new(OP_SET_INPUT_FOCUS, 1); // revert-to PointerRoot
-        request.u32(window).u32(0);
-        probe.connection.send(request)?;
+        let conn = &probe.connection.conn;
         // A window manager may refuse focus changes; the focus state below
         // and later FocusIn/FocusOut events report what actually happened.
-        probe.connection.sync()?;
-        let reply = probe
-            .connection
-            .request_reply(Request::new(OP_GET_INPUT_FOCUS, 0))?;
-        probe.focused = le32(&reply, 8) == Some(window);
+        match conn
+            .set_input_focus(
+                xproto::InputFocus::POINTER_ROOT,
+                window,
+                x11rb::CURRENT_TIME,
+            )
+            .map_err(connection_error)?
+            .check()
+        {
+            Ok(()) | Err(ReplyError::X11Error(_)) => {}
+            Err(error) => return Err(reply_error(error)),
+        }
+        let focus = conn
+            .get_input_focus()
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?;
+        probe.focused = focus.focus == window;
         Ok(probe)
     }
 
@@ -1287,15 +685,12 @@ impl X11Window {
         Ok(())
     }
 
-    fn handle(&mut self, event: [u8; 32]) -> io::Result<()> {
-        match event[0] & 0x7f {
-            kind @ (EVENT_KEY_PRESS | EVENT_KEY_RELEASE) => {
-                if le32(&event, 12) != Some(self.window) {
-                    return Ok(());
-                }
-                let keycode = event[1];
-                let state = le16(&event, 28).unwrap_or(0) & 0xff;
-                let press = kind == EVENT_KEY_PRESS;
+    fn handle(&mut self, event: Event) -> io::Result<()> {
+        match event {
+            Event::KeyPress(key) | Event::KeyRelease(key) if key.event == self.window => {
+                let press = key.response_type & 0x7f == xproto::KEY_PRESS_EVENT;
+                let keycode = key.detail;
+                let state = u16::from(key.state) & 0xff;
                 self.pending.push_back(ProbeEvent {
                     keycode: u32::from(keycode),
                     keysym: self
@@ -1327,24 +722,31 @@ impl X11Window {
                 };
                 self.modmask = after;
             }
-            EVENT_FOCUS_IN | EVENT_FOCUS_OUT => {
-                // detail: NotifyInferior 2, NotifyPointer 5 (focus did not
-                // really move to/from this window).
-                if le32(&event, 4) != Some(self.window) || matches!(event[1], 2 | 5) {
-                    return Ok(());
-                }
-                let focus_in = event[0] & 0x7f == EVENT_FOCUS_IN;
+            Event::FocusIn(focus) | Event::FocusOut(focus)
+                if focus.event == self.window
+                    && !matches!(
+                        focus.detail,
+                        xproto::NotifyDetail::INFERIOR | xproto::NotifyDetail::POINTER
+                    ) =>
+            {
+                // NotifyInferior/NotifyPointer: focus did not really move
+                // to/from this window.
+                let focus_in = focus.response_type & 0x7f == xproto::FOCUS_IN_EVENT;
                 self.focused = focus_in;
                 if focus_in {
                     // Key events delivered elsewhere while focus was away
                     // (including a window manager's grab, which sends
                     // FocusOut/FocusIn with NotifyGrab/NotifyUngrab) may
                     // have changed the modifiers; report the real state.
-                    let mut request = Request::new(OP_QUERY_POINTER, 0);
-                    request.u32(self.window);
-                    let reply = self.connection.request_reply(request)?;
-                    let state =
-                        le16(&reply, 24).ok_or_else(|| malformed("QueryPointer reply"))? & 0xff;
+                    let state = u16::from(
+                        self.connection
+                            .conn
+                            .query_pointer(self.window)
+                            .map_err(connection_error)?
+                            .reply()
+                            .map_err(reply_error)?
+                            .mask,
+                    ) & 0xff;
                     if state != self.modmask {
                         self.modmask = state;
                         self.pending.push_back(ProbeEvent {
@@ -1356,7 +758,7 @@ impl X11Window {
                     }
                 }
             }
-            EVENT_MAPPING_NOTIFY => self.refresh_keymap()?,
+            Event::MappingNotify(_) => self.refresh_keymap()?,
             _ => {}
         }
         Ok(())
@@ -1370,10 +772,14 @@ impl ProbeWindow for X11Window {
             if let Some(event) = self.pending.pop_front() {
                 return Ok(Some(event));
             }
-            match self.connection.next_event(deadline)? {
-                Some(event) => self.handle(event)?,
-                None => return Ok(None),
-            }
+            let event = match self.deferred.pop_front() {
+                Some(event) => event,
+                None => match self.connection.next_event(deadline)? {
+                    Some(event) => event,
+                    None => return Ok(None),
+                },
+            };
+            self.handle(event)?;
         }
     }
 
@@ -1616,75 +1022,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_display_forms() {
-        let local = parse_display(":5").unwrap();
-        assert_eq!(local.endpoint, Endpoint::Local);
-        assert_eq!((local.display, local.screen), (5, 0));
-        assert_eq!(parse_display("unix:0.1").unwrap().screen, 1);
-        assert_eq!(
-            parse_display("localhost:10.0").unwrap().endpoint,
-            Endpoint::Tcp("localhost".into())
-        );
-        assert_eq!(
-            parse_display("tcp/host:2").unwrap().endpoint,
-            Endpoint::Tcp("host".into())
-        );
-        assert_eq!(
-            parse_display("/tmp/launch-x/org.xquartz:0")
-                .unwrap()
-                .endpoint,
-            Endpoint::Path("/tmp/launch-x/org.xquartz".into())
-        );
-        assert!(parse_display("").is_none());
-        assert!(parse_display(":x").is_none());
-        assert!(parse_display("wayland-1").is_none());
-    }
-
-    fn xauth_entry(family: u16, address: &[u8], number: &[u8], data: &[u8]) -> Vec<u8> {
-        let mut bytes = family.to_be_bytes().to_vec();
-        for field in [address, number, MIT_MAGIC_COOKIE, data] {
-            bytes.extend_from_slice(&(field.len() as u16).to_be_bytes());
-            bytes.extend_from_slice(field);
-        }
-        bytes
-    }
-
-    #[test]
-    fn selects_cookie_for_host_and_display() {
-        let mut file = xauth_entry(FAMILY_LOCAL, b"other", b"5", b"wrong-host");
-        file.extend(xauth_entry(FAMILY_LOCAL, b"lab", b"4", b"wrong-display"));
-        file.extend(xauth_entry(FAMILY_LOCAL, b"lab", b"5", b"right"));
-        file.extend([0, 1]); // truncated trailing entry is ignored
-        let entries = parse_xauthority(&file);
-        assert_eq!(entries.len(), 3);
-        let local = AuthAddress::Local(b"lab".to_vec());
-        let (name, data) = select_cookie(&entries, &local, 5).unwrap();
-        assert_eq!(
-            (name.as_slice(), data.as_slice()),
-            (MIT_MAGIC_COOKIE, &b"right"[..])
-        );
-        assert!(select_cookie(&entries, &local, 7).is_none());
-
-        let wild = parse_xauthority(&xauth_entry(FAMILY_WILD, b"", b"", b"any"));
-        assert!(select_cookie(&wild, &local, 9).is_some());
-        let ip = AuthAddress::Ip("10.0.0.2".parse().unwrap());
-        let inet = parse_xauthority(&xauth_entry(FAMILY_INTERNET, &[10, 0, 0, 2], b"0", b"c"));
-        assert!(select_cookie(&inet, &ip, 0).is_some());
-        assert!(select_cookie(&inet, &local, 0).is_none());
-    }
-
-    #[test]
-    fn encodes_requests_with_padding_and_length() {
-        let mut request = Request::new(OP_INTERN_ATOM, 0);
-        request.u16(5).u16(0).padded(b"ABCDE");
-        let bytes = request.finish().unwrap();
-        assert_eq!(bytes.len(), 16);
-        assert_eq!(le16(&bytes, 2), Some(4));
-        assert_eq!(&bytes[8..13], b"ABCDE");
-        assert_eq!(&bytes[13..], &[0, 0, 0]);
-    }
-
-    #[test]
     fn resolves_keys_to_keysyms() {
         assert_eq!(keysyms_for_key("T"), vec![0x54, 0x74]);
         assert_eq!(keysyms_for_key("RETURN"), vec![0xff0d, 0xff8d]);
@@ -1765,7 +1102,7 @@ mod tests {
     #[test]
     #[ignore = "needs an X server on DISPLAY (lab container)"]
     fn lab_second_client_grab_is_detected() {
-        let mut holder = Connection::connect_from_env().unwrap();
+        let holder = Connection::connect_from_env().unwrap();
         let mut prober = Connection::connect_from_env().unwrap();
         let key: KeyCombo = "super+F7".parse().unwrap();
         let target = prober.key_targets(&key).unwrap()[0];
@@ -1773,17 +1110,19 @@ mod tests {
             prober.check_grab(target.keycode, 64).unwrap().status(),
             GrabStatus::Free
         );
-        let mut request = Request::new(OP_GRAB_KEY, 0);
-        request
-            .u32(holder.root)
-            .u16(64)
-            .u8(target.keycode)
-            .u8(1)
-            .u8(1)
-            .u8(0)
-            .u16(0);
-        holder.send(request).unwrap();
-        assert!(holder.sync().unwrap().is_empty());
+        holder
+            .conn
+            .grab_key(
+                false,
+                holder.root,
+                xproto::ModMask::M4,
+                target.keycode,
+                xproto::GrabMode::ASYNC,
+                xproto::GrabMode::ASYNC,
+            )
+            .unwrap()
+            .check()
+            .unwrap();
         let check = prober.check_grab(target.keycode, 64).unwrap();
         assert_eq!(check.core_conflicts, vec![64]);
         assert_eq!(check.status(), GrabStatus::GrabbedByOtherClient);
@@ -1796,25 +1135,28 @@ mod tests {
         let mut prober = Connection::connect_from_env().unwrap();
         let key: KeyCombo = "ctrl+F8".parse().unwrap();
         let target = prober.key_targets(&key).unwrap()[0];
-        let opcode = holder.xinput_opcode().unwrap().expect("XInput2");
-        let mut request = Request::new(opcode, XI_PASSIVE_GRAB_DEVICE);
-        request
-            .u32(0)
-            .u32(holder.root)
-            .u32(0)
-            .u32(u32::from(target.keycode))
-            .u16(XI_VIRTUAL_CORE_KEYBOARD)
-            .u16(1)
-            .u16(1)
-            .u8(XI_GRABTYPE_KEYCODE)
-            .u8(XI_GRAB_MODE_ASYNC)
-            .u8(XI_GRAB_MODE_ASYNC)
-            .u8(0)
-            .u16(0)
-            .u32((1 << 2) | (1 << 3))
-            .u32(4);
-        let reply = holder.request_reply(request).unwrap();
-        assert_eq!(le16(&reply, 8), Some(0));
+        assert!(holder.xinput2_available().unwrap(), "XInput2");
+        let reply = holder
+            .conn
+            .xinput_xi_passive_grab_device(
+                x11rb::CURRENT_TIME,
+                holder.root,
+                x11rb::NONE,
+                u32::from(target.keycode),
+                XI_VIRTUAL_CORE_KEYBOARD,
+                xinput::GrabType::KEYCODE,
+                xinput::GrabMode22::ASYNC,
+                xproto::GrabMode::ASYNC,
+                xinput::GrabOwner::NO_OWNER,
+                &[u32::from(
+                    xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE,
+                )],
+                &[4],
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert!(reply.modifiers.is_empty());
         let check = prober.check_grab(target.keycode, 4).unwrap();
         assert!(check.core_conflicts.is_empty());
         assert_eq!(check.xi2_conflicts, Some(vec![4]));

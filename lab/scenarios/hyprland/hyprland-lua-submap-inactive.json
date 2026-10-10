@@ -1,0 +1,35 @@
+{
+  "id": "hyprland-lua-submap-inactive",
+  "description": "a Lua submap binding does not fire while the default submap is active",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + R\", hl.dsp.submap(\"lab\"))",
+      "hl.define_submap(\"lab\", function()",
+      "    hl.bind(\"T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab submap\" })",
+      "    hl.bind(\"escape\", hl.dsp.submap(\"reset\"))",
+      "end)"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "t"
+    ],
+    "layer": "Hyprland"
+  }
+}

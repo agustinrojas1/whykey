@@ -1,0 +1,32 @@
+{
+  "id": "hyprland-plain-bind",
+  "description": "bind = SUPER, T fires and Hyprland consumes the key",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, T, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "Hyprland",
+    "detail": "exec touch /tmp/fired"
+  }
+}

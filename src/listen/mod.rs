@@ -1,16 +1,18 @@
 //! Capture one key event from a native compositor, Linux evdev, whykey's own
 //! probe window, or the controlling terminal, and explain it.
 //!
-//! When native compositor capture is available, the default listener observes
-//! through a pass-through hook; `--suppress` opts into a temporary runtime
-//! hook that suppresses bound compositor actions during inspection.
-//! Pass-through-only native backends do not change compositor state. If native
-//! capture is unavailable, pass-through listening falls back to terminal
-//! capture (`--terminal` explicitly forces terminal capture), while
-//! `--suppress` fails instead of silently capturing without suppression. The
-//! optional evdev backend observes physical input events before compositor
-//! processing. `--window` opens a focused probe window and observes what the
-//! compositor/desktop actually delivers to a client.
+//! The default listener walks one chain and uses the first backend that
+//! works: native compositor capture (Hyprland, Sway), then whykey's own
+//! focused probe window when a Wayland or X11 display is usable, then the
+//! controlling terminal. Native capture observes through a pass-through hook;
+//! `--suppress` opts into a temporary runtime hook that suppresses bound
+//! compositor actions during inspection and fails instead of falling back.
+//! Pass-through-only native backends do not change compositor state. The
+//! probe window reports what the compositor/desktop actually delivers to a
+//! client; terminal capture only sees what reaches the terminal. `--window`
+//! and `--terminal` force one backend, and the optional evdev backend
+//! (`--evdev`/`--device`) observes physical input before compositor
+//! processing.
 
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
@@ -485,8 +487,8 @@ pub fn run(options: Options) -> Result<(), ListenError> {
                 options.json,
             );
         }
+        print_capture_plan(&discovery.environment, &options);
         if options.dry_run {
-            print_capture_dry_run(&discovery.environment, &options);
             return Ok(());
         }
     }
@@ -501,11 +503,11 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     }
     let discovery = ListenSession::capture();
     #[cfg(target_os = "linux")]
-    match select_native_backend(&discovery.environment) {
+    let native_error = match select_native_backend(&discovery.environment) {
         Ok(session) => {
             // The guard outlives the native session, which run_native drops.
             let signals = SignalGuard::install()?;
-            run_native(options, session, discovery, &signals)
+            return run_native(options, session, discovery, &signals);
         }
         Err(error) => {
             if options.capture_policy == CapturePolicy::Suppress {
@@ -519,36 +521,47 @@ pub fn run(options: Options) -> Result<(), ListenError> {
                     "--suppress requires native compositor capture, which is unavailable: {error}"
                 )));
             }
-            if options.events_all {
-                return Err(ListenError::Message(format!(
-                    "Native compositor capture unavailable: {error}; --events all requires native compositor or evdev capture"
-                )));
-            }
-            eprintln!("Native compositor capture is unavailable: {error}");
-            eprintln!(
-                "Using terminal capture; shortcuts consumed by the compositor will not appear."
-            );
-            run_terminal(options)
+            error.to_string()
         }
-    }
+    };
     #[cfg(not(target_os = "linux"))]
-    {
+    let native_error = {
         if options.capture_policy == CapturePolicy::Suppress {
             return Err(ListenError::Setup(
                 "--suppress requires native compositor capture, which is only supported on Linux"
                     .into(),
             ));
         }
-        if options.events_all {
-            return Err(ListenError::Message(
-                "--events all requires evdev capture on non-Linux platforms".into(),
-            ));
-        }
-        eprintln!("Native compositor capture is unavailable: only supported on Linux");
-        eprintln!("Using terminal capture; shortcuts consumed by the compositor will not appear.");
-        run_terminal(options)
+        NATIVE_UNSUPPORTED.to_owned()
+    };
+    eprintln!("Native compositor capture is unavailable: {native_error}");
+    let window_error = match crate::probe::available_display() {
+        Some(display) => match open_window_backend() {
+            Ok(backend) => {
+                eprintln!(
+                    "Opening a probe window ({display}); press the shortcut there. Keys the desktop consumes never reach it."
+                );
+                let signals = SignalGuard::install()?;
+                return run_observed_loop(options, backend, discovery, None, &signals);
+            }
+            Err(error) => error,
+        },
+        None => NO_PROBE_DISPLAY.to_owned(),
+    };
+    eprintln!("Probe window capture is unavailable: {window_error}");
+    if options.events_all {
+        return Err(ListenError::Message(format!(
+            "Native compositor capture unavailable: {native_error}; probe window unavailable: {window_error}; --events all requires native compositor, probe window, or evdev capture"
+        )));
     }
+    eprintln!("Using terminal capture; shortcuts consumed by the compositor will not appear.");
+    run_terminal(options)
 }
+
+/// Why the default chain skips the probe window.
+const NO_PROBE_DISPLAY: &str = "no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY is usable";
+#[cfg(not(target_os = "linux"))]
+const NATIVE_UNSUPPORTED: &str = "only supported on Linux";
 
 mod evdev;
 mod output;
@@ -563,14 +576,14 @@ pub(crate) use evdev::{evdev_key_name, evdev_modifier};
 #[cfg(target_os = "linux")]
 use output::select_native_backend;
 use output::{
-    inspect_with_session, print_capture_dry_run, print_capture_explanation, run_native,
-    run_terminal,
+    inspect_with_session, print_capture_explanation, print_capture_plan, run_native,
+    run_observed_loop, run_terminal,
 };
 #[cfg(target_os = "linux")]
 pub use terminal::EvdevBackend;
 use terminal::SignalGuard;
 pub use terminal::TerminalBackend;
-use window::run_window;
+use window::{open_window_backend, run_window};
 
 #[cfg(test)]
 mod tests {
@@ -580,7 +593,9 @@ mod tests {
         EV_KEY, EV_SYN, EvdevDevice, EvdevSession, LinuxInputEvent, SYN_DROPPED, SYN_REPORT,
         set_nonblocking,
     };
-    use super::output::{is_cancel_key, is_terminal_modifier_key, suspend_for_job_control};
+    use super::output::{
+        is_cancel_key, is_terminal_modifier_key, plan_default_chain, suspend_for_job_control,
+    };
     use super::protocol::{
         decode_bytes, kitty_event_type, parse_protocol_response, query_keyboard_protocol,
         utf8_width, xterm_modifiers,
@@ -590,6 +605,113 @@ mod tests {
     use super::terminal::{InputReader, TerminalBackend};
     use super::*;
     use crate::layers::format_bytes;
+
+    fn stage_names(plan: &super::output::CapturePlan) -> Vec<(&str, &str)> {
+        plan.stages
+            .iter()
+            .map(|stage| (stage.name, stage.verdict.split(':').next().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn default_chain_prefers_native_capture() {
+        let plan = plan_default_chain(
+            Ok("Hyprland"),
+            Some("Wayland"),
+            true,
+            CapturePolicy::PassThrough,
+            false,
+        );
+        assert_eq!(
+            stage_names(&plan),
+            [
+                ("native compositor", "selected"),
+                ("probe window", "not needed"),
+                ("terminal", "not needed")
+            ]
+        );
+        assert_eq!(plan.selected.unwrap(), "Hyprland");
+    }
+
+    #[test]
+    fn default_chain_opens_probe_window_before_terminal() {
+        let plan = plan_default_chain(
+            Err("no Hyprland or Sway session detected"),
+            Some("X11"),
+            true,
+            CapturePolicy::PassThrough,
+            true,
+        );
+        assert_eq!(
+            stage_names(&plan),
+            [
+                ("native compositor", "unavailable"),
+                ("probe window", "selected"),
+                ("terminal", "used only if the probe window cannot be opened")
+            ]
+        );
+        assert!(
+            plan.stages[0]
+                .verdict
+                .contains("no Hyprland or Sway session")
+        );
+        assert!(plan.stages[1].verdict.contains("press the shortcut there"));
+        assert_eq!(plan.selected.unwrap(), "Probe window via X11");
+    }
+
+    #[test]
+    fn default_chain_falls_back_to_terminal_without_a_display() {
+        let plan = plan_default_chain(
+            Err("tried Sway: unreachable"),
+            None,
+            true,
+            CapturePolicy::PassThrough,
+            false,
+        );
+        assert_eq!(
+            stage_names(&plan),
+            [
+                ("native compositor", "unavailable"),
+                ("probe window", "unavailable"),
+                ("terminal", "selected")
+            ]
+        );
+        assert_eq!(plan.selected.unwrap(), "Terminal");
+
+        let no_tty = plan_default_chain(Err("x"), None, false, CapturePolicy::PassThrough, false);
+        assert!(no_tty.selected.is_err());
+        let events_all = plan_default_chain(Err("x"), None, true, CapturePolicy::PassThrough, true);
+        assert!(
+            events_all
+                .selected
+                .unwrap_err()
+                .contains("--events all requires")
+        );
+    }
+
+    #[test]
+    fn suppress_never_falls_back_in_the_default_chain() {
+        let plan = plan_default_chain(
+            Err("tried Hyprland: refused"),
+            Some("Wayland"),
+            true,
+            CapturePolicy::Suppress,
+            false,
+        );
+        assert_eq!(
+            stage_names(&plan),
+            [
+                ("native compositor", "unavailable"),
+                ("probe window", "not tried"),
+                ("terminal", "not tried")
+            ]
+        );
+        assert!(
+            plan.selected
+                .unwrap_err()
+                .contains("--suppress requires native compositor capture")
+        );
+    }
 
     #[test]
     fn decodes_ctrl_z() {

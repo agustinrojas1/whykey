@@ -1,0 +1,35 @@
+{
+  "id": "hyprland-source-include",
+  "description": "a bind from a file pulled in with source = fires",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "source = ~/.config/hypr/binds.conf"
+    ],
+    "/root/.config/hypr/binds.conf": [
+      "bind = SUPER, T, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "Hyprland",
+    "detail": "exec touch /tmp/fired"
+  }
+}

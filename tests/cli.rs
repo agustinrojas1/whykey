@@ -751,6 +751,64 @@ fn doctor_schema_v2_includes_safe_next_steps() {
 }
 
 #[test]
+fn doctor_lists_observation_taps_and_layer_sources() {
+    // DISPLAY only names a server; doctor never connects to it for the taps.
+    let output = binary()
+        .args(["--json", "--schema-version", "2", "doctor"])
+        .env("DISPLAY", ":97")
+        .env("SHELL", "/bin/bash")
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let taps = value["observation_taps"].as_array().unwrap();
+    let tap = |id: &str| taps.iter().find(|tap| tap["id"] == id).unwrap().clone();
+    assert_eq!(
+        taps.iter().map(|tap| tap["id"].clone()).collect::<Vec<_>>(),
+        [
+            "native-compositor",
+            "probe-window",
+            "x11-grab",
+            "terminal",
+            "evdev"
+        ]
+    );
+    assert_eq!(tap("probe-window")["available"], true);
+    assert!(
+        tap("probe-window")["detail"]
+            .as_str()
+            .unwrap()
+            .contains("X11 (:97)")
+    );
+    assert_eq!(tap("x11-grab")["available"], true);
+    assert_eq!(tap("native-compositor")["available"], false);
+    let sources = value["layer_sources"].as_array().unwrap();
+    let shell = sources
+        .iter()
+        .find(|source| source["layer"] == "shell")
+        .unwrap();
+    assert_eq!(shell["source"], "config_file");
+    assert!(
+        shell["detail"]
+            .as_str()
+            .unwrap()
+            .contains("whykey shell-init bash")
+    );
+    assert!(
+        sources
+            .iter()
+            .any(|source| source["layer"] == "X11 key grabs" && source["source"] == "live_query")
+    );
+
+    let human = binary().arg("doctor").output().unwrap();
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(stdout.contains("Observation taps (what whykey can watch now)"));
+    assert!(
+        stdout.contains("FAIL probe window: no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY")
+    );
+    assert!(stdout.contains("Layer sources (live query, config file, or none)"));
+}
+
+#[test]
 fn doctor_reports_a_keyd_configuration_as_remapper_evidence() {
     let base = temp_dir("doctor-keyd");
     fs::create_dir_all(&base).unwrap();
@@ -3059,7 +3117,39 @@ fn listen_dry_run_selects_without_arming() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Terminal (dry-run; not armed)"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("capture chain: skipped; --terminal forces one backend"));
+    assert!(stdout.contains("Terminal (dry-run; not armed)"));
+}
+
+#[test]
+fn listen_dry_run_shows_the_default_chain_and_why() {
+    let output = binary().args(["listen", "--dry-run"]).output().unwrap();
+    assert!(output.status.success(), "output: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("capture chain (first usable backend wins):"));
+    assert!(
+        stdout.contains("1. native compositor: unavailable: no Hyprland or Sway session detected")
+    );
+    assert!(stdout.contains("2. probe window: unavailable: no Wayland socket"));
+    assert!(stdout.contains("3. terminal:"));
+}
+
+#[test]
+fn listen_dry_run_selects_the_probe_window_before_the_terminal() {
+    // DISPLAY only names a server; the dry run never connects to it.
+    let output = binary()
+        .args(["listen", "--dry-run"])
+        .env("DISPLAY", ":97")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "output: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("2. probe window: selected: opens a probe window (X11)"));
+    assert!(stdout.contains("3. terminal: used only if the probe window cannot be opened"));
+    assert!(stdout.contains(
+        "capture backend: Probe window via X11 (dry-run; not armed; policy=pass-through)"
+    ));
 }
 
 #[test]
@@ -3083,8 +3173,10 @@ fn listen_events_all_fails_when_hyprland_unavailable() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--events all requires native compositor or evdev capture"));
-    assert!(stderr.contains("no registered native compositor backend"));
+    assert!(
+        stderr.contains("--events all requires native compositor, probe window, or evdev capture")
+    );
+    assert!(stderr.contains("no Hyprland or Sway session detected"));
 }
 
 #[test]

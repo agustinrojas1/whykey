@@ -1,0 +1,72 @@
+{
+  "id": "i3-window-unbound",
+  "description": "listen --window under Xvfb + i3: an unbound Super combo reaches whykey's X11 probe window",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/i3/config": [
+      "bindsym Mod4+t exec sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": [
+          "i3",
+          "-c",
+          "/root/.config/i3/config"
+        ],
+        "ready": "wm",
+        "ready_grab": [
+          64,
+          28
+        ]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [
+    {
+      "xdotool": [
+        "key",
+        "Super_L+x"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "xdotool": [
+        "key",
+        "Super_L+x"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--window",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": "window",
+    "observation": true,
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "i3"
+    },
+    "combo": {
+      "key": "X",
+      "modifiers": 64
+    }
+  }
+}

@@ -8,10 +8,39 @@
 //! on the core client protocol, not on compositor-specific IPC.
 
 use std::io;
-use std::time::Duration;
+use std::os::fd::RawFd;
+use std::time::{Duration, Instant};
 
 pub mod wayland;
 pub mod x11;
+
+/// Waits until `fd` is readable or `deadline` passes (`Ok(false)`).
+fn wait_readable(fd: RawFd, deadline: Instant) -> io::Result<bool> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        let millis = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+        let mut poll = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: `poll` points to one valid pollfd for the duration of the call.
+        let ready = unsafe { libc::poll(&mut poll, 1, millis) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if ready > 0 {
+            return Ok(true);
+        }
+    }
+}
 
 /// What kind of input event a probe window received.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

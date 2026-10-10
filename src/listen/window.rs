@@ -23,11 +23,15 @@ pub(super) fn run_window(options: Options) -> Result<(), ListenError> {
     // Install first: the guard must outlive the capture session it protects.
     let signals = SignalGuard::install()?;
     let snapshot = ListenSession::capture();
-    let mut backend = WindowBackend::new();
-    backend
-        .arm(CapturePolicy::PassThrough)
-        .map_err(ListenError::Setup)?;
+    let backend = open_window_backend().map_err(ListenError::Setup)?;
     run_observed_loop(options, backend, snapshot, None, &signals)
+}
+
+/// Open and arm the probe window, or explain why it cannot be opened.
+pub(super) fn open_window_backend() -> Result<WindowBackend, String> {
+    let mut backend = WindowBackend::new();
+    backend.arm(CapturePolicy::PassThrough)?;
+    Ok(backend)
 }
 
 /// What one probe event means for the chord being observed.

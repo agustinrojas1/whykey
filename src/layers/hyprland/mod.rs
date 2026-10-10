@@ -1266,6 +1266,27 @@ xkb_symbols "pc" {
     }
 
     #[test]
+    fn parses_hl_bind_description_option() {
+        // The form the lab's Lua scenarios and Omarchy's capture menu use.
+        let hint = parse_lua_bind_hint(
+            r#"hl.bind("SUPER + T", hl.dsp.exec_cmd("touch /tmp/fired"), { description = "Lab fire", repeat = true })"#,
+            Path::new("/tmp/hyprland.lua"),
+            1,
+        )
+        .expect("Lua binding hint");
+        assert_eq!(hint.description.as_deref(), Some("Lab fire"));
+        assert_eq!(hint.action, None);
+        assert_eq!(hint.ignore_mods, Some(false));
+        let dynamic = parse_lua_bind_hint(
+            r#"hl.bind("SUPER + T", hl.dsp.exec_cmd("x"), { description = name })"#,
+            Path::new("/tmp/hyprland.lua"),
+            1,
+        )
+        .expect("Lua binding hint");
+        assert_eq!(dynamic.description, None);
+    }
+
+    #[test]
     fn leaves_dynamic_lua_options_unknown() {
         let hint = parse_lua_bind_hint(
             r#"o.bind("SUPER + LEFT", "Move", "movefocus l", options)"#,

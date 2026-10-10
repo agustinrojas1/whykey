@@ -10,7 +10,7 @@ truth, prints a table, writes lab/results.json and exits 1 on any mismatch.
 
     docker build -t whykey-lab lab/
     cargo build --release --locked
-    python3 lab/run.py [--only GLOB]... [-j N] [--keep]
+    python3 lab/run.py [--only GLOB]... [-j N] [--vms N] [--keep]
 
 Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
 (the file stem must equal "id").
@@ -21,6 +21,12 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   (a running settings store was queried; no input involved)
     environment   "sway"    headless Sway; config at sway.config
                             (default /root/.config/sway/config)
+                  "hyprland" Hyprland 0.56.2 in a KVM guest booted inside the
+                            container (lab/driver.py), on a virtio-gpu KMS
+                            device; config from hyprland.config or Hyprland's
+                            own lookup (~/.config/hypr/hyprland.lua, then
+                            hyprland.conf); whykey gets the environment
+                            Hyprland exports to its clients
                   "x11"     Xvfb :5 plus x11.daemons started in order (argv
                             list or {"argv": [...], "env": {...}, "ready":
                             "wm", "ready_grab": [modmask, keycode]}); "wm"
@@ -41,6 +47,8 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   real US keymap and evdev keycodes (lab/vkbd.py)
                   {"wtype": [args]}  {"xdotool": [args]}  {"type": "bytes"}
                   {"sh": "cmd"}  {"sleep": seconds}  {"wait_quiet": seconds}
+                  {"start_whykey": true}  start a "run": "background" whykey
+                  here instead of before the first action
                   ("type" accepts \\xNN, \\e, \\r escapes; optional "settle")
     ground_truth  {"fired": CHECK, "delivered": "probe" | CHECK}
                   CHECK = {"file": path[, "equals": text]}
@@ -49,11 +57,25 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   "fired": did the layer under test act on the key.
                   "delivered": did the key continue past it (optional).
     whykey        {"args": [...], "layer": name or [names], "env": {...},
-                   "run": "direct" | "pty", "command": "whykey",
-                   "accept": [...], "summary": "text"}
+                   "run": "direct" | "pty" | "background", "command": "whykey",
+                   "accept": [...], "summary": "text", "detail": "text",
+                   "observation": bool, "combo": {...}, "stderr": "text"}
                   "pty" types the command into the scenario's shell.
-                  "summary": substring the layer's summary must contain, so
-                  a right verdict for the wrong binding still fails.
+                  "background" starts whykey (`listen`) before the actions or
+                  at a start_whykey action, waits for "ready" ("window": its
+                  probe window has focus; {"stderr": regex}), and collects its
+                  output after the ground truth; "tty": true gives it a
+                  controlling terminal (`script`).
+                  "summary": substring the layer's summary must contain, and
+                  "detail" one of its evidence lines must contain, so a right
+                  verdict for the wrong binding still fails.
+                  "observation": judge `whykey listen`'s observation instead
+                  of a layer: "delivered" (the key reached its capture point)
+                  or "not-delivered" (only modifiers arrived) against the
+                  ground truth "delivered"; no "layer" needed.
+                  "combo": the observation's combo must equal this
+                  ({"key": "X", "modifiers": 64}); "stderr": substring of
+                  whykey's stderr (e.g. why a capture backend was skipped).
                   "accept": honest-uncertainty verdicts tolerated when the
                   scenario documents that whykey cannot know more (e.g. no
                   shell-init): "handled-uncertain" only when the truth fired,
@@ -86,10 +108,11 @@ LAB = Path(__file__).resolve().parent
 ROOT = LAB.parent
 SCENARIOS = LAB / "scenarios"
 RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
-ENVIRONMENTS = {"sway", "x11", "pty", "session"}
+ENVIRONMENTS = {"sway", "hyprland", "x11", "pty", "session"}
 TIERS = {"observed", "runtime-setting"}
 REQUIRED = {"id", "description", "tier", "environment", "ground_truth", "whykey"}
-SCENARIO_TIMEOUT = 120
+# Hyprland scenarios boot a VM inside the container (lab/driver.py).
+SCENARIO_TIMEOUT = 180
 # Verdicts a scenario may tolerate via whykey.accept, keyed by "fired".
 HONEST_UNCERTAINTY = {True: {"handled-uncertain"}, False: {"uncertain-continues"}}
 
@@ -164,9 +187,12 @@ def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | N
     return "absent", None
 
 
-def docker_command(args, path: Path, name: str, keep: bool) -> list[str]:
+def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> list[str]:
     command = ["docker", "run", "--name", name, "--network", "none", "--init"]
     command += ["-d"] if keep else ["--rm"]
+    if scenario["environment"] == "hyprland" and os.path.exists("/dev/kvm"):
+        # The Hyprland VM uses KVM when the host offers it, else (slow) TCG.
+        command += ["--device", "/dev/kvm"]
     command += [
         "-v", f"{LAB}:/lab:ro",
         "-v", f"{args.binary}:/w/whykey:ro",
@@ -179,7 +205,7 @@ def docker_command(args, path: Path, name: str, keep: bool) -> list[str]:
 
 def run_container(args, path: Path, scenario: dict) -> dict:
     name = f"whykey-lab-{os.getpid()}-{scenario['id']}"
-    command = docker_command(args, path, name, args.keep)
+    command = docker_command(args, path, scenario, name, args.keep)
     started = time.monotonic()
     output = ""
     try:
@@ -212,15 +238,29 @@ def run_container(args, path: Path, scenario: dict) -> dict:
     return {"error": "driver produced no result", "output": output[-4000:]}
 
 
+def observation_verdict(report: dict | None) -> tuple[str, dict | None]:
+    """What `whykey listen` observed: the key reached its capture point
+    ("delivered"), or only modifiers did ("not-delivered")."""
+    if report is None:
+        return "error", None
+    observation = report.get("observation")
+    if not isinstance(observation, dict):
+        return "absent", None
+    if observation.get("disposition") == "not_delivered":
+        return "not-delivered", observation
+    return "delivered", observation
+
+
 def evaluate(path: Path, scenario: dict, result: dict) -> dict:
-    layers = scenario["whykey"]["layer"]
+    observing = scenario["whykey"].get("observation", False)
+    layers = scenario["whykey"].get("layer", [])
     layers = [layers] if isinstance(layers, str) else layers
     record = {
         "scenario": scenario["id"],
         "file": path.relative_to(ROOT).as_posix(),
         "environment": scenario["environment"],
         "tier": scenario["tier"],
-        "layer": layers[0],
+        "layer": layers[0] if layers else "observation",
         "whykey_args": scenario["whykey"]["args"],
     }
     if "error" in result:
@@ -230,17 +270,42 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         record["logs"] = result.get("logs") or result.get("output")
         return record
     truth = result["ground_truth"]
-    label, accepted = expected_verdicts(truth)
     whykey = result["whykey"]
-    verdict, entry = layer_verdict(whykey["report"], layers)
-    tolerated = set(scenario["whykey"].get("accept", [])) & HONEST_UNCERTAINTY[truth["fired"]]
     summary = scenario["whykey"].get("summary")
-    summary_ok = summary is None or (entry is not None and summary in (entry.get("summary") or ""))
-    passed = (verdict in accepted or verdict in tolerated) and summary_ok
+    detail = scenario["whykey"].get("detail")
+    combo = scenario["whykey"].get("combo")
+    observed = (whykey["report"] or {}).get("observation")
+    combo_ok = combo is None or (isinstance(observed, dict) and observed.get("combo") == combo)
+    if observing:
+        label = "delivered" if truth["delivered"] else "not-delivered"
+        accepted = {label}
+        tolerated: set[str] = set()
+        verdict, entry = observation_verdict(whykey["report"])
+        summary_ok = True
+    else:
+        label, accepted = expected_verdicts(truth)
+        verdict, entry = layer_verdict(whykey["report"], layers)
+        tolerated = set(scenario["whykey"].get("accept", [])) & HONEST_UNCERTAINTY[truth["fired"]]
+        texts = [] if entry is None else [entry.get("summary") or ""] + [
+            item.get("text", "") for item in entry.get("evidence", [])
+        ]
+        summary_ok = (summary is None or (entry is not None and summary in texts[0])) and (
+            detail is None or any(detail in text for text in texts)
+        )
+    stderr = scenario["whykey"].get("stderr")
+    stderr_ok = stderr is None or stderr in whykey["stderr"]
+    if combo is not None:
+        summary = f"{summary}; " if summary else ""
+        summary += f"observed combo {json.dumps(combo)}"
+    if stderr is not None:
+        summary = f"{summary}; " if summary else ""
+        summary += f"stderr containing {stderr!r}"
+    passed = (verdict in accepted or verdict in tolerated) and summary_ok and combo_ok and stderr_ok
     record.update(
         ground_truth={"label": label, **truth},
         expected=sorted(accepted | tolerated),
         expected_summary=summary,
+        expected_detail=detail,
         whykey_verdict=verdict,
         whykey_layer=entry,
     )
@@ -286,6 +351,9 @@ def main() -> int:
     parser.add_argument("--only", action="append", default=[], metavar="GLOB",
                         help="scenario id or scenarios/-relative path glob (repeatable)")
     parser.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1))
+    parser.add_argument("--vms", type=int, default=max(1, (os.cpu_count() or 1) // 4),
+                        help="Hyprland VMs (2 vCPUs each) run at once, within --jobs "
+                             "(default: a quarter of the CPUs; starved guests time out)")
     parser.add_argument("--keep", action="store_true",
                         help="leave each container running after the scenario for docker exec")
     parser.add_argument("--image", default="whykey-lab")
@@ -300,9 +368,14 @@ def main() -> int:
         raise SystemExit("no scenario matched")
 
     records: list[dict] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+    jobs = max(1, args.jobs)
+    vms = max(1, min(args.vms, jobs))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=vms) as vm_pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs - vms)) as pool:
         futures = {
-            pool.submit(run_container, args, path, scenario): (path, scenario)
+            (vm_pool if scenario["environment"] == "hyprland" else pool).submit(
+                run_container, args, path, scenario
+            ): (path, scenario)
             for path, scenario in scenarios
         }
         for future in concurrent.futures.as_completed(futures):
@@ -328,7 +401,9 @@ def main() -> int:
               + (f"; {truth['delivered_evidence']}" if truth["delivered_evidence"] else "") + ")")
         print(f"  whykey {' '.join(record['whykey_args'])}: {record['whykey_verdict']}, expected {'|'.join(record['expected'])}")
         if record.get("expected_summary"):
-            print(f"  layer summary must contain: {record['expected_summary']!r}")
+            print(f"  whykey must also report: {record['expected_summary']!r}")
+        if record.get("expected_detail"):
+            print(f"  layer evidence must contain: {record['expected_detail']!r}")
         for line in record.get("whykey_layers", []):
             print(f"    {line}")
         if record.get("whykey_stderr"):
