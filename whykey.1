@@ -1,4 +1,4 @@
-.TH WHYKEY 1 "October 2026" "whykey 1.4.0" "User Commands"
+.TH WHYKEY 1 "October 2026" "whykey 1.5.0" "User Commands"
 .SH NAME
 whykey \- explain which layer handles a keyboard shortcut
 .SH SYNOPSIS
@@ -133,7 +133,8 @@ budget, and no command starts once it is spent. Set
 .B WHYKEY_DIAGNOSTIC_TIMEOUT_MS
 to override it.
 .PP
-keyd, kanata, and xremap configurations are evaluated for the queried key. A
+keyd, kanata, kmonad, input-remapper, and xremap configurations are
+evaluated for the queried key. A
 remap re-runs the later layers on the target key, and the report reads, for
 example, "keyd remaps Caps Lock to Esc." A layer switch, macro, or command
 consumes the key. Tap-hold, one-shot, application-specific, and other timing-
@@ -144,8 +145,8 @@ conditional unless
 .B WHYKEY_XKB_LAYOUT
 or
 .B XKB_DEFAULT_LAYOUT
-is us with no variant. kmonad and input-remapper are detected but not
-evaluated.
+is us with no variant. kmonad and input-remapper rules stay conditional unless the captured key came from the configured
+device.
 .PP
 Literal Hyprland Lua helper calls provide source evidence and can resolve a
 literal modifier-insensitivity option; Lua is never executed. A
@@ -189,10 +190,14 @@ also iso_level3_shift), plus mod2, mod3, and mod5. The key is a single
 character, a named key such as return, left, comma, or f1, an XF86 media
 key, or
 .BR code:N .
+.B meta-key
+is not a modifier; a combination containing it exits with status 2.
 An unknown key name exits with status 2 and suggests the closest valid name.
 An altgr combination predicts the text of the active layout's third level
 (fourth with shift), sent as UTF-8; a dead key is reported as starting
-dead-key composition with no bytes sent. When the keymap or level is
+dead-key composition with no bytes sent (JSON v2 path entries carry its
+.B dead_key
+keysym). When the keymap or level is
 unknown, the report says why the encoding is unknown.
 .TP
 .B inspect combination-or-sequence

@@ -1,5 +1,5 @@
 pkgname=whykey
-pkgver=1.4.0
+pkgver=1.5.0
 pkgrel=1
 pkgdesc='Explain where a Linux key combination is handled'
 # Built from the vendored source archive, so any architecture with a Rust
