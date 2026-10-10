@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, UncertaintyReason,
+    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, UncertaintyReason,
 };
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
@@ -45,12 +45,36 @@ pub fn inspect_with_byte_status(
     result
 }
 
-/// Key-table resolution over an injectable `list-keys` source. Mirrors
-/// tmux's client key handling: the prefix switches to the prefix table, a
-/// binding runs and returns the client to root (or the table named by
-/// `switch-client -T`), and an unbound key in a non-root table is retried in
-/// root and otherwise discarded.
+/// Key-table resolution over an injectable `list-keys` source. The tables
+/// come from the running tmux server, so every answer is a live query.
 fn inspect_with_tables(
+    active_table: Option<&str>,
+    raw_prefixes: &[String],
+    preceding: &[KeyCombo],
+    key: &KeyCombo,
+    bytes_verified: bool,
+    tables: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> LayerResult {
+    let result = resolve_with_tables(
+        active_table,
+        raw_prefixes,
+        preceding,
+        key,
+        bytes_verified,
+        tables,
+    );
+    if result.outcome == Outcome::Unavailable {
+        result
+    } else {
+        result.with_tier(EvidenceTier::LiveQuery)
+    }
+}
+
+/// Mirrors tmux's client key handling: the prefix switches to the prefix
+/// table, a binding runs and returns the client to root (or the table named
+/// by `switch-client -T`), and an unbound key in a non-root table is retried
+/// in root and otherwise discarded.
+fn resolve_with_tables(
     active_table: Option<&str>,
     raw_prefixes: &[String],
     preceding: &[KeyCombo],
@@ -504,6 +528,30 @@ mod tests {
         let result = run(&[], "ctrl+b");
         assert_eq!(result.outcome, Outcome::Consumed);
         assert!(result.summary.starts_with("tmux prefix key"));
+    }
+
+    #[test]
+    fn list_keys_answers_are_live_even_with_the_table_assumed() {
+        assert_eq!(run(&[], "ctrl+b").tier, Some(EvidenceTier::LiveQuery));
+        let assumed = inspect_with_tables(
+            None,
+            &[],
+            &[],
+            &"ctrl+left".parse().unwrap(),
+            true,
+            &mut fake_tables,
+        );
+        assert_eq!(assumed.tier, Some(EvidenceTier::LiveQuery));
+        let unreachable = inspect_with_tables(
+            Some("root"),
+            &[],
+            &[],
+            &"ctrl+left".parse().unwrap(),
+            true,
+            &mut |_| Err("no server running".into()),
+        );
+        assert_eq!(unreachable.outcome, Outcome::Unavailable);
+        assert_eq!(unreachable.tier, None);
     }
 
     #[test]

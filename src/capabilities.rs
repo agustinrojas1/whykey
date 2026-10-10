@@ -38,7 +38,7 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
         .iter()
         .any(|detection| detection.active_engine.is_some());
     let terminal = environment.terminal;
-    let shell = env::var("SHELL").ok();
+    let shell = (!environment.shell.is_empty()).then(|| environment.shell.clone());
     let shell_name = environment.shell_name.as_str();
     let shell_snapshot = match shell_name {
         "bash" => env::var_os("WHYKEY_READLINE_BINDINGS").is_some(),

@@ -1,28 +1,35 @@
-//! Observed X11 passive key grabs.
+//! Observed X11 passive key grabs on the root window.
 //!
-//! Every X11 window manager and hotkey daemon claims a global shortcut with a
+//! X11 window managers and hotkey daemons claim a global shortcut with a
 //! passive grab on the root window, and the X server refuses a second
-//! client's grab on the same key and modifiers with `BadAccess`. Asking the
-//! server to grab the combination therefore observes whether some client
-//! owns it, independent of which program that is or where its configuration
-//! lives. In an X11 session that observation decides the compositor-tier
-//! outcome; the selected desktop adapter keeps its identity (binding,
-//! command, mode) when it names the grab's owner, and a configured binding
-//! without a grab is reported as inactive.
+//! client's grab on the same window, key and modifiers with `BadAccess`.
+//! Asking the server to grab the combination on the root window therefore
+//! observes whether some client owns it there, independent of which program
+//! that is or where its configuration lives. A grab an application holds on
+//! its own window is invisible to this probe. In an X11 session that
+//! observation decides the compositor-tier outcome; the selected desktop
+//! adapter keeps its identity (binding, command, mode) when it names the
+//! grab's owner, and a configured binding without a root-window grab is
+//! reported as inactive.
 //!
 //! Under XWayland the grab covers X11 clients only: the Wayland compositor's
 //! own bindings are not X grabs, and an X client's grab fires only while an
 //! X11 window has keyboard focus.
 
 use std::env;
+use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
+use std::thread;
 
+use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
 use crate::probe::x11::{Connection, GrabCheck, GrabStatus};
 
 const LAYER: &str = "X11 key grab";
-const GRABBED: &str = "an X11 client holds a grab on this shortcut (WM or hotkey daemon)";
-const FREE: &str = "no X11 client grabs this shortcut";
+const GRABBED: &str =
+    "an X11 client holds a grab on this shortcut on the root window (WM or hotkey daemon)";
+const FREE: &str = "no grab on the root window (WMs and hotkey daemons grab there)";
 
 /// Which display server the grab probe would talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,31 +48,55 @@ fn session() -> Session {
     if cfg!(test) {
         return Session::None;
     }
-    let value = |name: &str| env::var(name).ok().filter(|value| !value.is_empty());
+    let display = env_value("DISPLAY").is_some();
+    let remote = super::compositor::remote_session();
     session_from(
-        value("DISPLAY").is_some(),
-        value("WAYLAND_DISPLAY").is_some(),
-        value("XDG_SESSION_TYPE").as_deref(),
-        super::compositor::remote_session(),
+        display,
+        env_value("XDG_SESSION_TYPE").as_deref(),
+        remote,
+        wayland_live,
     )
 }
 
-/// A Wayland session (by socket or by logind session type) makes `DISPLAY`
-/// XWayland, whose grabs cover X11 clients only.
+/// Whether the X server behind `DISPLAY` is XWayland inside a Wayland
+/// session, by the same rule the grab probe uses.
+pub fn xwayland_session() -> bool {
+    session_from(
+        true,
+        env_value("XDG_SESSION_TYPE").as_deref(),
+        false,
+        wayland_live,
+    ) == Session::XWayland
+}
+
+fn env_value(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+/// Whether the Wayland socket accepts connections. Only consulted when the
+/// session type does not decide, so a usual session never connects to it.
+fn wayland_live() -> bool {
+    crate::probe::wayland::socket_path().is_ok_and(|path| UnixStream::connect(path).is_ok())
+}
+
+/// The logind session type decides when it names X11 or Wayland: an
+/// inherited `WAYLAND_DISPLAY` (sudo -E, a previous login) must not turn a
+/// native X11 session into XWayland. Otherwise a Wayland socket that accepts
+/// connections makes `DISPLAY` XWayland, whose grabs cover X11 clients only.
 fn session_from(
     display: bool,
-    wayland_display: bool,
     session_type: Option<&str>,
     remote: bool,
+    wayland_live: impl FnOnce() -> bool,
 ) -> Session {
     if !display || remote {
-        Session::None
-    } else if wayland_display
-        || session_type.is_some_and(|kind| kind.eq_ignore_ascii_case("wayland"))
-    {
-        Session::XWayland
-    } else {
-        Session::X11
+        return Session::None;
+    }
+    match session_type {
+        Some(kind) if kind.eq_ignore_ascii_case("x11") => Session::X11,
+        Some(kind) if kind.eq_ignore_ascii_case("wayland") => Session::XWayland,
+        _ if wayland_live() => Session::XWayland,
+        _ => Session::X11,
     }
 }
 
@@ -79,7 +110,37 @@ enum Observation {
     Failed(String),
 }
 
+/// Asks the X server under the diagnostic budget. The blocking X protocol
+/// round trips run on a helper thread so a server that accepts the
+/// connection but stalls cannot overrun the deadline; a late answer is
+/// discarded and its connection (with any probe grab) closes when it ends.
 fn observe(key: &KeyCombo) -> Observation {
+    let key = key.clone();
+    bounded(move || probe(&key))
+}
+
+fn bounded(probe: impl FnOnce() -> Observation + Send + 'static) -> Observation {
+    let Some(budget) = command::query_budget() else {
+        return Observation::Failed("the diagnostic time budget was spent".into());
+    };
+    let (sender, receiver) = mpsc::channel();
+    let spawned = thread::Builder::new()
+        .name("whykey-x11-grab".into())
+        .spawn(move || {
+            let _ = sender.send(probe());
+        });
+    if let Err(error) = spawned {
+        return Observation::Failed(format!("could not start the probe: {error}"));
+    }
+    receiver.recv_timeout(budget).unwrap_or_else(|_| {
+        Observation::Failed(format!(
+            "the X server did not answer within {} ms",
+            budget.as_millis()
+        ))
+    })
+}
+
+fn probe(key: &KeyCombo) -> Observation {
     let run = || -> std::io::Result<Observation> {
         let mut connection = Connection::connect_from_env()?;
         let targets = connection.key_targets(key)?;
@@ -142,13 +203,13 @@ fn evidence(checks: &[GrabCheck]) -> Vec<String> {
         );
         if !check.core_conflicts.is_empty() {
             details.push(format!(
-                "observed: the X server refused a core GrabKey on {target} (BadAccess) for {}",
+                "observed: the X server refused a core GrabKey on the root window for {target} (BadAccess) for {}",
                 masks(&check.core_conflicts)
             ));
         }
         match &check.xi2_conflicts {
             Some(conflicts) if !conflicts.is_empty() => details.push(format!(
-                "observed: the X server refused an XInput2 passive grab on {target} (BadAccess) for {}",
+                "observed: the X server refused an XInput2 passive grab on the root window for {target} (BadAccess) for {}",
                 masks(conflicts)
             )),
             Some(_) => {}
@@ -159,7 +220,7 @@ fn evidence(checks: &[GrabCheck]) -> Vec<String> {
         }
         if check.status() == GrabStatus::Free {
             details.push(format!(
-                "observed: grabs on {target} (also with Lock/NumLock) succeeded and were released"
+                "observed: root-window grabs on {target} (also with Lock/NumLock) succeeded and were released; a grab an application holds on its own window is not visible here"
             ));
         }
     }
@@ -207,7 +268,7 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
             adapter.outcome = Outcome::Consumed;
             details.append(&mut adapter.details);
             adapter.details = details;
-            adapter
+            adapter.with_tier(EvidenceTier::LiveQuery)
         }
         (true, false) => {
             let mut verbose = vec![format!(
@@ -218,11 +279,12 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
             verbose.extend(adapter.verbose_details);
             LayerResult::consumed(LAYER, LayerId::Compositor, GRABBED, details)
                 .with_verbose_details(verbose)
+                .with_tier(EvidenceTier::LiveQuery)
         }
         (false, claimed) => {
             if claimed {
                 details.push(format!(
-                    "{} reported '{}', but no X client holds a grab, so that binding is not active",
+                    "{} reported '{}', but no X client holds a grab on the root window, so that binding is not active",
                     adapter.layer, adapter.summary
                 ));
                 details.extend(
@@ -241,6 +303,7 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
             }
             LayerResult::pass(adapter.layer, LayerId::Compositor, FREE, details)
                 .with_verbose_details(adapter.verbose_details)
+                .with_tier(EvidenceTier::LiveQuery)
         }
     }
 }
@@ -398,18 +461,84 @@ mod tests {
     }
 
     #[test]
-    fn wayland_sessions_treat_display_as_xwayland() {
-        assert_eq!(session_from(true, true, None, false), Session::XWayland);
+    fn session_type_decides_before_the_wayland_socket() {
+        let live = || true;
+        let dead = || false;
+        // An inherited WAYLAND_DISPLAY never overrides an X11 session type,
+        // and the socket is not even consulted.
         assert_eq!(
-            session_from(true, false, Some("wayland"), false),
+            session_from(true, Some("x11"), false, || panic!("socket consulted")),
+            Session::X11
+        );
+        assert_eq!(
+            session_from(true, Some("wayland"), false, dead),
             Session::XWayland
         );
-        assert_eq!(session_from(true, false, Some("x11"), false), Session::X11);
-        assert_eq!(session_from(true, false, None, false), Session::X11);
+        // Without a decisive session type, only a live Wayland socket makes
+        // DISPLAY XWayland.
+        assert_eq!(session_from(true, None, false, live), Session::XWayland);
         assert_eq!(
-            session_from(false, false, Some("x11"), false),
-            Session::None
+            session_from(true, Some("tty"), false, live),
+            Session::XWayland
         );
-        assert_eq!(session_from(true, false, Some("x11"), true), Session::None);
+        assert_eq!(session_from(true, None, false, dead), Session::X11);
+        assert_eq!(session_from(false, Some("x11"), false, live), Session::None);
+        assert_eq!(session_from(true, Some("x11"), true, live), Session::None);
+    }
+
+    #[test]
+    fn probe_runs_under_the_diagnostic_deadline() {
+        let spent = command::with_deadline(std::time::Duration::ZERO, || {
+            bounded(|| panic!("probe started after the budget was spent"))
+        });
+        assert!(matches!(spent, Observation::Failed(error) if error.contains("budget")));
+
+        let started = std::time::Instant::now();
+        let stalled = command::with_deadline(std::time::Duration::from_millis(50), || {
+            bounded(|| {
+                thread::sleep(std::time::Duration::from_secs(2));
+                Observation::NoKeycode
+            })
+        });
+        assert!(matches!(stalled, Observation::Failed(error) if error.contains("did not answer")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn grab_state_is_a_live_query_and_failures_keep_the_adapter_tier() {
+        let configured = || i3_claim().with_tier(EvidenceTier::ConfigFile);
+        for observation in [
+            Observation::Checked(vec![check(vec![64], None)]),
+            Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
+        ] {
+            assert_eq!(
+                x11_result(configured(), observation).tier,
+                Some(EvidenceTier::LiveQuery)
+            );
+        }
+        let unclaimed = x11_result(
+            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            Observation::Checked(vec![check(vec![64], None)]),
+        );
+        assert_eq!(unclaimed.tier, Some(EvidenceTier::LiveQuery));
+        assert_eq!(
+            x11_result(configured(), Observation::Failed("refused".into())).tier,
+            Some(EvidenceTier::ConfigFile)
+        );
+    }
+
+    #[test]
+    fn free_verdict_names_the_root_window_scope() {
+        let result = x11_result(
+            i3_claim(),
+            Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
+        );
+        assert!(result.summary.contains("root window"));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("its own window is not visible"))
+        );
     }
 }

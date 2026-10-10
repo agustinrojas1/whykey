@@ -528,7 +528,8 @@ fn inspect_system_with_values(
         lua_hints,
         &hints.declarative,
         physical_input,
-    )?;
+    )?
+    .with_tier(EvidenceTier::LiveQuery);
     result.details.extend(submap_note);
     if let Some(instance) = instance_override() {
         result

@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput, format_bytes};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput, format_bytes};
 use crate::util::unquote;
 
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                 );
             }
         };
-        return inspect_bindings(kind, key, &bindings, &source);
+        return inspect_bindings(kind, key, &bindings, &source, EvidenceTier::LiveQuery);
     }
     if kind == TerminalKind::Konsole {
         let (bindings, source) = match load_konsole_bindings() {
@@ -48,7 +48,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                 );
             }
         };
-        return inspect_bindings(kind, key, &bindings, &source);
+        return inspect_bindings(kind, key, &bindings, &source, EvidenceTier::ConfigFile);
     }
     let Some(path) = config_path(kind) else {
         return LayerResult::new(
@@ -72,10 +72,29 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         }
     };
     let bindings = parse_bindings(kind, &content);
-    inspect_bindings(kind, key, &bindings, &format!("config: {}", path.display()))
+    inspect_bindings(
+        kind,
+        key,
+        &bindings,
+        &format!("config: {}", path.display()),
+        EvidenceTier::ConfigFile,
+    )
 }
 
+/// `tier` names where `bindings` came from: `wezterm show-keys` evaluates
+/// the active configuration (a live query), other terminals' files are read
+/// statically.
 fn inspect_bindings(
+    kind: TerminalKind,
+    key: &KeyCombo,
+    bindings: &[Binding],
+    source: &str,
+    tier: EvidenceTier,
+) -> LayerResult {
+    resolve_bindings(kind, key, bindings, source).with_tier(tier)
+}
+
+fn resolve_bindings(
     kind: TerminalKind,
     key: &KeyCombo,
     bindings: &[Binding],
@@ -192,7 +211,7 @@ fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<Term
                 );
             }
         };
-        let layer = inspect_bindings(kind, key, &bindings, &source);
+        let layer = inspect_bindings(kind, key, &bindings, &source, EvidenceTier::LiveQuery);
         let input = bindings
             .into_iter()
             .rev()
@@ -221,7 +240,7 @@ fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<Term
                 );
             }
         };
-        let layer = inspect_bindings(kind, key, &bindings, &source);
+        let layer = inspect_bindings(kind, key, &bindings, &source, EvidenceTier::ConfigFile);
         let input = bindings
             .into_iter()
             .rev()
@@ -258,7 +277,13 @@ fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<Term
         }
     };
     let bindings = parse_bindings(kind, &content);
-    let layer = inspect_bindings(kind, key, &bindings, &format!("config: {}", path.display()));
+    let layer = inspect_bindings(
+        kind,
+        key,
+        &bindings,
+        &format!("config: {}", path.display()),
+        EvidenceTier::ConfigFile,
+    );
     let input = bindings
         .into_iter()
         .rev()
@@ -1184,7 +1209,9 @@ key_bindings:
             &"ctrl+f".parse().unwrap(),
             &bindings,
             "source: test",
+            EvidenceTier::LiveQuery,
         );
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
         assert_eq!(result.status(), LayerStatus::Indeterminate);
         assert!(result.summary.contains("conditional key table"));
     }

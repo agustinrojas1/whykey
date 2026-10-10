@@ -189,12 +189,17 @@ impl Environment {
             .first()
             .map(|candidate| candidate.id.clone());
 
-        let shell = std::env::var("SHELL").unwrap_or_default();
-        let shell_name = shell
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        // The shell that receives keys in this terminal, not the login shell.
+        let running = crate::layers::shell::running_shell();
+        let shell_name = running
+            .as_ref()
+            .map(|shell| shell.name.clone())
+            .unwrap_or_default();
+        let shell = running
+            .and_then(|shell| shell.exe)
+            .map(|exe| exe.to_string_lossy().into_owned())
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_default();
         let tmux = std::env::var_os("TMUX").is_some();
         let screen = std::env::var_os("STY").is_some();
         let zellij = std::env::var_os("ZELLIJ").is_some()

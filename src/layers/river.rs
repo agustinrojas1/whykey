@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -72,7 +72,8 @@ impl River {
                 Outcome::Pass,
                 "no matching River map command found",
                 vec![format!("source: {}", config_description())],
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -91,6 +92,7 @@ impl River {
             "River init contains a matching map command",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

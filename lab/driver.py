@@ -2,9 +2,10 @@
 """In-container scenario driver for the whykey reality lab.
 
 Runs exactly one scenario inside a fresh lab container: writes the scenario
-files, starts the real programs (Sway, Hyprland, Xvfb + X11 window managers or
-hotkey daemons, a session bus, or a shell in a pty), optionally opens an
-independent input probe (foot running lab/keylog.py on Wayland, xev on X11),
+files, starts the real programs (Sway, Hyprland, headless mutter, Xvfb + X11
+window managers or hotkey daemons, a session bus, or a shell in a pty),
+optionally opens an independent input probe (foot running lab/keylog.py on
+Wayland, xev on X11),
 performs the scenario actions with real synthetic input, records ground truth
 from the programs' reaction, and finally runs whykey. The result is printed as
 one JSON line prefixed with RESULT_MARKER; lab/run.py compares it with
@@ -17,7 +18,8 @@ container over 9p, virtio-gpu for KMS, Mesa kms_swrast/llvmpipe for GL) and
 runs this driver again inside it with WHYKEY_LAB_VM=1; the guest writes its
 result to VM_RESULT_DIR, shared read-write with the container.
 
-Stdlib only; the scenario format is documented in lab/run.py.
+Stdlib only (lab/rdkbd.py uses the image's python3-dbus); the scenario format
+is documented in lab/run.py.
 """
 
 from __future__ import annotations
@@ -302,6 +304,36 @@ class Lab:
         # with other scenarios; give their effects time to land.
         self.settle = VM_INPUT_SETTLE
 
+    def start_gnome(self) -> None:
+        """Mutter, GNOME's compositor and window manager, headless on a
+        virtual monitor. GNOME Shell itself does not start in the container
+        (it aborts without systemd-logind), so this exercises mutter-owned
+        keybindings (org.gnome.desktop.wm.keybindings) only. Input enters
+        through mutter's RemoteDesktop D-Bus API (lab/rdkbd.py)."""
+        self.spawn("mutter", ["mutter", "--headless", "--wayland", "--no-x11",
+                              "--virtual-monitor", "1024x768"])
+        display = wait_for(
+            lambda: (self.ensure_alive(), sorted(glob.glob(f"{RUNTIME_DIR}/wayland-*[0-9]")))[1],
+            10.0,
+            "the mutter Wayland socket",
+        )[0]
+        # What a GNOME session exports to its clients.
+        self.env.update(
+            WAYLAND_DISPLAY=os.path.basename(display),
+            XDG_CURRENT_DESKTOP="GNOME",
+            XDG_SESSION_DESKTOP="gnome",
+            XDG_SESSION_TYPE="wayland",
+        )
+        wait_for(
+            lambda: self.ok(["gdbus", "introspect", "--session", "--dest",
+                             "org.gnome.Mutter.RemoteDesktop", "--object-path",
+                             "/org/gnome/Mutter/RemoteDesktop"]),
+            10.0,
+            "mutter's RemoteDesktop D-Bus service",
+        )
+        # A close request travels mutter -> foot -> foot's exit; give it time.
+        self.settle = VM_INPUT_SETTLE
+
     def start_x11(self) -> None:
         x11 = self.scenario.get("x11", {})
         # -noreset: Xvfb otherwise resets when its last client disconnects,
@@ -374,7 +406,13 @@ class Lab:
                  "python3", "/lab/keylog.py", "/tmp/probe.log"],
             )
             wait_for(lambda: os.path.exists("/tmp/probe.log.ready"), 10.0, "the foot probe")
-            wait_for(self._probe_focused, 5.0, "probe focus")
+            if self.scenario["environment"] != "gnome":
+                wait_for(self._probe_focused, 5.0, "probe focus")
+            # Focus as the compositor reports it is not yet keyboard input
+            # reaching the client (under load foot can still be processing
+            # wl_keyboard.enter): wait until a Shift tap arrives. Shift is a
+            # modifier, so "delivered" ignores it.
+            wait_for(self._probe_receives_input, 10.0, "the probe to receive a Shift tap")
         elif kind == "x11":
             # xev uses stdio; without line buffering its log lags the input.
             self.spawn("probe", ["stdbuf", "-oL", "xev", "-event", "keyboard", "-name", PROBE_TITLE])
@@ -433,12 +471,21 @@ class Lab:
         app_id, title = self._focused_window()
         return app_id == PROBE_TITLE and title != WHYKEY_WINDOW_TITLE
 
+    def _probe_receives_input(self) -> bool:
+        """A Shift tap typed like the scenario's input reaches the foot probe.
+        Mutter has no window-query IPC, so on "gnome" this is the focus check."""
+        injector = "rdkbd" if self.scenario["environment"] == "gnome" else "vkbd"
+        self.run(["python3", f"/lab/{injector}.py", "shift"])
+        with open("/tmp/probe.log", "rb") as handle:
+            return b"\x1b[57441" in handle.read()
+
     def _whykey_window_focused(self) -> bool:
         """whykey's own probe window (`listen --window`) has focus."""
         return self._focused_window()[1] == WHYKEY_WINDOW_TITLE
 
-    def probe_keys(self) -> list[str]:
-        """Non-modifier keys the probe client received, in order."""
+    def probe_keys(self, modifiers: bool = False) -> list[str]:
+        """Keys the probe client received, in order: non-modifier key presses,
+        or with `modifiers` every key press including modifier keys."""
         if self.probe == "wayland":
             with open("/tmp/probe.log", "rb") as handle:
                 data = handle.read()
@@ -446,7 +493,7 @@ class Lab:
             for code, mods, event, final in KITTY_SEQUENCE.findall(data):
                 if event == b"3":
                     continue
-                if final == b"u" and int(code) in KITTY_MODIFIER_CODES:
+                if final == b"u" and int(code) in KITTY_MODIFIER_CODES and not modifiers:
                     continue
                 keys.append((b"CSI " + code + b";" + (mods or b"1") + b" " + final).decode())
             return keys
@@ -459,10 +506,13 @@ class Lab:
                 if not block.lstrip().startswith("KeyPress"):
                     continue
                 match = re.search(r"keysym 0x[0-9a-f]+, ([^)]+)\)", block)
-                if match and match.group(1) not in X11_MODIFIER_KEYSYMS:
+                if match and (modifiers or match.group(1) not in X11_MODIFIER_KEYSYMS):
                     keys.append(match.group(1))
             return keys
         return []
+
+    def probe_events(self) -> list[str]:
+        return self.probe_keys(modifiers=True)
 
     # -- actions ---------------------------------------------------------
     def perform(self, action: dict) -> None:
@@ -476,6 +526,8 @@ class Lab:
             self.run(["wtype", *action["wtype"]])
         elif "vkbd" in action:
             self.run(["python3", "/lab/vkbd.py", *action["vkbd"]])
+        elif "rdkbd" in action:
+            self.run(["python3", "/lab/rdkbd.py", *action["rdkbd"]])
         elif "xdotool" in action:
             self.run(["xdotool", *action["xdotool"]])
         elif "sh" in action:
@@ -507,36 +559,35 @@ class Lab:
             except FileNotFoundError:
                 return False, f"{path} missing"
             return content == spec["equals"], f"{path} contains {content!r}"
-        if "gsettings" in spec:
-            schema, key = spec["gsettings"]
-            value = self.run(["gsettings", "get", schema, key]).stdout.decode().strip()
-            accelerators = re.findall(r"'([^']*)'", value) or [value.strip("'")]
-            bound = spec["contains"] in accelerators
-            return bound, f"gsettings get {schema} {key} = {value}"
         if "sh" in spec:
             completed = self.run(["sh", "-c", spec["sh"]], check=False)
             output = completed.stdout.decode("utf-8", "replace").strip()
             return completed.returncode == 0, f"`{spec['sh']}` exited {completed.returncode}: {output}"
-        raise LabError(f"unknown fired check {spec}")
+        if spec.get("probe") == "any":
+            events = self.probe_events()
+            return bool(events), f"{self.probe} probe received key events {events or 'none'}"
+        raise LabError(f"unknown check {spec}")
 
     def ground_truth(self) -> dict:
         truth_spec = self.scenario["ground_truth"]
         fired, fired_evidence = self.check_fired(truth_spec["fired"])
-        delivered = None
-        delivered_evidence = None
+        truth = {"fired": fired, "fired_evidence": fired_evidence,
+                 "delivered": None, "delivered_evidence": None}
         delivered_spec = truth_spec.get("delivered")
         if delivered_spec == "probe":
             keys = self.probe_keys()
-            delivered = bool(keys)
-            delivered_evidence = f"{self.probe} probe received {keys or 'no key'}"
+            truth["delivered"] = bool(keys)
+            truth["delivered_evidence"] = f"{self.probe} probe received {keys or 'no key'}"
         elif isinstance(delivered_spec, dict):
-            delivered, delivered_evidence = self.check_fired(delivered_spec)
-        return {
-            "fired": fired,
-            "fired_evidence": fired_evidence,
-            "delivered": delivered,
-            "delivered_evidence": delivered_evidence,
-        }
+            truth["delivered"], truth["delivered_evidence"] = self.check_fired(delivered_spec)
+        reached_spec = truth_spec.get("reached")
+        if reached_spec == "fired":
+            truth["reached"] = fired
+            truth["reached_evidence"] = "reached: the fired observation required the key"
+        elif isinstance(reached_spec, dict):
+            reached, evidence = self.check_fired(reached_spec)
+            truth["reached"], truth["reached_evidence"] = reached, f"reached: {evidence}"
+        return truth
 
     # -- whykey ----------------------------------------------------------
     def start_whykey_background(self) -> None:
@@ -659,11 +710,13 @@ class Lab:
             self.start_sway()
         elif environment == "hyprland":
             self.start_hyprland()
+        elif environment == "gnome":
+            self.start_gnome()
         elif environment == "x11":
             self.start_x11()
         elif environment == "pty":
             self.start_pty()
-        elif environment != "session":
+        else:
             raise LabError(f"unknown environment {environment!r}")
         for command in self.scenario.get("session_setup", []):
             self.run(["sh", "-c", command])

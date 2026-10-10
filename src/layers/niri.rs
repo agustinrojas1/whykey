@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -75,7 +75,8 @@ impl Niri {
                 Outcome::Pass,
                 "no matching Niri binding found in config.kdl",
                 vec![format!("source: {}", config_description())],
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         let mut details = vec![format!("source: {}", config_description())];
         for binding in matches {
@@ -91,6 +92,7 @@ impl Niri {
             "Niri config contains a matching binding",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

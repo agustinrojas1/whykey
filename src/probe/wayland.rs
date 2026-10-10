@@ -666,6 +666,10 @@ impl ProbeWindow for WaylandWindow {
     fn focused(&self) -> bool {
         self.state.focused
     }
+
+    fn protocol(&self) -> &'static str {
+        "Wayland"
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use std::process::Command;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, UncertaintyReason,
+    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, UncertaintyReason,
 };
 
 const MAX_ANCESTORS: usize = 16;
@@ -138,7 +138,8 @@ fn inspect_for_pid_with_source_inner(
                 "runtime mapping found; Neovim may consume the key",
                 details,
             )
-            .with_binding(binding);
+            .with_binding(binding)
+            .with_tier(EvidenceTier::LiveQuery);
         }
         if let Some(mapping) = nvim_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
@@ -149,7 +150,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; Neovim may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching mapping found in Neovim RPC or init.lua/init.vim".into());
         details.push("plugins and runtime mappings were not inspected".into());
@@ -171,7 +173,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "runtime mapping found; Vim may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::LiveQuery);
         }
         if let Some(mapping) = vim_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
@@ -182,7 +185,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; Vim may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching mapping found in Vim RPC or vimrc".into());
         details.push("plugins and runtime mappings were not inspected".into());
@@ -204,7 +208,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "runtime mapping found; Emacs may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::LiveQuery);
         }
         if let Some(mapping) = emacs_static_mapping(key) {
             details.push(format!("mapping: {mapping}"));
@@ -216,7 +221,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; Emacs may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching mapping found in Emacs init files".into());
         details.push("major/minor mode and package mappings were not inspected".into());
@@ -238,7 +244,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; Helix may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching mapping found in Helix config.toml".into());
         details.push("mode and runtime/plugin mappings were not inspected".into());
@@ -260,7 +267,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; Micro may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching mapping found in Micro bindings.json".into());
         details.push("plugin and mode mappings were not inspected".into());
@@ -282,7 +290,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; Kakoune may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching mapping found in kakrc".into());
         details.push("runtime and plugin mappings were not inspected".into());
@@ -307,7 +316,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; VS Code may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching single-key mapping found in VS Code keybindings.json".into());
         details.push(
@@ -334,7 +344,8 @@ fn inspect_for_pid_with_source_inner(
                 Outcome::HandledUncertain,
                 "mapping found; JetBrains may consume the key",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         details.push("no matching shortcut found in the selected JetBrains keymap".into());
         details

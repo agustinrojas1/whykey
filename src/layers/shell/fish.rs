@@ -90,10 +90,15 @@ impl Bindings {
             .into_iter()
             .filter_map(|path| fs::read_to_string(&path).ok().map(|text| (path, text)))
             .collect();
-        let mut preset = universal_key_bindings().unwrap_or_else(|| PRESETS[0].to_owned());
+        let universal = universal_key_bindings();
+        // The preset is the user's choice when a universal variable or a
+        // config file selects it; otherwise it is fish's default.
+        let mut preset_chosen = universal.is_some();
+        let mut preset = universal.unwrap_or_else(|| PRESETS[0].to_owned());
         for (_, text) in &read {
             if let Some(selected) = selected_preset(text) {
                 preset = selected;
+                preset_chosen = true;
             }
         }
         let program = exe.map_or_else(|| PathBuf::from("fish"), Path::to_path_buf);
@@ -129,7 +134,10 @@ impl Bindings {
             mode: if vi { "insert" } else { "default" }.into(),
             mode_known: true,
             entries: Vec::new(),
-            origin: Origin::Static,
+            origin: Origin::reconstructed(
+                preset_chosen || !with_binds.is_empty(),
+                presets.is_some(),
+            ),
             source,
             complete: presets.is_some(),
         };

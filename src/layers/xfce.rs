@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Read-only Xfce keyboard-shortcut adapter.
 pub struct Xfce;
@@ -77,7 +77,8 @@ impl Xfce {
                 Outcome::Pass,
                 "no active Xfce keyboard shortcut found",
                 vec![format!("source: xfconf-query -c {CHANNEL} -l -v")],
-            );
+            )
+            .with_tier(EvidenceTier::LiveQuery);
         }
 
         let mut details = vec![format!("source: xfconf-query -c {CHANNEL} -l -v")];
@@ -91,6 +92,7 @@ impl Xfce {
             "Xfce global shortcut consumes the key",
             details,
         )
+        .with_tier(EvidenceTier::LiveQuery)
     }
 }
 

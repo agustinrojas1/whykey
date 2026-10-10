@@ -36,7 +36,8 @@
     "fired": {
       "file": "/tmp/effect",
       "equals": "ab\u0014"
-    }
+    },
+    "reached": "fired"
   },
   "whykey": {
     "args": [

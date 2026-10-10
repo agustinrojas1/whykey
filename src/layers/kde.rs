@@ -13,8 +13,8 @@ use std::process::Command;
 
 use crate::key::{KeyCombo, modifier_mask, normalize_key_str};
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, LayerId, LayerResult, Outcome, SourceLocation,
-    UncertaintyReason,
+    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome,
+    SourceLocation, UncertaintyReason,
 };
 
 const LAYER: &str = "KDE Plasma";
@@ -226,7 +226,8 @@ fn inspect_runtime(matches: &[RuntimeMatch]) -> LayerResult {
                 "KDE global shortcut registered but inactive"
             },
             details,
-        );
+        )
+        .with_tier(EvidenceTier::LiveQuery);
     };
     details.push(
         "kglobalaccel reports activity per component (isActive); a single action its application released while others stay registered still looks active"
@@ -250,6 +251,7 @@ fn inspect_runtime(matches: &[RuntimeMatch]) -> LayerResult {
         details,
     )
     .with_binding(evidence)
+    .with_tier(EvidenceTier::LiveQuery)
 }
 
 fn inspect_file(key: &KeyCombo, runtime_error: &str) -> LayerResult {
@@ -292,7 +294,8 @@ fn inspect_file(key: &KeyCombo, runtime_error: &str) -> LayerResult {
             Outcome::Unknown,
             "KDE global shortcut state is conditional",
             details,
-        );
+        )
+        .with_tier(EvidenceTier::ConfigFile);
     };
     for binding in &matches {
         let action = binding.description.as_deref().map_or_else(
@@ -319,6 +322,7 @@ fn inspect_file(key: &KeyCombo, runtime_error: &str) -> LayerResult {
         details,
     )
     .with_binding(evidence)
+    .with_tier(EvidenceTier::ConfigFile)
 }
 
 fn component_active(path: &str) -> Result<bool, String> {
@@ -864,5 +868,7 @@ mod tests {
                 .any(|line| line.contains("inactive"))
         );
         assert_eq!(inspect_runtime(&[]).outcome, Outcome::Pass);
+        assert_eq!(inspect_runtime(&[]).tier, Some(EvidenceTier::LiveQuery));
+        assert_eq!(inactive.tier, Some(EvidenceTier::LiveQuery));
     }
 }

@@ -1,23 +1,33 @@
 {
   "id": "gnome-changed-bound",
-  "description": "a user-changed shortcut (<Super>F9) is what gsettings reports",
-  "tier": "runtime-setting",
-  "environment": "session",
+  "description": "after `gsettings set ... close ['<Super>F9']`, mutter closes the focused window on Super+F9",
+  "tier": "observed",
+  "environment": "gnome",
   "session_setup": [
-    "gsettings set org.gnome.desktop.wm.keybindings switch-applications \"['<Super>F9']\""
+    "gsettings set org.gnome.desktop.wm.keybindings close \"['<Super>F9']\""
+  ],
+  "probe": "wayland",
+  "actions": [
+    {
+      "sleep": 0.5
+    },
+    {
+      "rdkbd": [
+        "super+F9"
+      ]
+    }
   ],
   "ground_truth": {
     "fired": {
-      "sh": "for schema in org.gnome.desktop.wm.keybindings org.gnome.shell.keybindings org.gnome.mutter.keybindings org.gnome.mutter.wayland.keybindings org.gnome.settings-daemon.plugins.media-keys; do gsettings list-recursively $schema; done | grep -F \"'<Super>F9'\""
-    }
+      "sh": "! pgrep -f 'lab/[k]eylog.py'"
+    },
+    "delivered": "probe"
   },
   "whykey": {
-    "args": ["super+F9"],
+    "args": [
+      "super+F9"
+    ],
     "layer": "GNOME",
-    "env": {
-      "XDG_CURRENT_DESKTOP": "GNOME",
-      "XDG_SESSION_TYPE": "wayland",
-      "XDG_SESSION_DESKTOP": "gnome"
-    }
+    "detail": "org.gnome.desktop.wm.keybindings close = '<Super>F9'"
   }
 }

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Read-only X11 `xbindkeys` configuration adapter.
 ///
@@ -85,7 +85,8 @@ impl X11 {
                 Outcome::Unknown,
                 "X11 shortcut state is conditional",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.command));
@@ -97,6 +98,7 @@ impl X11 {
             "matching xbindkeys shortcut configured; daemon activation and X11 precedence are conditional",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

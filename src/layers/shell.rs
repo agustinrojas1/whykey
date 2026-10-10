@@ -15,8 +15,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::layers::{
-    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, TerminalInput, UncertaintyReason,
-    readline,
+    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput,
+    UncertaintyReason, readline,
 };
 
 pub fn inspect_input(input: &TerminalInput) -> LayerResult {
@@ -262,7 +262,24 @@ fn shell_reads_terminal(arguments: &[String]) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Origin {
     Live,
-    Static,
+    /// A static reconstruction: [`EvidenceTier::ConfigFile`] when user
+    /// startup files changed it, [`EvidenceTier::Default`] when only the
+    /// shell's own defaults were read, `None` when neither was.
+    Static(Option<EvidenceTier>),
+}
+
+impl Origin {
+    /// A static reconstruction from the shell's own defaults (when they
+    /// could be read) and the user's startup files (when any changed them).
+    fn reconstructed(user_files_applied: bool, defaults_read: bool) -> Self {
+        Self::Static(if user_files_applied {
+            Some(EvidenceTier::ConfigFile)
+        } else if defaults_read {
+            Some(EvidenceTier::Default)
+        } else {
+            None
+        })
+    }
 }
 
 /// A line editor's verdict before origin-specific confidence is applied.
@@ -284,16 +301,21 @@ fn finish(layer: &'static str, origin: &Origin, init_hint: &str, verdict: Verdic
         action,
         mut details,
     } = verdict;
-    if *origin == Origin::Live {
-        return LayerResult::new(layer, LayerId::Shell, outcome, summary, details);
-    }
+    let tier = match origin {
+        Origin::Live => {
+            return LayerResult::new(layer, LayerId::Shell, outcome, summary, details)
+                .with_tier(EvidenceTier::LiveQuery);
+        }
+        Origin::Static(tier) => *tier,
+    };
     details.push(init_hint.into());
     let outcome = match outcome {
         Outcome::Consumed => Outcome::HandledUncertain,
         Outcome::Pass => Outcome::UncertainContinues,
         other => other,
     };
-    let result = LayerResult::new(layer, LayerId::Shell, outcome, summary, details);
+    let result =
+        LayerResult::new(layer, LayerId::Shell, outcome, summary, details).with_optional_tier(tier);
     match action {
         Some(action) => result.with_binding(
             BindingEvidence::action(action, BindingScope::Unknown, None)
@@ -656,5 +678,33 @@ mod tests {
             Some(b"\x1b[Z".to_vec())
         );
         assert_eq!(legacy_key_bytes(true, false, false, "enter"), None);
+    }
+
+    #[test]
+    fn line_editor_tier_follows_what_was_read() {
+        let verdict = || Verdict {
+            outcome: Outcome::Consumed,
+            summary: "bound to transpose-chars".into(),
+            action: Some("transpose-chars".into()),
+            details: Vec::new(),
+        };
+        let tier = |origin: Origin| finish("Zsh / ZLE", &origin, "hint", verdict()).tier;
+        assert_eq!(tier(Origin::Live), Some(EvidenceTier::LiveQuery));
+        // Startup files that changed the keymap make it a config reading even
+        // though the shell's defaults were the base.
+        assert_eq!(
+            tier(Origin::reconstructed(true, true)),
+            Some(EvidenceTier::ConfigFile)
+        );
+        assert_eq!(
+            tier(Origin::reconstructed(true, false)),
+            Some(EvidenceTier::ConfigFile)
+        );
+        assert_eq!(
+            tier(Origin::reconstructed(false, true)),
+            Some(EvidenceTier::Default)
+        );
+        // Defaults unavailable and no startup file: nothing answered.
+        assert_eq!(tier(Origin::reconstructed(false, false)), None);
     }
 }

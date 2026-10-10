@@ -1,0 +1,76 @@
+{
+  "id": "i3-window-super-alone",
+  "description": "listen --window under Xvfb + i3: Super tapped alone reaches the X11 probe window only as modifier changes; whykey reports a conditional not-delivered observation (consumed key and lone tap look the same)",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/i3/config": [
+      "bindsym Mod4+t exec sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": [
+          "i3",
+          "-c",
+          "/root/.config/i3/config"
+        ],
+        "ready": "wm",
+        "ready_grab": [
+          64,
+          28
+        ]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [
+    {
+      "xdotool": [
+        "key",
+        "Super_L"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "xdotool": [
+        "key",
+        "Super_L"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe",
+    "reached": {
+      "probe": "any"
+    }
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--window",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": "window",
+    "observation": true,
+    "confidence": "conditional",
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "i3"
+    },
+    "combo": {
+      "key": "",
+      "modifiers": 64
+    }
+  }
+}

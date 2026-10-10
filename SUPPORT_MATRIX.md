@@ -8,9 +8,12 @@ contract shared by the capability registry and tests.
 
 Verification is what reality confirmed: *lab-verified* entries name the
 [lab](lab/run.py) scenarios where the real program agreed with whykey (see
-[Lab evidence](#lab-evidence)); *live-verified* entries were checked by hand
-on the maintainer's desktop; everything else is *unverified*, however well
-its fixtures pass.
+[Lab evidence](#lab-evidence)). A scenario counts only when a positive
+control observed the key (it fired, reached a probe, or reached the layer)
+and whykey's verdict matched exactly; a tolerated uncertain answer (PASS~)
+never counts. *live-verified* entries were checked by hand on the
+maintainer's desktop; everything else is *unverified*, however well its
+fixtures pass.
 
 | ID | Area | Implementation | Verification | Scope |
 | --- | --- | --- | --- | --- |
@@ -29,7 +32,7 @@ its fixtures pass.
 | `capture.terminal` | capture | Implemented | unverified | Capture terminal input when a controlling terminal is available. |
 | `capture.native-compositor` | capture | Implemented | lab-verified (1 scenario) | Capture through the native compositor backend when Hyprland socket2 IPC is available. |
 | `capture.native-sway` | capture | Implemented | unverified | Observe Sway binding events through IPC in pass-through mode; suppression is not exposed by Sway IPC. |
-| `capture.probe-window` | capture | Implemented | lab-verified (7 scenarios) | Open a focused Wayland or X11 probe window and report whether the desktop delivered the key to a client or consumed it; the default listen chain uses it when native compositor capture is unavailable. |
+| `capture.probe-window` | capture | Implemented | lab-verified (8 scenarios) | Open a focused Wayland or X11 probe window and report whether the desktop delivered the key to a client or consumed it; the default listen chain uses it when native compositor capture is unavailable. |
 | `capture.ndjson` | capture | Implemented | unverified | Emit one compact schema-v2 record per captured event. |
 | `capture.export` | capture | Implemented | unverified | Write replayable JSON or NDJSON capture records to an explicit file. |
 | `capture.evdev` | capture | Implemented | unverified | Capture Linux evdev keyboard events when a readable device is available. |
@@ -40,7 +43,7 @@ its fixtures pass.
 | `compositor.hyprland` | compositor | Implemented | lab-verified (15 scenarios); live-verified on maintainer machine: static `whykey <key>` inspection against the running Hyprland session | Inspect Hyprland bindings, submaps, devices, and instance-scoped IPC. |
 | `compositor.sway` | compositor | Implemented | lab-verified (9 scenarios) | Inspect Sway bindings by parsing the running configuration from get_config IPC and matching the get_binding_state mode. |
 | `compositor.i3` | compositor | Implemented | lab-verified (5 scenarios) | Inspect i3 bindings by parsing the running configuration (including included_configs) from get_config IPC and matching the get_binding_state mode. |
-| `compositor.kde` | compositor | Implemented | lab-verified (3 scenarios) | Inspect KDE Plasma shortcut configuration without claiming runtime activation. |
+| `compositor.kde` | compositor | Implemented | lab-verified (3 scenarios) | Inspect KDE Plasma global shortcuts by asking the running kglobalaccel daemon which components use a key and whether they are active. |
 | `compositor.xfce` | compositor | Implemented | unverified | Inspect Xfce keyboard-shortcut channel values. |
 | `compositor.cinnamon` | compositor | Implemented | unverified | Inspect Cinnamon global keybinding schemas. |
 | `compositor.mate` | compositor | Implemented | unverified | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
@@ -52,12 +55,12 @@ its fixtures pass.
 | `compositor.labwc` | compositor | Implemented | unverified | Inspect labwc Openbox-compatible keybind configuration. |
 | `compositor.bspwm-sxhkd` | compositor | Implemented | lab-verified (2 scenarios) | Inspect literal sxhkd mappings from SXHKD_CONFIG, the running sxhkd's -c and extra configuration files, or the default sxhkdrc. |
 | `compositor.openbox` | compositor | Implemented | lab-verified (2 scenarios) | Inspect Openbox keybind XML. |
-| `compositor.gnome` | compositor | Implemented | lab-verified (4 scenarios) | Inspect GNOME global shortcuts through read-only GSettings queries. |
+| `compositor.gnome` | compositor | Implemented | lab-verified (4 scenarios; mutter-owned bindings only (org.gnome.desktop.wm.keybindings, mutter run headless); GNOME Shell and gnome-settings-daemon behavior not verified) | Inspect GNOME global shortcuts through read-only GSettings queries. |
 | `compositor.programmable-x11` | compositor | Implemented | lab-verified (2 scenarios) | Inspect literal AwesomeWM, Qtile, and XMonad mappings. |
 | `compositor.x11.xbindkeys` | compositor | Implemented | lab-verified (2 scenarios) | Inspect literal X11 xbindkeys configuration. |
 | `compositor.portal-globalshortcuts` | compositor | Implemented | unverified | Probe read-only xdg-desktop-portal GlobalShortcuts availability; the API does not expose an existing binding inventory. |
 | `compositor.kglobalaccel-runtime` | compositor | Implemented | lab-verified (3 scenarios) | Ask the running kglobalaccel over D-Bus (globalShortcutsByKey, isActive, allShortcutInfos) without auto-starting it; kglobalshortcutsrc is a configured-only fallback. |
-| `compositor.gnome-gsettings` | compositor | Implemented | lab-verified (4 scenarios) | Read the live GNOME keybinding schemas (mutter, GNOME Shell, gnome-settings-daemon media and custom keys) with gsettings. |
+| `compositor.gnome-gsettings` | compositor | Implemented | lab-verified (4 scenarios; mutter-owned bindings only (org.gnome.desktop.wm.keybindings, mutter run headless); GNOME Shell and gnome-settings-daemon behavior not verified) | Read the live GNOME keybinding schemas (mutter, GNOME Shell, gnome-settings-daemon media and custom keys) with gsettings. |
 | `compositor.generic` | compositor | Implemented | unverified | Report generic desktop/session context with opaque global bindings. |
 | `compositor.additional-desktops` | compositor | Planned | unverified | Additional desktop integrations beyond the supported adapter set. |
 | `terminal.dedicated` | terminal | Implemented | unverified | Detect and query a dedicated terminal adapter when available. |
@@ -69,7 +72,7 @@ its fixtures pass.
 ## Lab evidence
 
 - `capture.native-compositor`: `hyprland-native-capture-lua`
-- `capture.probe-window`: `hyprland-listen-conf-fallback`, `hyprland-window-bound`, `hyprland-window-unbound`, `i3-window-bound`, `i3-window-unbound`, `sway-window-bound`, `sway-window-unbound`
+- `capture.probe-window`: `hyprland-listen-conf-fallback`, `hyprland-window-bound`, `hyprland-window-unbound`, `i3-window-bound`, `i3-window-super-alone`, `i3-window-unbound`, `sway-window-bound`, `sway-window-unbound`
 - `compositor.hyprland`: `hyprland-bindn`, `hyprland-code-key`, `hyprland-keysym-comma`, `hyprland-lua-bind`, `hyprland-lua-code-key`, `hyprland-lua-submap-active`, `hyprland-lua-submap-inactive`, `hyprland-lua-unbound`, `hyprland-native-capture-lua`, `hyprland-plain-bind`, `hyprland-release-bind`, `hyprland-source-include`, `hyprland-submap-active`, `hyprland-submap-inactive`, `hyprland-unbound`
 - `compositor.sway`: `sway-include`, `sway-mode-active`, `sway-mode-inactive`, `sway-plain-bind`, `sway-plain-bind-wtype`, `sway-release-bind`, `sway-to-code`, `sway-unbound`, `sway-variable-mod`
 - `compositor.i3`: `i3-mode-active`, `i3-mode-inactive`, `i3-plain-bind`, `i3-release-bind`, `i3-unbound`

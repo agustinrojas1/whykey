@@ -189,6 +189,17 @@ pub fn deadline_remaining() -> Option<Duration> {
     })
 }
 
+/// How long one in-process diagnostic query (not a child process) may wait:
+/// the per-command timeout, capped by what remains of the active deadline.
+/// `None` once the deadline is spent, so the query must not start.
+pub fn query_budget() -> Option<Duration> {
+    match deadline_remaining() {
+        Some(remaining) if remaining.is_zero() => None,
+        Some(remaining) => Some(configured_timeout().min(remaining)),
+        None => Some(configured_timeout()),
+    }
+}
+
 fn configured_timeout() -> Duration {
     std::env::var("WHYKEY_COMMAND_TIMEOUT_MS")
         .ok()

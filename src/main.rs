@@ -393,9 +393,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     });
     let generic_terminal_fallback = non_ghostty_terminal || terminal_program.is_none();
     let terminal_adapter = environment.terminal;
-    let shell = env::var_os("SHELL")
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let shell = environment.shell.clone();
     let shell_snapshot = shell_snapshot_available(&shell);
     let evdev = listen::evdev_available();
     let native_compositor = whykey::capabilities::native_capture_available_for_doctor();
@@ -478,11 +476,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
             .then(|| env::var("WAYLAND_DISPLAY").ok())
             .flatten(),
         x11: env::var("DISPLAY").ok().filter(|value| !value.is_empty()),
-        xwayland: whykey::probe::wayland::display_configured()
-            || compositor_context
-                .session_type
-                .as_deref()
-                .is_some_and(|kind| kind.eq_ignore_ascii_case("wayland")),
+        xwayland: whykey::layers::x11_grab::xwayland_session(),
         remote: ssh,
         tty,
         evdev_readable: evdev,

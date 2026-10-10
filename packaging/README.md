@@ -46,6 +46,14 @@ recipes declare `python3` as optional for them (Debian and RPM `Recommends`,
 Arch `optdepends`). The Nix recipe patches their shebangs to its `python3`.
 The `whykey` binary itself needs no Python.
 
+The Wayland and X11 clients (`wayland-client`, `x11rb`) use their pure-Rust
+backends, so the binary links no libwayland or libxcb at runtime, and
+packages need no extra runtime dependencies for the probe window or the X11
+grab probe. The vendor directory in the offline source archive is about
+65 MB; about 18 MB of that is `windows-sys`, which is vendored but never
+compiled on Linux.
+The `lab/` directory is excluded from the crate and is not needed to build.
+
 The PKGBUILD lists `x86_64` and `aarch64` because it compiles the vendored
 source archive. Prebuilt release binaries are only published for
 `x86_64-unknown-linux-gnu`.

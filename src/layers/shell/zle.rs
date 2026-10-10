@@ -120,20 +120,21 @@ impl Keymaps {
             .into_iter()
             .filter_map(|path| fs::read_to_string(&path).ok().map(|text| (path, text)))
             .collect();
-        let mut source = match defaults {
-            Some(_) => format!("defaults of {} (`zsh -f`)", program.display()),
-            None => "zsh defaults unavailable".to_owned(),
-        };
         let files: Vec<String> = read
             .iter()
             .filter(|(_, text)| text.contains("bindkey"))
             .map(|(path, _)| display_path(path))
             .collect();
+        let mut source = match defaults {
+            Some(_) => format!("defaults of {} (`zsh -f`)", program.display()),
+            None => "zsh defaults unavailable".to_owned(),
+        };
         if !files.is_empty() {
             source.push_str(&format!(" plus bindkey lines of {}", files.join(", ")));
         }
         source.push_str(" (static reading, not the running shell)");
-        let mut keymaps = Self::new(Origin::Static, source);
+        let origin = Origin::reconstructed(!files.is_empty(), defaults.is_some());
+        let mut keymaps = Self::new(origin, source);
         match defaults {
             Some(text) => keymaps.apply_script(&text),
             None => keymaps.complete = false,

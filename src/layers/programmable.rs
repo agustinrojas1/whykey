@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 
@@ -138,7 +138,8 @@ impl Programmable {
                 Outcome::Unknown,
                 format!("{} shortcut state is conditional", desktop.name()),
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         for binding in &matches {
             details.push(format!("{}: {}", binding.context, binding.action));
@@ -153,6 +154,7 @@ impl Programmable {
             ),
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

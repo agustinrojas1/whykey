@@ -30,3 +30,16 @@ New adapters are not complete until the fixture, positive/negative/IPC-failure
 tests, inventory boundary, support-matrix entry, and the gate all land in the
 same change. Live compositor tests remain ignored and require their explicit
 triple opt-in; they do not replace the hermetic gate.
+
+## Reality lab
+
+Fixtures show only that an adapter agrees with its authors. An adapter is
+*verified* when a [lab](../lab/README.md) scenario runs the real program,
+sends it real synthetic input, and records ground truth from the program's
+reaction. Each scenario needs a positive control, and whykey's verdict must
+match the ground truth. When the program can run in the Fedora lab image,
+add at least one bound and one unbound scenario under
+`lab/scenarios/<group>/`. Then run `python3 lab/run.py --only '<id>'` and
+`python3 tools/generate_support_matrix.py` so that the support matrix
+records the scenario. Without a scenario, the adapter stays *unverified*
+in the support matrix, however many fixtures pass.

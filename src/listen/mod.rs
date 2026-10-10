@@ -535,18 +535,19 @@ pub fn run(options: Options) -> Result<(), ListenError> {
         NATIVE_UNSUPPORTED.to_owned()
     };
     eprintln!("Native compositor capture is unavailable: {native_error}");
-    let window_error = match crate::probe::available_display() {
-        Some(display) => match open_window_backend() {
+    let window_error = match probe_window_display(discovery.environment.ssh) {
+        Ok(_) => match open_window_backend() {
             Ok(backend) => {
                 eprintln!(
-                    "Opening a probe window ({display}); press the shortcut there. Keys the desktop consumes never reach it."
+                    "Opened a probe window ({}); press the shortcut there. Keys the desktop consumes never reach it.",
+                    backend.protocol().unwrap_or("unknown protocol")
                 );
                 let signals = SignalGuard::install()?;
                 return run_observed_loop(options, backend, discovery, None, &signals);
             }
             Err(error) => error,
         },
-        None => NO_PROBE_DISPLAY.to_owned(),
+        Err(reason) => reason.to_owned(),
     };
     eprintln!("Probe window capture is unavailable: {window_error}");
     if options.events_all {
@@ -560,6 +561,17 @@ pub fn run(options: Options) -> Result<(), ListenError> {
 
 /// Why the default chain skips the probe window.
 const NO_PROBE_DISPLAY: &str = "no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY is usable";
+/// Over SSH a forwarded DISPLAY would open the window on the client's desktop.
+const REMOTE_SESSION: &str = "remote session; terminal capture used";
+
+/// The protocol the default chain would open a probe window with, or why it
+/// skips the probe window.
+fn probe_window_display(remote: bool) -> Result<&'static str, &'static str> {
+    if remote {
+        return Err(REMOTE_SESSION);
+    }
+    crate::probe::planned_display().ok_or(NO_PROBE_DISPLAY)
+}
 #[cfg(not(target_os = "linux"))]
 const NATIVE_UNSUPPORTED: &str = "only supported on Linux";
 
@@ -617,7 +629,7 @@ mod tests {
     fn default_chain_prefers_native_capture() {
         let plan = plan_default_chain(
             Ok("Hyprland"),
-            Some("Wayland"),
+            Ok("Wayland"),
             true,
             CapturePolicy::PassThrough,
             false,
@@ -637,7 +649,7 @@ mod tests {
     fn default_chain_opens_probe_window_before_terminal() {
         let plan = plan_default_chain(
             Err("no Hyprland or Sway session detected"),
-            Some("X11"),
+            Ok("X11"),
             true,
             CapturePolicy::PassThrough,
             true,
@@ -663,7 +675,7 @@ mod tests {
     fn default_chain_falls_back_to_terminal_without_a_display() {
         let plan = plan_default_chain(
             Err("tried Sway: unreachable"),
-            None,
+            Err(NO_PROBE_DISPLAY),
             true,
             CapturePolicy::PassThrough,
             false,
@@ -678,9 +690,21 @@ mod tests {
         );
         assert_eq!(plan.selected.unwrap(), "Terminal");
 
-        let no_tty = plan_default_chain(Err("x"), None, false, CapturePolicy::PassThrough, false);
+        let no_tty = plan_default_chain(
+            Err("x"),
+            Err(NO_PROBE_DISPLAY),
+            false,
+            CapturePolicy::PassThrough,
+            false,
+        );
         assert!(no_tty.selected.is_err());
-        let events_all = plan_default_chain(Err("x"), None, true, CapturePolicy::PassThrough, true);
+        let events_all = plan_default_chain(
+            Err("x"),
+            Err(NO_PROBE_DISPLAY),
+            true,
+            CapturePolicy::PassThrough,
+            true,
+        );
         assert!(
             events_all
                 .selected
@@ -690,10 +714,36 @@ mod tests {
     }
 
     #[test]
+    fn remote_sessions_skip_the_probe_window() {
+        assert_eq!(probe_window_display(true), Err(REMOTE_SESSION));
+        let plan = plan_default_chain(
+            Err("no Hyprland or Sway session detected"),
+            probe_window_display(true),
+            true,
+            CapturePolicy::PassThrough,
+            false,
+        );
+        assert_eq!(
+            stage_names(&plan),
+            [
+                ("native compositor", "unavailable"),
+                ("probe window", "unavailable"),
+                ("terminal", "selected")
+            ]
+        );
+        assert!(
+            plan.stages[1]
+                .verdict
+                .contains("remote session; terminal capture used")
+        );
+        assert_eq!(plan.selected.unwrap(), "Terminal");
+    }
+
+    #[test]
     fn suppress_never_falls_back_in_the_default_chain() {
         let plan = plan_default_chain(
             Err("tried Hyprland: refused"),
-            Some("Wayland"),
+            Ok("Wayland"),
             true,
             CapturePolicy::Suppress,
             false,

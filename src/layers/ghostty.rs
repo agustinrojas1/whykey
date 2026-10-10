@@ -6,7 +6,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
 use crate::xkb::{self, KeyboardLayout, LevelText, XkbState};
 
 const SHIFT_MASK: u32 = 1;
@@ -144,7 +144,8 @@ impl Ghostty {
                 );
             }
         };
-        let layer = inspect_config(key, &self.config_path, &config, layout);
+        let layer = inspect_config(key, &self.config_path, &config, layout)
+            .with_optional_tier(config.tier());
         let has_binding = config
             .bindings
             .iter()
@@ -226,6 +227,21 @@ impl Ghostty {
             }
         }
         load_config_file(&self.config_path)
+    }
+}
+
+impl ConfigState {
+    /// `ghostty +list-keybinds` (the only producer of `source`) evaluates
+    /// the active configuration the way Ghostty does; otherwise the loaded
+    /// files were read statically. `None` when no file was read.
+    fn tier(&self) -> Option<EvidenceTier> {
+        if self.source.is_some() {
+            Some(EvidenceTier::LiveQuery)
+        } else if !self.loaded_files.is_empty() {
+            Some(EvidenceTier::ConfigFile)
+        } else {
+            None
+        }
     }
 }
 
@@ -1081,6 +1097,25 @@ mod tests {
             input.as_ref().map(|input| input.bytes.as_slice()),
             Some(&[0x06][..])
         );
+    }
+
+    #[test]
+    fn list_keybinds_is_live_files_are_static_and_nothing_read_has_no_tier() {
+        let cli = parse_cli_keybinds("keybind = ctrl+t=new_tab\n").unwrap();
+        assert_eq!(cli.tier(), Some(EvidenceTier::LiveQuery));
+        let file = ConfigState {
+            loaded_files: vec![PathBuf::from("/home/u/.config/ghostty/config")],
+            ..ConfigState::default()
+        };
+        assert_eq!(file.tier(), Some(EvidenceTier::ConfigFile));
+        assert_eq!(ConfigState::default().tier(), None);
+
+        let missing = Ghostty {
+            config_path: PathBuf::from("/tmp/whykey-missing-config"),
+            use_cli: false,
+        };
+        let (layer, _) = missing.analyze(&"ctrl+t".parse().unwrap(), None, None);
+        assert_eq!(layer.tier, None);
     }
 
     #[test]

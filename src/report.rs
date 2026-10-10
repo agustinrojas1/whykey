@@ -1,7 +1,7 @@
 use crate::key::{KeyCombo, KeySequence};
 use crate::layers::{
-    BindingEvidence, LayerId, LayerResult, LayerStatus, Outcome, Propagation, UncertaintyReason,
-    format_bytes,
+    BindingEvidence, EvidenceTier, LayerId, LayerResult, LayerStatus, Outcome, Propagation,
+    UncertaintyReason, format_bytes,
 };
 use crate::listen::ObservedKey;
 use crate::schema;
@@ -128,7 +128,7 @@ fn render_json_for_operation(
         schema_version: 1,
         key,
         key_display: observed_key_display(key),
-        confidence: confidence_label(layers, observation_confirmed(observed)),
+        confidence: observation_confidence(layers, observed),
         observed: observed_v1,
         layers,
     })
@@ -156,7 +156,7 @@ pub fn render_ndjson(
             key_display: observed_key_display(key),
         },
         assessment: NdjsonAssessment {
-            confidence: confidence_label(layers, observation_confirmed(observed)),
+            confidence: observation_confidence(layers, observed),
             terminal_reached: observed
                 .is_some_and(|observation| observation.source.confirms_terminal()),
         },
@@ -201,10 +201,7 @@ fn render_json_v2(
             "key_display": observed_key_display(key),
         },
         "assessment": {
-            "confidence": confidence_label(
-                layers,
-                observation_confirmed(observed),
-            ),
+            "confidence": observation_confidence(layers, observed),
             "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
         },
         "observation": observed.and_then(observation_value_v2),
@@ -280,7 +277,7 @@ fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> Strin
     output.push_str(&options.accent(" · Listen"));
     output.push_str("\n\n");
     let diagnosis = format!(
-        "A key pressed with {modifiers} did not reach the window: the compositor/desktop or an input method consumed it."
+        "{modifiers} was pressed and released and no other key reached this window: either the key you pressed with {modifiers} was consumed by the compositor/desktop or an input method, or {modifiers} was pressed alone (or with the mouse)."
     );
     for line in style::wrap_hanging(&diagnosis, options.width, "", "  ") {
         output.push_str(&options.bold(line));
@@ -298,7 +295,7 @@ fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> Strin
     output.push_str(&options.accent("Effect"));
     output.push('\n');
     let effect = format!(
-        "Only modifier changes reached the focused probe window; the key pressed with {modifiers} never arrived. Pressing and releasing {modifiers} alone, without another key, looks the same."
+        "Only modifier changes reached the focused probe window. From inside the window, a key consumed above it and {modifiers} pressed alone or with the mouse look the same."
     );
     for line in style::wrap_hanging(&effect, options.width, "  ", "  ") {
         output.push_str(&line);
@@ -758,7 +755,7 @@ fn effect_text(
                 }
             }
             crate::listen::CaptureDisposition::NotDelivered => {
-                return "Only modifier changes reached the focused probe window; the key pressed with them never arrived.".into();
+                return "Only modifier changes reached the focused probe window: either the key pressed with them was consumed above the window, or the modifiers were pressed alone (or with the mouse).".into();
             }
             crate::listen::CaptureDisposition::ObservedOnly => {
                 if observation.source.confirms_terminal() {
@@ -1190,64 +1187,8 @@ fn next_steps(
     steps
 }
 
-/// How directly a layer's answer was established, strongest first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvidenceTier {
-    /// A capture saw the key pass (or stop at) this layer.
-    Observed,
-    /// The running program answered: compositor IPC, gsettings, kglobalaccel,
-    /// a shell runtime dump, tmux, or the X server's grab state.
-    LiveQuery,
-    /// Parsed from configuration files; the running program may differ.
-    ConfigFile,
-    /// Built-in defaults; the running program may differ.
-    Default,
-}
-
-impl EvidenceTier {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Observed => "observed",
-            Self::LiveQuery => "live query",
-            Self::ConfigFile => "config file (static)",
-            Self::Default => "default (unverified)",
-        }
-    }
-}
-
-/// Detail labels adapters attach when the running program answered. Order
-/// matters only for readability; any match settles the tier.
-const LIVE_QUERY_LABELS: &[&str] = &[
-    // X11 passive-grab probe.
-    "observed:",
-    // GNOME gsettings, KDE kglobalaccel D-Bus.
-    "source: live ",
-    // Shell runtime dumps loaded by shell-init.
-    "binding source: live ",
-    "binding source: current ",
-    // Sway/i3 get_config + get_binding_state IPC.
-    "source: parsed from running config via ",
-    "binding mode: ",
-    // Hyprland hyprctl IPC.
-    "active submap: ",
-    // tmux client state.
-    "active client key table: ",
-    // Other programs queried at runtime.
-    "source: gsettings ",
-    "source: xfconf-query ",
-    "source: herbstclient ",
-    "source: wezterm show-keys",
-    "source: zellij setup --dump-config",
-    "runtime mapping: ",
-    "runtime state: ",
-    // termios read from the terminal device.
-    "special character: ",
-];
-
-/// The evidence tier of one layer's answer, derived from the layer data:
-/// the capture that observed it, the typed binding uncertainty, then the
-/// adapter's labelled source details. `None` when nothing answered (an
+/// The evidence tier of one layer's answer: the capture that observed it,
+/// else the tier the adapter recorded. `None` when nothing answered (an
 /// unavailable integration or a layer with no recorded source).
 pub fn evidence_tier(
     layer: &LayerResult,
@@ -1256,39 +1197,10 @@ pub fn evidence_tier(
     if observation.is_some_and(|observed| observation_covers(observed, layer.id)) {
         return Some(EvidenceTier::Observed);
     }
-    if let Some(binding) = &layer.binding {
-        if binding.uncertainty == Some(UncertaintyReason::UnverifiedDefault) {
-            return Some(if binding.source.is_some() {
-                EvidenceTier::ConfigFile
-            } else {
-                EvidenceTier::Default
-            });
-        }
-    }
     if layer.status() == LayerStatus::Unavailable {
         return None;
     }
-    let details = || layer.all_details();
-    if details().any(|detail| {
-        LIVE_QUERY_LABELS
-            .iter()
-            .any(|label| detail.starts_with(label))
-    }) {
-        return Some(EvidenceTier::LiveQuery);
-    }
-    details().find_map(|detail| {
-        if let Some(source) = detail.strip_prefix("binding source: ") {
-            Some(if source.contains("default") {
-                EvidenceTier::Default
-            } else {
-                EvidenceTier::ConfigFile
-            })
-        } else if detail.starts_with("config: ") || detail.starts_with("source: ") {
-            Some(EvidenceTier::ConfigFile)
-        } else {
-            None
-        }
-    })
+    layer.tier
 }
 
 /// Layers a capture proves the key passed: everything above the point
@@ -2128,13 +2040,20 @@ fn observed_key_display(key: &KeyCombo) -> String {
     }
 }
 
-/// Whether the observation itself settles the outcome: the key reached the
-/// terminal, or it demonstrably never reached the probe window.
-fn observation_confirmed(observed: Option<&ObservedKey>) -> bool {
-    observed.is_some_and(|observation| {
-        observation.source.confirms_terminal()
-            || observation.disposition == crate::listen::CaptureDisposition::NotDelivered
-    })
+/// Confidence for a report that may carry an observation. A key that reached
+/// the terminal settles the outcome; modifiers that reached the probe window
+/// without a key cannot tell a consumed key from a lone modifier tap (or a
+/// modifier+mouse action), so that observation stays conditional.
+fn observation_confidence(layers: &[LayerResult], observed: Option<&ObservedKey>) -> &'static str {
+    if observed.is_some_and(|observation| {
+        observation.disposition == crate::listen::CaptureDisposition::NotDelivered
+    }) {
+        return "conditional";
+    }
+    confidence_label(
+        layers,
+        observed.is_some_and(|observation| observation.source.confirms_terminal()),
+    )
 }
 
 fn confidence_label(layers: &[LayerResult], observed: bool) -> &'static str {
@@ -3555,6 +3474,11 @@ mod tests {
     }
 
     fn readline_default(source: Option<crate::layers::SourceLocation>) -> LayerResult {
+        let tier = if source.is_some() {
+            EvidenceTier::ConfigFile
+        } else {
+            EvidenceTier::Default
+        };
         LayerResult::new(
             "Bash / Readline",
             LayerId::Shell,
@@ -3566,6 +3490,7 @@ mod tests {
             BindingEvidence::action("transpose-chars", BindingScope::Unknown, source)
                 .with_uncertainty(UncertaintyReason::UnverifiedDefault),
         )
+        .with_tier(tier)
     }
 
     #[test]
@@ -3622,7 +3547,8 @@ mod tests {
             .with_binding(
                 BindingEvidence::action("transpose-chars", BindingScope::Unknown, None)
                     .with_uncertainty(UncertaintyReason::UnverifiedDefault),
-            )];
+            )
+            .with_tier(EvidenceTier::Default)];
             let output = render_wide("ctrl+t", &layers);
             assert!(output.contains(&format!("{layer}'s default binds this to transpose-chars")));
             assert!(output.contains(&format!("Load live shell bindings: {command}")));
@@ -3708,31 +3634,24 @@ mod tests {
                 "binding: bindsym Mod4+t exec foot (/etc/sway/config:3)".into(),
             ],
         )
+        .with_tier(EvidenceTier::LiveQuery)
+    }
+
+    fn bash_snapshot() -> LayerResult {
+        LayerResult::new(
+            "Bash / Readline",
+            LayerId::Shell,
+            Outcome::Consumed,
+            "bound to forward-word",
+            vec!["binding source: current Bash bind -p snapshot".into()],
+        )
+        .with_tier(EvidenceTier::LiveQuery)
     }
 
     #[test]
-    fn evidence_tier_is_derived_from_layer_data() {
+    fn evidence_tier_is_the_adapter_tier_never_the_detail_wording() {
         let tier = |layer: &LayerResult| evidence_tier(layer, None);
         assert_eq!(tier(&sway_bind()), Some(EvidenceTier::LiveQuery));
-        let grab = LayerResult::consumed(
-            "Openbox",
-            LayerId::Compositor,
-            "an X11 client holds a grab on this shortcut (WM or hotkey daemon)",
-            vec![
-                "observed: the X server refused a core GrabKey on keycode 28 with Mod4 (BadAccess)"
-                    .into(),
-                "config: /root/.config/openbox/rc.xml".into(),
-            ],
-        );
-        assert_eq!(tier(&grab), Some(EvidenceTier::LiveQuery));
-        let static_only = LayerResult::new(
-            "sxhkd",
-            LayerId::Compositor,
-            Outcome::HandledUncertain,
-            "matching sxhkd shortcut configured",
-            vec!["config: /root/.config/sxhkd/sxhkdrc".into()],
-        );
-        assert_eq!(tier(&static_only), Some(EvidenceTier::ConfigFile));
         assert_eq!(tier(&readline_default(None)), Some(EvidenceTier::Default));
         assert_eq!(
             tier(&readline_default(Some(crate::layers::SourceLocation::new(
@@ -3741,27 +3660,28 @@ mod tests {
             )))),
             Some(EvidenceTier::ConfigFile)
         );
-        let snapshot = LayerResult::new(
-            "Bash / Readline",
-            LayerId::Shell,
-            Outcome::Consumed,
-            "bound to forward-word",
-            vec!["binding source: current Bash bind -p snapshot".into()],
+        assert_eq!(tier(&bash_snapshot()), Some(EvidenceTier::LiveQuery));
+        // Labels that once implied a tier no longer do: only the adapter
+        // decides.
+        let untyped = LayerResult::pass(
+            "tmux",
+            LayerId::Multiplexer,
+            "no binding",
+            vec![
+                "active client key table: unknown; assuming root".into(),
+                "source: live GSettings".into(),
+                "binding source: zsh defaults unavailable".into(),
+            ],
         );
-        assert_eq!(tier(&snapshot), Some(EvidenceTier::LiveQuery));
-        let default_pass = LayerResult::pass(
-            "Bash / Readline",
-            LayerId::Shell,
-            "not bound",
-            vec!["binding source: Readline default".into()],
-        );
-        assert_eq!(tier(&default_pass), Some(EvidenceTier::Default));
+        assert_eq!(tier(&untyped), None);
+        // Nothing answered for an unavailable layer, whatever it recorded.
         let unavailable = LayerResult::unavailable(
             "tmux",
             LayerId::Multiplexer,
             "tmux server is unreachable",
-            vec!["config: /home/user/.tmux.conf".into()],
-        );
+            vec![],
+        )
+        .with_tier(EvidenceTier::ConfigFile);
         assert_eq!(tier(&unavailable), None);
         assert_eq!(tier(&unevaluated_byte_layers()[3]), None);
     }
@@ -3774,13 +3694,7 @@ mod tests {
             evidence_tier(&sway_bind(), Some(&observed)),
             Some(EvidenceTier::Observed)
         );
-        let shell = LayerResult::new(
-            "Bash / Readline",
-            LayerId::Shell,
-            Outcome::Consumed,
-            "bound to forward-word",
-            vec!["binding source: current Bash bind -p snapshot".into()],
-        );
+        let shell = bash_snapshot();
         assert_eq!(
             evidence_tier(&shell, Some(&observed)),
             Some(EvidenceTier::LiveQuery)

@@ -250,7 +250,8 @@ pub fn inspect_with_report(
             }),
             has_universal_match: false,
             uncertainty: Some(crate::layers::UncertaintyReason::EndpointUnavailable),
-        });
+        })
+        .with_tier(crate::layers::EvidenceTier::ConfigFile);
     }
     LayerResult::pass(
         "Compositor extension",
@@ -258,6 +259,7 @@ pub fn inspect_with_report(
         format!("{} has no binding for {key}", adapter.display),
         vec![format!("manifest: {}", adapter.manifest_path.display())],
     )
+    .with_tier(crate::layers::EvidenceTier::ConfigFile)
 }
 
 pub fn focused_pid(adapter: &ExtensionAdapter) -> Result<u32, String> {

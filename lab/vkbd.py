@@ -116,7 +116,9 @@ def parse_chord(chord: str) -> tuple[list[tuple[int, int]], int]:
         if modifier is None:
             raise SystemExit(f"unknown modifier {part!r}")
         modifiers.append(modifier)
-    key = EVDEV.get(parts[-1].lower())
+    # A lone modifier ("shift") is a chord whose key is that modifier key.
+    name = parts[-1].lower()
+    key = EVDEV.get(name, MODIFIERS.get(name, (None,))[0])
     if key is None:
         raise SystemExit(f"unknown key {parts[-1]!r}")
     return modifiers, key

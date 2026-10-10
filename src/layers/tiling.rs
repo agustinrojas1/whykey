@@ -10,8 +10,8 @@ use std::process::Command;
 
 use crate::key::{KeyCombo, normalize_key_str};
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, LayerId, LayerResult, Outcome, SourceLocation,
-    UncertaintyReason,
+    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome,
+    SourceLocation, UncertaintyReason,
 };
 
 const DEFAULT_MODE: &str = "default";
@@ -1087,8 +1087,11 @@ pub(crate) fn inspect(
         )
     };
 
+    // The running compositor answered get_config, whether or not its binding
+    // mode could be read.
     let result = LayerResult::new(family.layer, LayerId::Compositor, outcome, summary, details)
-        .with_verbose_details(parsed.notes.clone());
+        .with_verbose_details(parsed.notes.clone())
+        .with_tier(EvidenceTier::LiveQuery);
     match primary {
         Some(binding) => {
             let mut evidence = BindingEvidence::action(
@@ -1500,6 +1503,22 @@ bar {
         let result = inspect(&SWAY, Err("swaymsg: not running".into()), &query("c"));
         assert_eq!(result.outcome, Outcome::Unavailable);
         assert_eq!(result.details, vec!["swaymsg: not running"]);
+    }
+
+    #[test]
+    fn running_config_answers_are_live_with_or_without_the_mode() {
+        for mode in [Some("default"), None] {
+            for combo in ["super+return", "ctrl+alt+f12"] {
+                let result = inspect(&SWAY, loaded(SWAY_CONFIG, mode), &query(combo));
+                assert_eq!(
+                    result.tier,
+                    Some(EvidenceTier::LiveQuery),
+                    "{combo} {mode:?}"
+                );
+            }
+        }
+        let unavailable = inspect(&SWAY, Err("swaymsg: not running".into()), &query("c"));
+        assert_eq!(unavailable.tier, None);
     }
 
     #[test]
