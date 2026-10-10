@@ -874,7 +874,7 @@ pub(crate) fn inspect(
     let candidates = in_mode
         .iter()
         .copied()
-        .filter(|binding| matches_key(binding))
+        .filter(matches_key)
         .collect::<Vec<_>>();
     let uncompared = in_mode
         .iter()
@@ -929,7 +929,7 @@ pub(crate) fn inspect(
             .bindings
             .iter()
             .filter(|binding| binding.mode != mode && !binding.release)
-            .filter(|binding| matches_key(binding))
+            .filter(matches_key)
             .collect::<Vec<_>>()
     } else {
         Vec::new()
