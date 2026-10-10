@@ -373,6 +373,34 @@ impl BindingRecord {
     }
 }
 
+/// How directly a layer's answer was established, strongest first. Adapters
+/// set it on the results they produce ([`LayerResult::with_tier`]); reports
+/// never infer it from evidence text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceTier {
+    /// A capture saw the key pass (or stop at) this layer.
+    Observed,
+    /// The running program answered: compositor IPC, gsettings, kglobalaccel,
+    /// a shell runtime dump, tmux, or the X server's grab state.
+    LiveQuery,
+    /// Parsed from configuration files; the running program may differ.
+    ConfigFile,
+    /// Built-in defaults; the running program may differ.
+    Default,
+}
+
+impl EvidenceTier {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Observed => "observed",
+            Self::LiveQuery => "live query",
+            Self::ConfigFile => "config file (static)",
+            Self::Default => "default (unverified)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerResult {
     pub layer: &'static str,
@@ -388,6 +416,9 @@ pub struct LayerResult {
     /// the key is held for composition, not bound, and no bytes are sent
     /// until the next key completes it.
     pub dead_key: Option<String>,
+    /// Where this answer came from; `None` when nothing answered for the
+    /// layer (not running, no data read).
+    pub tier: Option<EvidenceTier>,
 }
 
 impl Serialize for LayerResult {
@@ -429,7 +460,20 @@ impl LayerResult {
             verbose_details: Vec::new(),
             binding: None,
             dead_key: None,
+            tier: None,
         }
+    }
+
+    /// Record where this answer came from.
+    pub fn with_tier(mut self, tier: EvidenceTier) -> Self {
+        self.tier = Some(tier);
+        self
+    }
+
+    /// Record where this answer came from when known.
+    pub fn with_optional_tier(mut self, tier: Option<EvidenceTier>) -> Self {
+        self.tier = tier;
+        self
     }
 
     /// Attach typed binding evidence to the result.
@@ -450,16 +494,7 @@ impl LayerResult {
         summary: impl Into<String>,
         details: Vec<String>,
     ) -> Self {
-        Self {
-            layer,
-            id,
-            outcome: Outcome::Pass,
-            summary: summary.into(),
-            details,
-            verbose_details: Vec::new(),
-            binding: None,
-            dead_key: None,
-        }
+        Self::new(layer, id, Outcome::Pass, summary, details)
     }
 
     pub fn handled_and_passed(
@@ -496,16 +531,7 @@ impl LayerResult {
         summary: impl Into<String>,
         details: Vec<String>,
     ) -> Self {
-        Self {
-            layer,
-            id,
-            outcome: Outcome::Unavailable,
-            summary: summary.into(),
-            details,
-            verbose_details: Vec::new(),
-            binding: None,
-            dead_key: None,
-        }
+        Self::new(layer, id, Outcome::Unavailable, summary, details)
     }
 
     /// Legacy schema v1 status, derived from the typed outcome.

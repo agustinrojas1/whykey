@@ -4,30 +4,44 @@ use std::path::PathBuf;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
-    let (source, content, complete) = match config_path() {
+    // `zellij setup --dump-config` prints the defaults built into the
+    // installed binary, not the running session's state.
+    let (source, content, complete, tier) = match config_path() {
         Some(path) => match fs::read_to_string(&path) {
             Ok(content) if config_clears_defaults(&content) => (
                 format!("config: {} (clear-defaults)", path.display()),
                 content,
                 false,
+                EvidenceTier::ConfigFile,
             ),
             Ok(content) => match dump_default_config() {
                 Some(defaults) => (
                     format!("source: zellij defaults + config: {}", path.display()),
                     format!("{defaults}\n{content}"),
                     true,
+                    EvidenceTier::ConfigFile,
                 ),
-                None => (format!("config: {}", path.display()), content, false),
+                None => (
+                    format!("config: {}", path.display()),
+                    content,
+                    false,
+                    EvidenceTier::ConfigFile,
+                ),
             },
             Err(error) => {
                 return unavailable(format!("failed to read {}: {error}", path.display()));
             }
         },
         None => match dump_default_config() {
-            Some(content) => ("source: zellij setup --dump-config".into(), content, true),
+            Some(content) => (
+                "source: zellij setup --dump-config (built-in defaults)".into(),
+                content,
+                true,
+                EvidenceTier::Default,
+            ),
             None => {
                 return unavailable(
                     "Zellij is active but no config.kdl or dumpable default config was found"
@@ -59,7 +73,8 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
                 "binding consumes the key"
             },
             details,
-        );
+        )
+        .with_tier(tier);
     }
     details.push("no matching binding in the selected Zellij config/defaults".into());
     if !complete {
@@ -82,6 +97,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         },
         details,
     )
+    .with_tier(tier)
 }
 
 fn unavailable(message: String) -> LayerResult {

@@ -1,23 +1,32 @@
 {
   "id": "gnome-changed-unbound",
-  "description": "after rebinding switch-applications, <Super>Tab is no longer bound",
-  "tier": "runtime-setting",
-  "environment": "session",
+  "description": "after rebinding close to <Super>F9, Alt+F4 is no longer a mutter binding and reaches the probe window",
+  "tier": "observed",
+  "environment": "gnome",
   "session_setup": [
-    "gsettings set org.gnome.desktop.wm.keybindings switch-applications \"['<Super>F9']\""
+    "gsettings set org.gnome.desktop.wm.keybindings close \"['<Super>F9']\""
+  ],
+  "probe": "wayland",
+  "actions": [
+    {
+      "sleep": 0.5
+    },
+    {
+      "rdkbd": [
+        "alt+F4"
+      ]
+    }
   ],
   "ground_truth": {
     "fired": {
-      "sh": "for schema in org.gnome.desktop.wm.keybindings org.gnome.shell.keybindings org.gnome.mutter.keybindings org.gnome.mutter.wayland.keybindings org.gnome.settings-daemon.plugins.media-keys; do gsettings list-recursively $schema; done | grep -F \"'<Super>Tab'\""
-    }
+      "sh": "! pgrep -f 'lab/[k]eylog.py'"
+    },
+    "delivered": "probe"
   },
   "whykey": {
-    "args": ["super+Tab"],
-    "layer": "GNOME",
-    "env": {
-      "XDG_CURRENT_DESKTOP": "GNOME",
-      "XDG_SESSION_TYPE": "wayland",
-      "XDG_SESSION_DESKTOP": "gnome"
-    }
+    "args": [
+      "alt+F4"
+    ],
+    "layer": "GNOME"
   }
 }

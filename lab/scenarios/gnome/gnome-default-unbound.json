@@ -1,21 +1,26 @@
 {
   "id": "gnome-default-unbound",
-  "description": "<Super>y has no default GNOME binding",
-  "tier": "runtime-setting",
-  "environment": "session",
-  "session_setup": [],
+  "description": "<Super>y has no default GNOME binding: mutter delivers it to the focused probe window",
+  "tier": "observed",
+  "environment": "gnome",
+  "probe": "wayland",
+  "actions": [
+    {
+      "rdkbd": [
+        "super+y"
+      ]
+    }
+  ],
   "ground_truth": {
     "fired": {
-      "sh": "for schema in org.gnome.desktop.wm.keybindings org.gnome.shell.keybindings org.gnome.mutter.keybindings org.gnome.mutter.wayland.keybindings org.gnome.settings-daemon.plugins.media-keys; do gsettings list-recursively $schema; done | grep -F \"'<Super>y'\""
-    }
+      "sh": "! pgrep -f 'lab/[k]eylog.py'"
+    },
+    "delivered": "probe"
   },
   "whykey": {
-    "args": ["super+y"],
-    "layer": "GNOME",
-    "env": {
-      "XDG_CURRENT_DESKTOP": "GNOME",
-      "XDG_SESSION_TYPE": "wayland",
-      "XDG_SESSION_DESKTOP": "gnome"
-    }
+    "args": [
+      "super+y"
+    ],
+    "layer": "GNOME"
   }
 }

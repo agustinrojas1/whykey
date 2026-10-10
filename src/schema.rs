@@ -32,7 +32,7 @@ pub fn context_for_environment(environment: &crate::environment::Environment) ->
             None
         },
         "terminal": crate::layers::terminal_identity(),
-        "shell": env::var("SHELL").ok(),
+        "shell": (!environment.shell.is_empty()).then(|| environment.shell.clone()),
         "ssh": env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some(),
         "compositor_candidates": environment.compositor_candidates.iter().map(|candidate| json!({
             "id": candidate.id,

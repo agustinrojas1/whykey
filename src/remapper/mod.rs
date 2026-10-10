@@ -23,7 +23,8 @@ use serde::Serialize;
 
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, PhysicalInput, SourceLocation,
+    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, PhysicalInput,
+    SourceLocation,
 };
 use keys::{Press, QueryPresses};
 
@@ -331,7 +332,21 @@ pub fn inspect_with_detections(
     inspect_detections(key, physical_input, detections, keys::layout_is_us())
 }
 
+/// Remapper rules come from configuration files; the daemons are never asked.
 fn inspect_detections(
+    key: &KeyCombo,
+    physical_input: Option<&PhysicalInput>,
+    detections: &[Detection],
+    layout_us: bool,
+) -> LayerResult {
+    let tier = detections
+        .iter()
+        .any(|detection| !detection.configurations.is_empty())
+        .then_some(EvidenceTier::ConfigFile);
+    resolve_detections(key, physical_input, detections, layout_us).with_optional_tier(tier)
+}
+
+fn resolve_detections(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
     detections: &[Detection],
@@ -1653,6 +1668,13 @@ mod tests {
         // The nav layer is not active without its layer key, and F5 has no rule.
         let unbound = inspect_detections(&query("f5"), None, &[keyd], false);
         assert_eq!(unbound.outcome, Outcome::Pass);
+        // Rules come from keyd's configuration, whichever way they answer.
+        assert_eq!(result.tier, Some(EvidenceTier::ConfigFile));
+        assert_eq!(unbound.tier, Some(EvidenceTier::ConfigFile));
+        assert_eq!(
+            inspect_detections(&query("f5"), None, &[], false).tier,
+            None
+        );
     }
 
     #[test]

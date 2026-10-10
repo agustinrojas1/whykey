@@ -11,7 +11,8 @@ use crate::command;
 use crate::key::{KeyCombo, modifier_mask};
 use crate::layers::gsettings::quoted_values;
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, LayerId, LayerResult, Outcome, SourceLocation,
+    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome,
+    SourceLocation,
 };
 
 const LAYER: &str = "GNOME";
@@ -140,7 +141,8 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
             LayerId::Compositor,
             "no GNOME global shortcut uses this key",
             details,
-        );
+        )
+        .with_tier(EvidenceTier::LiveQuery);
     };
     for binding in &matches {
         details.push(format!(
@@ -187,6 +189,7 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
         details,
     )
     .with_binding(evidence)
+    .with_tier(EvidenceTier::LiveQuery)
 }
 
 fn load() -> Result<Loaded, String> {
@@ -520,5 +523,10 @@ mod tests {
             &"super+q".parse().unwrap(),
         );
         assert_eq!(unavailable.outcome, Outcome::Unavailable);
+        // Live GSettings answers both ways; an unreachable store answers
+        // nothing.
+        assert_eq!(hit.tier, Some(EvidenceTier::LiveQuery));
+        assert_eq!(miss.tier, Some(EvidenceTier::LiveQuery));
+        assert_eq!(unavailable.tier, None);
     }
 }

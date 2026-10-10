@@ -786,6 +786,10 @@ impl ProbeWindow for X11Window {
     fn focused(&self) -> bool {
         self.focused
     }
+
+    fn protocol(&self) -> &'static str {
+        "X11"
+    }
 }
 
 // ---------------------------------------------------------------------------

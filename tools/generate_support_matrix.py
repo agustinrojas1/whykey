@@ -11,6 +11,9 @@ Verification comes from reality, not from fixtures:
               that no longer exist are dropped. Scenarios a run skipped
               (`run.py --only`) keep their earlier standing.
     live      what the maintainer verified by hand on a real desktop.
+    lab_scope optional: what the lab scenarios do not reach (e.g. GNOME
+              Shell, which cannot start in the lab container), shown next to
+              the lab verification so a partial proof is not read as a full one.
 
 `--check` never reads lab/results.json (it is untracked and differs per
 run): it verifies that SUPPORT_MATRIX.md matches the manifest and that every
@@ -72,7 +75,7 @@ def load_document() -> dict[str, object]:
         if not isinstance(entry, dict):
             raise SystemExit("support-matrix entries must be objects")
         required = {"id", "area", "implemented", "summary", "lab"}
-        if not required <= set(entry) <= required | {"live"}:
+        if not required <= set(entry) <= required | {"live", "lab_scope"}:
             raise SystemExit(f"invalid support-matrix entry keys: {entry}")
         identifier = entry["id"]
         if not isinstance(identifier, str) or not identifier or identifier in seen:
@@ -88,6 +91,8 @@ def load_document() -> dict[str, object]:
             raise SystemExit(f"lab scenarios must be sorted and unique: {identifier}")
         if "live" in entry and (not isinstance(entry["live"], str) or not entry["live"]):
             raise SystemExit(f"invalid live verification note: {identifier}")
+        if "lab_scope" in entry and (not isinstance(entry["lab_scope"], str) or not entry["lab_scope"]):
+            raise SystemExit(f"invalid lab scope note: {identifier}")
         seen.add(identifier)
     return document
 
@@ -166,7 +171,8 @@ def verification(entry: dict[str, object]) -> str:
     parts = []
     lab = entry["lab"]
     if lab:
-        parts.append(f"lab-verified ({len(lab)} scenario{'' if len(lab) == 1 else 's'})")
+        scope = f"; {entry['lab_scope']}" if "lab_scope" in entry else ""
+        parts.append(f"lab-verified ({len(lab)} scenario{'' if len(lab) == 1 else 's'}{scope})")
     if "live" in entry:
         parts.append(f"live-verified on maintainer machine: {entry['live']}")
     return "; ".join(parts) or "unverified"
@@ -184,9 +190,12 @@ def markdown(entries: list[dict[str, object]]) -> str:
         "",
         "Verification is what reality confirmed: *lab-verified* entries name the",
         "[lab](lab/run.py) scenarios where the real program agreed with whykey (see",
-        "[Lab evidence](#lab-evidence)); *live-verified* entries were checked by hand",
-        "on the maintainer's desktop; everything else is *unverified*, however well",
-        "its fixtures pass.",
+        "[Lab evidence](#lab-evidence)). A scenario counts only when a positive",
+        "control observed the key (it fired, reached a probe, or reached the layer)",
+        "and whykey's verdict matched exactly; a tolerated uncertain answer (PASS~)",
+        "never counts. *live-verified* entries were checked by hand on the",
+        "maintainer's desktop; everything else is *unverified*, however well its",
+        "fixtures pass.",
         "",
         "| ID | Area | Implementation | Verification | Scope |",
         "| --- | --- | --- | --- | --- |",

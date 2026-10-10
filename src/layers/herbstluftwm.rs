@@ -9,7 +9,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_BINDINGS: usize = 4096;
 
@@ -74,7 +74,8 @@ impl Herbstluftwm {
                 Outcome::Pass,
                 "no matching herbstluftwm key binding found",
                 vec!["source: herbstclient list_keybinds".into()],
-            );
+            )
+            .with_tier(EvidenceTier::LiveQuery);
         }
         let mut details = vec!["source: herbstclient list_keybinds".into()];
         details.extend(
@@ -90,6 +91,7 @@ impl Herbstluftwm {
             "herbstluftwm exposes a matching key binding",
             details,
         )
+        .with_tier(EvidenceTier::LiveQuery)
     }
 }
 

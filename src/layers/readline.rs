@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::layers::{
-    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, SourceLocation, TerminalInput,
-    UncertaintyReason, format_bytes, terminal,
+    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, SourceLocation,
+    TerminalInput, UncertaintyReason, format_bytes, terminal,
 };
 
 const LAYER: &str = "Bash / Readline";
@@ -185,7 +185,9 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
     // The action an unverified (non-snapshot) answer rests on, with the entry
     // whose source it came from when one is known.
     let mut default_action: Option<(String, Option<&Entry>)> = None;
-    let (outcome, summary) = match keymap.resolve(&bytes) {
+    let resolution = keymap.resolve(&bytes);
+    let tier = keymap.tier(&resolution);
+    let (outcome, summary) = match resolution {
         Resolution::Bound {
             entry,
             continuations,
@@ -271,7 +273,8 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
         details.push(alias.into());
     }
     if keymap.origin == Origin::Snapshot {
-        return LayerResult::new(LAYER, LayerId::Shell, outcome, summary, details);
+        return LayerResult::new(LAYER, LayerId::Shell, outcome, summary, details)
+            .with_optional_tier(tier);
     }
     // Without the live `bind` snapshot, startup files can rebind any key
     // (fzf binds \C-r and \C-t with `bind -x`), so no answer is definitive.
@@ -280,7 +283,8 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
         Outcome::Consumed => Outcome::HandledUncertain,
         _ => Outcome::UncertainContinues,
     };
-    let result = LayerResult::new(LAYER, LayerId::Shell, outcome, summary, details);
+    let result =
+        LayerResult::new(LAYER, LayerId::Shell, outcome, summary, details).with_optional_tier(tier);
     match default_action {
         Some((action, entry)) => result.with_binding(unverified_evidence(action, entry)),
         None => result,
@@ -339,6 +343,9 @@ struct Entry {
     action: Action,
     value: String,
     source: String,
+    /// A Readline built-in default rather than a binding some file or the
+    /// live shell declared.
+    builtin: bool,
 }
 
 impl Entry {
@@ -349,6 +356,7 @@ impl Entry {
             action,
             value: value.to_owned(),
             source: source.into(),
+            builtin: false,
         }
     }
 
@@ -478,8 +486,9 @@ impl Keymap {
         // Later inputrc declarations override earlier ones.
         entries.extend(inputrc.iter().rev().cloned());
         if emacs {
-            entries.extend(EMACS_DEFAULTS.iter().map(|(notation, function)| {
-                Entry::new(notation, Action::Function, function, "Readline default")
+            entries.extend(EMACS_DEFAULTS.iter().map(|(notation, function)| Entry {
+                builtin: true,
+                ..Entry::new(notation, Action::Function, function, "Readline default")
             }));
         }
         Self {
@@ -496,6 +505,35 @@ impl Keymap {
                 "Readline defaults, INPUTRC and startup-file bind commands"
             }
             Origin::Files { emacs: false } => "INPUTRC and startup-file bind commands",
+        }
+    }
+
+    /// Where the answer for `resolution` came from: the live snapshot, the
+    /// entries it rests on (built-in defaults or the user's INPUTRC and
+    /// startup-file bindings), or, for an unbound key, every binding that
+    /// was consulted. `None` when nothing was read (vi mode without any user
+    /// binding: vi defaults are not modelled).
+    fn tier(&self, resolution: &Resolution<'_>) -> Option<EvidenceTier> {
+        let Origin::Files { emacs } = self.origin else {
+            return Some(EvidenceTier::LiveQuery);
+        };
+        let from = |builtin: bool| {
+            Some(if builtin {
+                EvidenceTier::Default
+            } else {
+                EvidenceTier::ConfigFile
+            })
+        };
+        match resolution {
+            Resolution::Bound { entry, .. } => from(entry.builtin),
+            Resolution::Prefix { continuations, .. } => {
+                from(continuations.iter().all(|entry| entry.builtin))
+            }
+            Resolution::Unbound if self.entries.iter().any(|entry| !entry.builtin) => {
+                Some(EvidenceTier::ConfigFile)
+            }
+            Resolution::Unbound if emacs => Some(EvidenceTier::Default),
+            Resolution::Unbound => None,
         }
     }
 
@@ -1383,5 +1421,50 @@ bind "$var"
         assert_eq!(result.summary, "bound to local");
         assert_eq!(result.outcome, Outcome::HandledUncertain);
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn tier_names_the_source_the_answer_rests_on() {
+        let unbound: &[u8] = b"\x1b[99~";
+        assert_eq!(
+            inspect(&live(), &[&[0x14]]).tier,
+            Some(EvidenceTier::LiveQuery)
+        );
+        assert_eq!(
+            inspect(&live(), &[unbound]).tier,
+            Some(EvidenceTier::LiveQuery)
+        );
+        assert_eq!(
+            inspect(&defaults(), &[&[0x14]]).tier,
+            Some(EvidenceTier::Default)
+        );
+        assert_eq!(
+            inspect(&defaults(), &[unbound]).tier,
+            Some(EvidenceTier::Default)
+        );
+        // vi mode with no user binding: nothing modelled was read.
+        let vi = Keymap::from_files(&[], &[], false);
+        assert_eq!(inspect(&vi, &[unbound]).tier, None);
+
+        let mut bashrc = Bashrc::default();
+        bashrc.apply_script(
+            "bind -x '\"\\C-t\": touch /tmp/fired'\n",
+            Path::new("/home/user/.bashrc"),
+        );
+        let keymap = Keymap::from_files(&bashrc.effective(false), &[], true);
+        assert_eq!(
+            inspect(&keymap, &[&[0x14]]).tier,
+            Some(EvidenceTier::ConfigFile)
+        );
+        // A built-in default still answers for its own key, while an
+        // unbound key consulted the user's bindings too.
+        assert_eq!(
+            inspect(&keymap, &[&[0x01]]).tier,
+            Some(EvidenceTier::Default)
+        );
+        assert_eq!(
+            inspect(&keymap, &[unbound]).tier,
+            Some(EvidenceTier::ConfigFile)
+        );
     }
 }

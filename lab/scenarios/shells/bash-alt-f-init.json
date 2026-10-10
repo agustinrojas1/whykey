@@ -36,7 +36,8 @@
     "fired": {
       "file": "/tmp/effect",
       "equals": "abX cd"
-    }
+    },
+    "reached": "fired"
   },
   "whykey": {
     "args": [

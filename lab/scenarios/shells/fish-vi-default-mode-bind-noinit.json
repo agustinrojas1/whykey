@@ -1,6 +1,6 @@
 {
   "id": "fish-vi-default-mode-bind-noinit",
-  "description": "with fish_vi_key_bindings, a plain `bind ctrl-t` belongs to mode default (normal) and does not fire at the insert prompt",
+  "description": "with fish_vi_key_bindings, a plain `bind ctrl-t` belongs to mode default (normal) and does not fire at the insert prompt; fish's line editor reads ^T and drops it (the bytes typed before and after it reach the executed command line)",
   "tier": "observed",
   "environment": "pty",
   "files": {
@@ -21,7 +21,13 @@
   },
   "actions": [
     {
+      "type": "echo ab"
+    },
+    {
       "type": "\\x14"
+    },
+    {
+      "type": "cd > /tmp/effect\\r"
     },
     {
       "sleep": 0.5
@@ -30,6 +36,10 @@
   "ground_truth": {
     "fired": {
       "file": "/tmp/fired"
+    },
+    "reached": {
+      "file": "/tmp/effect",
+      "equals": "abcd"
     }
   },
   "whykey": {

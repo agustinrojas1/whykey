@@ -81,7 +81,37 @@ filtering, chord-release handling, disconnects, retries, stale tokens, and
 pass-through behavior without requiring a live compositor. Live tests belong in
 the ignored integration suite and must never run in CI.
 
-The current registry has Hyprland and Sway native backends. Sway is
-pass-through-only because its IPC has no suppression hook; portals and
-extension capture can be added without changing report routing or the terminal
-fallback.
+The current registry has Hyprland and Sway native backends. Hyprland needs a
+Lua configuration: `connect()` first sends a harmless `hyprctl eval`, and
+when Hyprland rejects it ("eval is only supported with the lua config
+manager") the backend reports itself unavailable instead of failing to arm.
+Sway is pass-through-only because its IPC has no suppression hook, and it
+reports only keys that ran a Sway binding.
+
+## Default chain and the probe window
+
+Without a forcing option, `listen` plans its chain in `src/listen/mod.rs`:
+native compositor capture, then the probe window (`CaptureBackendId::Window`,
+`src/listen/window.rs`) when `WAYLAND_DISPLAY` or `DISPLAY` is usable and the
+session is not remote, then terminal capture. A stage that fails to open
+prints its reason to stderr, and the next stage is tried. `--suppress` never
+falls back. `--dry-run` and `--explain-capture` print the planned chain with
+a reason for each stage.
+
+The probe window is not a native backend. It is a whykey-owned client behind
+the `ProbeWindow` trait in `src/probe/mod.rs`. The trait has
+`next_event(timeout)` and `focused()`, and `open_window` tries Wayland
+(`src/probe/wayland.rs`, wayland-client with xdg-shell) and then X11
+(`src/probe/x11.rs`, x11rb). It reports `ProbeEvent`s with XKB keycodes and
+X11-style modifier bits. Its observation source is `{"kind":"probe-window"}`.
+A delivered key proves delivery past the remapper and compositor. When
+modifiers go from held back to none with no other key, the disposition is
+`NotDelivered`. That verdict is conditional, because a lone modifier tap
+produces the same events.
+
+The same `src/probe/x11.rs` connection provides `grab_status`, which
+`src/layers/x11_grab.rs` uses during inspection to test passive grabs on the
+root window.
+
+Portals and extension capture can be added without changing report routing
+or the fallbacks.

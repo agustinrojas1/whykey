@@ -1,4 +1,4 @@
-.TH WHYKEY 1 "October 2026" "whykey 1.5.0" "User Commands"
+.TH WHYKEY 1 "October 2026" "whykey 2.0.0" "User Commands"
 .SH NAME
 whykey \- explain which layer handles a keyboard shortcut
 .SH SYNOPSIS
@@ -14,7 +14,7 @@ whykey \- explain which layer handles a keyboard shortcut
 .B whykey listen
 .RB \%[ --repeat "] \%[" --timeout\ seconds "] \%[" --count\ n "] \%[" --events\ all ]
 .RB \%[ --suppress " | \%" --no-suppress " | \%" --pass-through ]
-.RB \%[ --dry-run "] \%[" --explain-capture "] \%[" --terminal "] \%[" --evdev "] \%[" --device\ path ]
+.RB \%[ --dry-run "] \%[" --explain-capture "] \%[" --window " | \%" --terminal " | \%" --evdev "] \%[" --device\ path ]
 .RB \%[ --output\ path "] \%[" --verbose "] \%[" --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 ]
 .RB \%[ --schema-version\ 1|2 "] \%[" --ndjson ]
 .br
@@ -64,30 +64,53 @@ interactive application, and the shell.
 It never edits configuration files and never executes the inspected
 shortcut.
 .B listen
-on Hyprland installs a temporary, leased Lua hook (see
-.BR listen ),
-and compositor extension manifests and
+on Hyprland installs a temporary, leased Lua hook, and the probe window maps
+one small window (see
+.BR listen ).
+On a native X11 session, inspection takes passive key grabs for a moment and
+releases them at once. Compositor extension manifests and
 .B whykey extension
 run the programs the user configured or named.
 .PP
-Uncertainty is reported explicitly, with a text assessment or JSON
-.B confidence
-of configured, confirmed, or conditional. A captured key in
+Answers come from the strongest source available. Observing the key with
 .B listen
-in its default mode proves that the event reached the current terminal, but
-cannot prove what a compositor binding that captured the key would have done.
+comes first. Asking the running program comes next: compositor IPC, the X
+server's grab state, GSettings, kglobalaccel, tmux, or a shell's live
+bindings. Configuration files and built-in defaults come last. Each layer row
+ends with its evidence tier:
+.BR observed ,
+.BR "live query" ,
+.BR "config file (static)" ,
+or
+.BR "default (unverified)" .
+JSON v2 and NDJSON path entries carry the same tier as
+.B tier
+.RB ( observed ", " live_query ", " config_file ", " default );
+schema v1 is unchanged. Uncertainty is also reported as a text assessment or
+JSON
+.B confidence
+of configured, confirmed, or conditional.
+.PP
+What a capture proves depends on its backend. A key that reaches the
+terminal proves that the remapper, compositor, and terminal passed it on. A
+key that reaches the probe window proves that the desktop and any input
+method delivered it to a client. A native compositor capture proves that the
+compositor received the key.
 .B listen --evdev
 proves only that a physical input event was generated before compositor
 processing.
 .B doctor
-also lists candidate keyboard event paths, device names, and read errors so
-that input-group permission problems can be diagnosed without changing device
-state. When evdev is unavailable it names the cause: no
+lists the observation taps available now, the source (live query, config
+file, or none) of each layer, and candidate keyboard event paths with their
+device names and read errors. When evdev is unavailable it names the cause: no
 .I /dev/input
 (not-installed), no keyboard event devices (api-does-not-expose), or
 keyboards or a
 .I /dev/input
-that cannot be read (permission-missing).
+that cannot be read (permission-missing). For unreadable keyboards it prints a
+temporary
+.B setfacl
+grant for exactly those device nodes; the grant is lost on replug or reboot.
 In an SSH session without local Hyprland IPC, Hyprland is reported as not
 applicable and the remote terminal path remains a valid doctor target.
 .PP
@@ -96,30 +119,54 @@ Cinnamon, MATE, Niri, dwl, River, Wayfire, labwc, bspwm/sxhkd, Openbox, X11
 xbindkeys, AwesomeWM, Qtile, and XMonad. Sway and i3 are read by parsing the
 running configuration returned by
 .B get_config
-and matching the mode reported by
+(i3 with
+.BR "i3-msg -r" ,
+falling back to plain text on i3-msg older than 4.20) and matching the mode
+reported by
 .BR get_binding_state .
-KDE Plasma and the Niri, dwl, River, Wayfire, labwc, sxhkd, Openbox,
-xbindkeys, AwesomeWM, Qtile, and XMonad adapters parse configuration files
-only and cannot observe runtime activation. sxhkd has no include directive;
-whykey reads
+An i3
+.B --release
+binding consumes the key: the focused client receives neither the press nor
+the release. A Sway one runs on release while the client receives both.
+GNOME is read live with
+.B gsettings
+from the mutter, window-manager, GNOME Shell, media-key, and custom
+keybinding schemas, using mutter's accelerator rules. KDE Plasma asks the
+running kglobalaccel over D-Bus
+.RB ( globalShortcutsByKey ,
+then the component's
+.BR isActive )
+and never starts it; without the daemon,
+.B kglobalshortcutsrc
+is read and a match there is never reported as consumed. Xfce is queried
+through the live
+.B xfce4-keyboard-shortcuts
+channel; Cinnamon and MATE are queried through their GSettings schemas.
+The Niri, dwl, River, Wayfire, labwc, sxhkd, Openbox, xbindkeys, AwesomeWM,
+Qtile, and XMonad adapters parse configuration files. sxhkd has no include
+directive; whykey reads
 .BR SXHKD_CONFIG ,
 otherwise the
 .B -c
 file and extra configuration files of the running sxhkd, otherwise the
-default sxhkdrc. An i3
-.B --release
-binding is reported as consuming the key press, as i3's source shows; a Sway
-one forwards the press.
-Xfce is queried through the live
-.B xfce4-keyboard-shortcuts
-channel; Cinnamon and MATE are queried through their GSettings schemas. These
-queries are read-only and only report accelerator values exposed by the active
-session.
+default sxhkdrc.
 .PP
-The doctor command also introspects KDE KGlobalAccel, xdg-desktop-portal
-GlobalShortcuts, and GNOME Shell through bounded read-only D-Bus queries. It
-reports service reachability and explicit API limits; it never registers a
-shortcut or invents a binding list.
+On a native X11 session (no Wayland display), whykey asks the X server
+whether another client holds a passive grab for the key on the root window,
+through core
+.B GrabKey
+and XInput2 with the Lock and NumLock variants. A grab confirms the selected
+window manager or hotkey daemon binding as consuming the key, and a grab that
+no adapter claims is shown as an
+.B X11 key grab
+layer. A free key means only that no client holds a root-window grab for it,
+and a configured binding is then reported as inactive. Under XWayland a grab
+only adds a note; over SSH the probe is skipped. The X server does not say
+which client holds a grab.
+.PP
+The doctor command also checks kglobalaccel, GNOME GSettings, and
+xdg-desktop-portal GlobalShortcuts through bounded read-only queries. It never
+starts a service, registers a shortcut, or invents a binding list.
 .PP
 External integration commands use a two-second timeout and a one-megabyte
 stdout/stderr limit. Set
@@ -222,8 +269,27 @@ running. The selection is scoped to this inspection and does not change the
 user's environment.
 .TP
 .B listen
-Capture the next key reaching the terminal or, when available, through native
-compositor capture (Hyprland, or Sway IPC). On Hyprland,
+Capture the next key and explain its path. Without a forcing option the
+first usable backend wins:
+.RS
+.IP 1. 4
+native compositor capture: Hyprland with a Lua configuration
+.RI ( hyprland.lua ),
+or Sway IPC, which reports only keys that ran a Sway binding;
+.IP 2. 4
+a probe window, when a Wayland or X11 display is usable and the session is
+not remote (SSH);
+.IP 3. 4
+terminal capture.
+.RE
+.IP
+When a stage cannot open, the reason goes to stderr and the next stage is
+tried. Under a Hyprland
+.I .conf
+configuration Hyprland rejects
+.BR "hyprctl eval" ,
+so native capture reports that it needs a Lua config and the probe window is
+used. On Hyprland,
 .B listen
 installs a temporary Lua hook: the default pass-through hook only observes,
 and
@@ -232,6 +298,8 @@ also activates a private submap and restores the previous submap before
 reporting. Each hook holds a 5-second lease that
 .B listen
 renews; it is removed on exit, and Hyprland drops it if the lease expires.
+The hook reports only a keycode, read with the main keyboard's layout, so a
+virtual keyboard with its own keymap (such as wtype) is misread.
 Configuration files are never edited. Press Escape or Ctrl+C to exit.
 With the Kitty keyboard protocol active (Kitty, Ghostty, foot, WezTerm),
 Ctrl+Z is captured and explained like any other key. On legacy-encoding
@@ -250,15 +318,38 @@ sets a wall-clock deadline for the capture.
 .B --count n
 stops after n captured reports.
 .B --events all
-includes modifier-only and release events with native compositor or evdev
-capture.
+includes modifier-only and release events with native compositor, probe
+window, or evdev capture.
+.TP
+.BR --window ", " -w
+Force the probe window: a small focused Wayland window (app_id
+.BR whykey-probe ),
+or an X11 window when no Wayland display is usable, titled
+"whykey: press a shortcut here (Esc exits)". Press the shortcut there. A key
+that arrives was delivered by the compositor, window manager, hotkey daemons,
+and input method. When only modifier changes arrive, the report says the key
+was probably not delivered: something above the window consumed it (JSON
+disposition
+.BR not_delivered ).
+Pressing and releasing a modifier alone looks exactly the same, so this
+verdict is conditional, never confirmed; the window also cannot tell which
+program took the key. In an SSH session the default chain skips the window,
+but this option still opens it. No permission is needed. It cannot be
+combined with
+.BR --terminal ,
+.BR --evdev ,
+.BR --device ,
+or
+.B --suppress
+(status 2).
 .TP
 .B --suppress
 Opt into temporarily suppressing native compositor shortcuts while capturing.
 Only Hyprland supports suppression. When native suppression is unavailable
-(including on Sway), the command fails with status 1 instead of falling back
-to terminal capture. Combining it with
+(including on Sway), the command fails with status 1 and never falls back to
+the probe window or terminal capture. Combining it with
 .BR --terminal ,
+.BR --window ,
 .BR --evdev ,
 .BR --device ,
 or
@@ -272,10 +363,11 @@ is the default; the option states it explicitly.
 is a compatibility alias.
 .TP
 .B --dry-run
-Select a capture backend and policy without arming it.
+Print the numbered capture chain with the reason each stage was selected,
+skipped, or not needed, and the backend it would use, without arming it.
 .TP
 .B --explain-capture
-Print the compositor detection and capture-factory evidence.
+Print the compositor detection evidence and the capture chain.
 .TP
 .B listen --evdev [--device path]
 On Linux, capture readable EV_KEY events from input devices before the
@@ -283,6 +375,11 @@ compositor. This mode is read-only and does not grab devices; without
 .B --device
 it scans
 .IR /dev/input/event* .
+It needs read access to the keyboard event devices;
+.B whykey doctor
+prints a temporary
+.B setfacl
+command for the ones it cannot open.
 .TP
 .B snapshot combination [--output path]
 Save a versioned static diagnostic snapshot for one key combination. The
@@ -304,9 +401,18 @@ emits a versioned list of before/after values.
 Check read-only prerequisites and report which integrations are available.
 It also reports detected keyd, kanata, kmonad, input-remapper, and xremap
 processes or configuration files and their literal mappings; transformations
-that cannot be observed remain conditional. For evdev it reports a cause
-(not-installed, permission-missing, or api-does-not-expose), a detail, and a
-matching next check.
+that cannot be observed remain conditional. It lists the observation taps
+available now (native compositor, probe window, X11 grab probe, terminal,
+evdev) and, for each layer, whether its answer comes from a live query, a
+config file, or nothing; JSON v2 carries them as
+.B observation_taps
+and
+.BR layer_sources .
+For evdev it reports a cause (not-installed, permission-missing, or
+api-does-not-expose), a detail, and a matching next check, which for
+unreadable keyboards is a temporary
+.B setfacl
+grant on exactly those device nodes.
 .TP
 .B capabilities
 Report the versioned support matrix for the current binary and environment.
@@ -370,7 +476,8 @@ to add conditional static bindings and optional focused-window PID evidence
 for an otherwise unsupported compositor. Commands are argv arrays, bounded to
 two seconds and one MiB. Tier 4 manifests never provide
 .B listen
-capture; native Hyprland and Sway, terminal, and evdev remain the capture transports.
+capture; native Hyprland and Sway, the probe window, terminal, and evdev
+remain the capture transports.
 .TP
 .B replay file
 Read and render one or more concatenated schema-v1 or schema-v2 JSON reports
@@ -381,9 +488,23 @@ devices, execute actions, or inject keys. Files are limited to 16 MiB.
 Print an optional shell wrapper that supplies live binding snapshots to
 .B whykey .
 Evaluate it in the current shell; it does not modify shell startup files.
-Without it, Bash answers come from inputrc files and Readline defaults, and
-Zsh and Fish answers come from literal configuration and common defaults.
-Answers based on defaults are reported as unverified.
+The shell is found from the process tree, not from
+.BR $SHELL .
+Without the wrapper, Bash answers come from
+.B bind
+commands in
+.I ~/.bashrc
+and
+.IR /etc/bash.bashrc ,
+inputrc files, and Readline defaults; Zsh and Fish answers come from the
+installed shell's own defaults
+.RB ( "zsh -f" ,
+.BR "fish --no-config" )
+plus the
+.B bindkey
+or
+.B bind
+lines in their startup files. Such answers are reported as unverified.
 .TP
 .B completions bash|zsh|fish
 Print a completion script for the selected shell. The scripts are generated
@@ -455,11 +576,15 @@ Stop after the given positive number of captured reports. A count greater
 than one implies repeated capture.
 .TP
 .B --events all
-Include modifier-only and release events with native compositor or evdev
-capture. Normal capture reports completed key presses.
+Include modifier-only and release events with native compositor, probe
+window, or evdev capture. Normal capture reports completed key presses.
 .TP
 .B --terminal
 Force terminal-only capture of keys that reach the terminal.
+.TP
+.BR --window ", " -w
+Force capture through the probe window. See
+.BR listen .
 .TP
 .BI --output path
 Write listen reports to a file.
@@ -488,14 +613,19 @@ An unavailable prerequisite or inspection error.
 .TP
 .B 2
 Invalid command-line usage or key combination, including an unknown key name,
-two different JSON schema selections, and a
+two different JSON schema selections, a
 .B --suppress
-combination that cannot suppress.
+combination that cannot suppress, and
+.B --window
+combined with another capture backend.
 .SH EXAMPLES
 .EX
 whykey ctrl+left
 whykey ctrl+z
 whykey listen
+whykey listen --window --repeat
+whykey listen --dry-run
+whykey doctor
 whykey --json ctrl+left
 whykey extension extensions/whykey-nvim ctrl+x
 whykey extension extensions/whykey-vscode ctrl+x

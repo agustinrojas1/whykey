@@ -17,8 +17,8 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
 
     id            unique name, equal to the file stem
     description   one line: what reality is being checked
-    tier          "observed" (a program reacted to input) or "runtime-setting"
-                  (a running settings store was queried; no input involved)
+    tier          "observed": a real program reacted to real input (the only
+                  tier; settings-store reads alone never verify anything)
     environment   "sway"    headless Sway; config at sway.config
                             (default /root/.config/sway/config)
                   "hyprland" Hyprland 0.56.2 in a KVM guest booted inside the
@@ -34,9 +34,14 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                             until the daemon holds that X11 key grab
                             (lab/xgrab.py); i3 also exports I3SOCK; then
                             x11.settle seconds (default 0.5)
+                  "gnome"   headless mutter (GNOME's compositor and window
+                            manager) on a virtual monitor; GNOME Shell does
+                            not start in a container (no systemd-logind), so
+                            only mutter-owned keybindings behave for real;
+                            whykey gets XDG_CURRENT_DESKTOP=GNOME
                   "pty"     pty.command started on a pseudo-terminal (TERM,
                             pty.env); `type` actions are keystrokes into it
-                  "session" only the session D-Bus (always started)
+    A session D-Bus is always started.
     files         {path: text or list of lines} written before anything starts
     setup         shell commands run before the session starts
     session_setup shell commands run after the environment is up
@@ -45,21 +50,34 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
     actions       ordered list, each one of
                   {"vkbd": ["super+t", ...]}  Wayland virtual keyboard with the
                   real US keymap and evdev keycodes (lab/vkbd.py)
+                  {"rdkbd": ["alt+F4", ...]}  the same chords through mutter's
+                  RemoteDesktop D-Bus API (lab/rdkbd.py; "gnome" only)
                   {"wtype": [args]}  {"xdotool": [args]}  {"type": "bytes"}
                   {"sh": "cmd"}  {"sleep": seconds}  {"wait_quiet": seconds}
                   {"start_whykey": true}  start a "run": "background" whykey
                   here instead of before the first action
                   ("type" accepts \\xNN, \\e, \\r escapes; optional "settle")
-    ground_truth  {"fired": CHECK, "delivered": "probe" | CHECK}
+    ground_truth  {"fired": CHECK, "delivered": "probe" | CHECK,
+                   "reached": "fired" | CHECK}
                   CHECK = {"file": path[, "equals": text]}
-                        | {"gsettings": [schema, key], "contains": accel}
                         | {"sh": "cmd"} (exit 0 = true)
+                        | {"probe": "any"} (the probe received any key
+                          press, modifiers included)
                   "fired": did the layer under test act on the key.
-                  "delivered": did the key continue past it (optional).
+                  "delivered": did the key continue past it ("probe": the
+                  probe received a non-modifier key).
+                  "reached": positive control that the key arrived at the
+                  layer at all. A layer that is the key's last consumer (a
+                  shell's line editor: whether it runs a widget or inserts
+                  the key, nothing receives it next) has no "delivered";
+                  "reached" is then required ("fired" = the fired check
+                  already proves it). Every scenario needs "delivered" or
+                  "reached"; observation scenarios need "delivered".
     whykey        {"args": [...], "layer": name or [names], "env": {...},
                    "run": "direct" | "pty" | "background", "command": "whykey",
                    "accept": [...], "summary": "text", "detail": "text",
-                   "observation": bool, "combo": {...}, "stderr": "text"}
+                   "observation": bool, "combo": {...}, "stderr": "text",
+                   "confidence": "label"}
                   "pty" types the command into the scenario's shell.
                   "background" starts whykey (`listen`) before the actions or
                   at a start_whykey action, waits for "ready" ("window": its
@@ -75,17 +93,28 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   ground truth "delivered"; no "layer" needed.
                   "combo": the observation's combo must equal this
                   ({"key": "X", "modifiers": 64}); "stderr": substring of
-                  whykey's stderr (e.g. why a capture backend was skipped).
+                  whykey's stderr (e.g. why a capture backend was skipped);
+                  "confidence": the report's assessment.confidence must equal
+                  this (e.g. "conditional").
                   "accept": honest-uncertainty verdicts tolerated when the
                   scenario documents that whykey cannot know more (e.g. no
                   shell-init): "handled-uncertain" only when the truth fired,
-                  "uncertain-continues" only when it did not. Shown as PASS~.
+                  "uncertain-continues" only when it did not. Shown as PASS~,
+                  counted apart from matches and never lab-verified in the
+                  support matrix.
 
 Ground truth -> accepted whykey verdicts for the layer:
-    fired, not delivered   consumed
-    fired, delivered       handled-passed
-    fired, no probe        consumed | handled-passed
-    not fired              pass
+    fired, not delivered        consumed
+    fired, delivered            handled-passed
+    not fired, delivered        pass
+    not fired, not delivered,   none: something whykey does not model
+      reached                     withheld the key (FAIL)
+    last consumer, fired        consumed
+    last consumer, not fired,   pass (the layer read the key and left it
+      reached                     unhandled)
+A scenario where nothing observed the key (not fired, not delivered, not
+reached) is a lab error: a broken injection or an unfocused probe must never
+pass. Observation scenarios follow the same positive-control rule.
 Verdicts come from the layer's status/propagation pair: Handled+Stops =
 consumed, Handled+Continues = handled-passed, NotHandled+Continues = pass,
 Handled+Indeterminate = handled-uncertain, Indeterminate+Continues =
@@ -108,8 +137,8 @@ LAB = Path(__file__).resolve().parent
 ROOT = LAB.parent
 SCENARIOS = LAB / "scenarios"
 RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
-ENVIRONMENTS = {"sway", "hyprland", "x11", "pty", "session"}
-TIERS = {"observed", "runtime-setting"}
+ENVIRONMENTS = {"sway", "hyprland", "gnome", "x11", "pty"}
+TIERS = {"observed"}
 REQUIRED = {"id", "description", "tier", "environment", "ground_truth", "whykey"}
 # Hyprland scenarios boot a VM inside the container (lab/driver.py).
 SCENARIO_TIMEOUT = 180
@@ -137,6 +166,14 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
         allowed = HONEST_UNCERTAINTY[True] | HONEST_UNCERTAINTY[False]
         if not set(scenario["whykey"].get("accept", [])) <= allowed:
             raise SystemExit(f"{path}: whykey.accept may only list {sorted(allowed)}")
+        truth = scenario["ground_truth"]
+        if "delivered" not in truth and "reached" not in truth:
+            raise SystemExit(
+                f"{path}: ground_truth needs \"delivered\" (what lies past the layer saw the "
+                "key) or, for a last consumer, \"reached\" (the layer received it)"
+            )
+        if scenario["whykey"].get("observation") and "delivered" not in truth:
+            raise SystemExit(f"{path}: an observation scenario needs ground_truth.delivered")
         seen.add(identifier)
         relative = path.relative_to(SCENARIOS).as_posix()
         if patterns and not any(
@@ -148,19 +185,33 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
     return scenarios
 
 
+class PositiveControlFailed(Exception):
+    """The key was observed nowhere: the scenario proves nothing about whykey."""
+
+
 def expected_verdicts(truth: dict) -> tuple[str, set[str]]:
-    fired, delivered = truth["fired"], truth["delivered"]
+    """Ground truth -> (label, whykey verdicts it accepts). Raises
+    PositiveControlFailed when nothing observed the key at all."""
+    fired, delivered, reached = truth["fired"], truth["delivered"], truth.get("reached")
+    if delivered is None:
+        # The layer is the key's last consumer (a shell's line editor):
+        # whether it ran a binding or inserted the key, nothing receives it next.
+        if fired:
+            return "consumed (last consumer)", {"consumed"}
+        if reached:
+            return "reached, unhandled", {"pass"}
+        raise PositiveControlFailed("the key did not fire and the reached check failed")
     if fired and delivered is False:
         return "consumed", {"consumed"}
-    if fired and delivered:
-        return "handled-passed", {"handled-passed"}
     if fired:
-        return "handled", {"consumed", "handled-passed"}
+        return "handled-passed", {"handled-passed"}
     if delivered:
         return "passed", {"pass"}
-    if delivered is False:
-        return "not-fired, not-delivered", {"pass"}
-    return "not-fired", {"pass"}
+    if reached:
+        # The key arrived but neither the layer nor anything past it saw it
+        # act: something whykey does not model withheld it.
+        return "not fired, withheld", set()
+    raise PositiveControlFailed("the key neither fired nor was delivered past the layer")
 
 
 def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | None]:
@@ -251,6 +302,12 @@ def observation_verdict(report: dict | None) -> tuple[str, dict | None]:
     return "delivered", observation
 
 
+def truth_evidence(truth: dict) -> str:
+    return "; ".join(
+        truth[key] for key in ("fired_evidence", "delivered_evidence", "reached_evidence") if truth.get(key)
+    )
+
+
 def evaluate(path: Path, scenario: dict, result: dict) -> dict:
     observing = scenario["whykey"].get("observation", False)
     layers = scenario["whykey"].get("layer", [])
@@ -274,16 +331,30 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
     summary = scenario["whykey"].get("summary")
     detail = scenario["whykey"].get("detail")
     combo = scenario["whykey"].get("combo")
+    confidence = scenario["whykey"].get("confidence")
     observed = (whykey["report"] or {}).get("observation")
     combo_ok = combo is None or (isinstance(observed, dict) and observed.get("combo") == combo)
+    reported_confidence = ((whykey["report"] or {}).get("assessment") or {}).get("confidence")
+    confidence_ok = confidence is None or reported_confidence == confidence
+    try:
+        if observing:
+            if not (truth["fired"] or truth["delivered"] or truth.get("reached")):
+                raise PositiveControlFailed("the key neither fired, nor reached the probe, nor passed the reached check")
+            label = "delivered" if truth["delivered"] else "not-delivered"
+            accepted = {label}
+        else:
+            label, accepted = expected_verdicts(truth)
+    except PositiveControlFailed as failure:
+        record.update(ground_truth={"label": "no positive control", **truth}, expected=None, whykey_verdict="lab-error")
+        record["pass"] = False
+        record["error"] = f"positive control failed: {failure} ({truth_evidence(truth)})"
+        record["logs"] = result.get("logs")
+        return record
     if observing:
-        label = "delivered" if truth["delivered"] else "not-delivered"
-        accepted = {label}
         tolerated: set[str] = set()
         verdict, entry = observation_verdict(whykey["report"])
         summary_ok = True
     else:
-        label, accepted = expected_verdicts(truth)
         verdict, entry = layer_verdict(whykey["report"], layers)
         tolerated = set(scenario["whykey"].get("accept", [])) & HONEST_UNCERTAINTY[truth["fired"]]
         texts = [] if entry is None else [entry.get("summary") or ""] + [
@@ -300,7 +371,13 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
     if stderr is not None:
         summary = f"{summary}; " if summary else ""
         summary += f"stderr containing {stderr!r}"
-    passed = (verdict in accepted or verdict in tolerated) and summary_ok and combo_ok and stderr_ok
+    if confidence is not None:
+        summary = f"{summary}; " if summary else ""
+        summary += f"confidence {confidence!r} (reported {reported_confidence!r})"
+    passed = (
+        (verdict in accepted or verdict in tolerated)
+        and summary_ok and combo_ok and stderr_ok and confidence_ok
+    )
     record.update(
         ground_truth={"label": label, **truth},
         expected=sorted(accepted | tolerated),
@@ -382,7 +459,7 @@ def main() -> int:
             path, scenario = futures[future]
             record = evaluate(path, scenario, future.result())
             records.append(record)
-            status = "PASS" if record["pass"] else "FAIL"
+            status = ("PASS~" if record.get("tolerated") else "PASS") if record["pass"] else "FAIL"
             print(f"[{status}] {record['scenario']}", file=sys.stderr, flush=True)
 
     records.sort(key=lambda record: record["file"])
@@ -390,16 +467,24 @@ def main() -> int:
     print()
     print_table(records)
     failed = [record for record in records if not record["pass"]]
-    print(f"\n{len(records) - len(failed)}/{len(records)} scenarios match reality; results: {args.results}")
+    tolerated = [record for record in records if record["pass"] and record.get("tolerated")]
+    print(
+        f"\n{len(records) - len(failed) - len(tolerated)}/{len(records)} scenarios match reality; "
+        f"{len(tolerated)} only tolerated (PASS~: whykey honestly answered uncertain; "
+        f"not lab-verified); {len(failed)} failed; results: {args.results}"
+    )
+    for record in tolerated:
+        print(f"  PASS~ {record['scenario']}: {record['whykey_verdict']} where reality was "
+              f"{record['ground_truth']['label']}")
     for record in failed:
         print(f"\nFAIL {record['scenario']} ({record['file']})")
         if record.get("error"):
             print(f"  lab error: {record['error']}")
             continue
         truth = record["ground_truth"]
-        print(f"  ground truth: {truth['label']} ({truth['fired_evidence']}"
-              + (f"; {truth['delivered_evidence']}" if truth["delivered_evidence"] else "") + ")")
-        print(f"  whykey {' '.join(record['whykey_args'])}: {record['whykey_verdict']}, expected {'|'.join(record['expected'])}")
+        print(f"  ground truth: {truth['label']} ({truth_evidence(truth)})")
+        expected = "|".join(record["expected"]) or "no verdict (the key was withheld by something whykey does not model)"
+        print(f"  whykey {' '.join(record['whykey_args'])}: {record['whykey_verdict']}, expected {expected}")
         if record.get("expected_summary"):
             print(f"  whykey must also report: {record['expected_summary']!r}")
         if record.get("expected_detail"):

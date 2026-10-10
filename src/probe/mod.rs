@@ -3,9 +3,10 @@
 //! A probe window is an ordinary toplevel that asks for keyboard focus and
 //! reports exactly what the display server delivers to it. A key that
 //! arrives proves the compositor/desktop passed it to a focused client;
-//! modifier changes that arrive without the key prove something above the
-//! window consumed it. This holds on every compositor because it relies only
-//! on the core client protocol, not on compositor-specific IPC.
+//! modifier changes that arrive without the key mean either something above
+//! the window consumed it or the modifiers were pressed alone (or with the
+//! mouse). This holds on every compositor because it relies only on the core
+//! client protocol, not on compositor-specific IPC.
 
 use std::io;
 use std::os::fd::RawFd;
@@ -69,6 +70,8 @@ pub trait ProbeWindow {
     fn next_event(&mut self, timeout: Duration) -> io::Result<Option<ProbeEvent>>;
     /// Whether the window currently has keyboard focus.
     fn focused(&self) -> bool;
+    /// The display protocol this window was opened with: "Wayland" or "X11".
+    fn protocol(&self) -> &'static str;
 }
 
 /// The display protocol [`open_window`] would try first, judged from the
@@ -84,8 +87,20 @@ pub fn available_display() -> Option<&'static str> {
     }
 }
 
+/// How the default chain describes the protocol [`open_window`] would use
+/// before connecting: a Wayland socket that exists may still refuse the
+/// connection, in which case DISPLAY is tried.
+pub fn planned_display() -> Option<&'static str> {
+    match available_display()? {
+        "Wayland" if std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty()) => {
+            Some("Wayland (falls back to X11 if the connection fails)")
+        }
+        display => Some(display),
+    }
+}
+
 /// Opens a probe window: Wayland when WAYLAND_DISPLAY is usable, else X11 via
-/// DISPLAY.
+/// DISPLAY. [`ProbeWindow::protocol`] names the protocol actually used.
 pub fn open_window(title: &str) -> io::Result<Box<dyn ProbeWindow>> {
     let wayland_error = if wayland::display_configured() {
         match wayland::open_wayland_window(title) {

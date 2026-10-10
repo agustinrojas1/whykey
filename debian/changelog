@@ -1,3 +1,11 @@
+whykey (2.0.0) unstable; urgency=medium
+
+  * Observe first: listen tries native capture, then a probe window (Wayland or X11), then the terminal; an X11 grab probe detects grabbing window managers and hotkey daemons.
+  * Ask running programs: i3 get_config fixed, GNOME gsettings, KDE kglobalaccel; zsh and fish adapters rewritten against real shells.
+  * Reports carry evidence tiers; claims are verified in a Docker lab against real programs.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Sat, 10 Oct 2026 18:00:00 -0300
+
 whykey (1.5.0) unstable; urgency=medium
 
   * Evaluate kmonad and input-remapper remaps for the queried key.

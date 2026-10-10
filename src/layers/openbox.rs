@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Read-only Openbox XML keybind adapter.
 pub struct Openbox;
@@ -87,7 +87,8 @@ impl Openbox {
                 Outcome::Unknown,
                 "Openbox shortcut state is conditional",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.action));
@@ -99,6 +100,7 @@ impl Openbox {
             "matching Openbox keybind configured; runtime activation is conditional",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

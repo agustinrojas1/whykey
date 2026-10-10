@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 256 * 1024;
 
@@ -99,7 +99,8 @@ impl Sxhkd {
                 Outcome::Unknown,
                 "sxhkd shortcut state is conditional",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         for binding in &matches {
             details.push(format!("binding: {}", binding.command));
@@ -111,6 +112,7 @@ impl Sxhkd {
             "matching sxhkd shortcut configured; runtime activation is conditional",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

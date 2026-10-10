@@ -2862,6 +2862,27 @@ fn openbox_adapter_reads_xml_keybinds_conditionally() {
     assert!(text.contains("Openbox"));
     assert!(text.contains("Openbox has a matching binding"));
     assert!(text.contains("Execute: alacritty"));
+
+    let json = binary()
+        .args(["--json", "--schema-version", "2", "super+ctrl+t"])
+        .env("XDG_CURRENT_DESKTOP", "Openbox")
+        .env("XDG_SESSION_DESKTOP", "Openbox")
+        .env("XDG_SESSION_TYPE", "x11")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("PATH", "/nonexistent")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let openbox = value["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layer| layer["layer"] == "Openbox")
+        .expect("an Openbox layer");
+    assert_eq!(openbox["tier"], "config_file");
     let _ = fs::remove_dir_all(base);
 }
 

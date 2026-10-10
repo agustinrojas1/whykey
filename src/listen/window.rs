@@ -3,8 +3,9 @@
 //!
 //! A key press that arrives proves every layer above the window (remappers,
 //! compositor, desktop shortcut daemons, input methods) passed it on.
-//! Modifier changes that arrive while the key never does prove something
-//! above the window consumed that key.
+//! Modifier changes that arrive while the key never does mean either
+//! something above the window consumed that key or the modifiers were
+//! pressed alone (or with the mouse); the window cannot tell which.
 
 use super::output::run_observed_loop;
 use super::terminal::SignalGuard;
@@ -43,7 +44,9 @@ enum Observation {
         modifier: bool,
     },
     Release(ProbeEvent),
-    /// Modifiers were held and released, and no other key arrived meanwhile.
+    /// Modifiers were held and released, and no other key arrived meanwhile:
+    /// either something above the window consumed the key, or the modifiers
+    /// were pressed alone (or with the mouse).
     NotDelivered {
         modmask: u32,
     },
@@ -228,6 +231,11 @@ impl WindowBackend {
             focus_settled: false,
         }
     }
+
+    /// The protocol of the open probe window, once armed.
+    pub(super) fn protocol(&self) -> Option<&'static str> {
+        self.window.as_ref().map(|window| window.protocol())
+    }
 }
 
 impl Default for WindowBackend {
@@ -332,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn modifiers_without_a_key_are_not_delivered() {
+    fn modifiers_without_a_key_are_reported_as_not_delivered() {
         let mut tracker = ChordTracker::default();
         assert!(tracker.observe(modifiers(64)).is_none());
         assert_eq!(
@@ -428,7 +436,7 @@ mod tests {
         );
         assert!(
             human.contains(
-                "A key pressed with Super did not reach the window: the compositor/desktop or an input method consumed it."
+                "Super was pressed and released and no other key reached this window: either the key you pressed with Super was consumed by the compositor/desktop or an input method, or Super was pressed alone (or with the mouse)."
             ),
             "{human}"
         );
@@ -441,7 +449,7 @@ mod tests {
         .unwrap();
         assert_eq!(json["observed"]["disposition"], "not_delivered");
         assert_eq!(json["key_display"], "SUPER + <key not delivered>");
-        assert_eq!(json["confidence"], "confirmed");
+        assert_eq!(json["confidence"], "conditional");
     }
 
     #[test]

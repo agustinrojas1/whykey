@@ -1,5 +1,156 @@
 # Changelog
 
+## [2.0.0] - 2026-10-10
+
+whykey now checks its answers against the running programs. A reality lab
+runs them, and whykey's verdict must match what they actually do. The first
+lab run against 1.5.0 matched in 16 of 40 scenarios. This release runs 81
+scenarios: 70 match exactly, and the other 11 (shells without `shell-init`)
+pass only as honest uncertainty, which does not count as verification.
+
+### Changed (may break scripts)
+
+- `whykey listen` uses a new default chain: native compositor capture, then
+  a focused probe window when a Wayland or X11 display is usable, then the
+  terminal. Before this, the fallback went straight to the terminal. Use
+  `--terminal` to get the old fallback. `--dry-run` and `--explain-capture`
+  print the numbered chain with a reason for each stage.
+- Doctor and capabilities: the `gnome-shell-runtime` reader is replaced by
+  `gnome-gsettings`. GNOME and KDE no longer report `api-does-not-expose`.
+- `whykey doctor` no longer suggests joining the `input` group for evdev.
+  It prints a temporary `sudo setfacl -m u:"$USER":r …` command for exactly
+  the keyboards it cannot open.
+
+### Features
+
+- Reality lab (`lab/`): 81 scenarios run the real Sway 1.11, i3 4.25,
+  Hyprland 0.56.2 (both `hyprland.conf` and `hyprland.lua`, in a KVM guest),
+  Openbox, AwesomeWM, sxhkd, xbindkeys, kglobalacceld 6.7.5, headless
+  mutter 50 (mutter-owned GNOME bindings only), bash, zsh, fish, tmux, and GNU Screen. Each scenario sends
+  synthetic input (a virtual keyboard with the US keymap, wtype, xdotool, or
+  pty keystrokes; mutter's RemoteDesktop D-Bus API for GNOME). The ground truth is the program's reaction: a bind
+  touched a file, or a key reached an independent test client. Each
+  scenario carries a positive control, so a setup in which nothing could
+  fire cannot pass, and a scenario fails when whykey disagrees. Matches
+  accepted only as honest uncertainty do not count as verification.
+  `python3 lab/run.py` runs it locally, and
+  `.github/workflows/lab.yml` runs it on pull requests. See `lab/README.md`.
+- Probe window: `whykey listen --window` (`-w`) opens a small focused
+  Wayland or X11 window (app_id/WM_CLASS `whykey-probe`). A key that reaches
+  it was delivered by the desktop. If only modifier changes arrive, the
+  report says, for example, "Super was pressed and released and no other key
+  reached this window: either the key you pressed with Super was consumed by
+  the compositor/desktop or an input method, or Super was pressed alone (or
+  with the mouse)." That observation's confidence is `conditional`. The
+  default chain skips the probe window in SSH sessions; `--window` still
+  forces it.
+  New JSON values: source `{"kind":"probe-window"}`, disposition
+  `not_delivered`, and capability `capture.probe-window`.
+- X11 grab probe: on a native X11 session, whykey asks the X server whether
+  another client holds a passive grab on the queried key (core `GrabKey` and
+  XInput2, with Lock and NumLock variants). A grab confirms the window
+  manager's or hotkey daemon's binding as consumed. A free key (no client
+  holds a grab for it on the root window) makes a configured binding
+  inactive. A grab that no adapter claims shows as an
+  "X11 key grab" layer. Under XWayland a grab only adds a note, and over SSH
+  the probe is skipped.
+- KDE Plasma: whykey asks the running kglobalaccel over D-Bus
+  (`globalShortcutsByKey`, then the component's `isActive`) and never
+  starts the daemon. An inactive component passes the key on.
+  `kglobalshortcutsrc` is now only a fallback, and it never gives Consumed.
+- GNOME: live `gsettings` over the mutter, mutter-wayland, window-manager,
+  GNOME Shell, and media-key schemas plus custom keybindings. Accelerators
+  are parsed by mutter's rules (`Primary`, `Above_Tab`, keycodes,
+  `disabled`).
+- Evidence tiers: each layer row is tagged `observed`, `live query`,
+  `config file (static)`, or `default (unverified)`. JSON v2 and NDJSON path
+  entries gain `tier`; schema v1 is unchanged. The "Next" section names the
+  step that would raise the tier, such as `whykey listen` or loading
+  `shell-init`.
+- Doctor lists "Observation taps (what whykey can watch now)": native
+  capture, probe window, X11 grab probe, terminal, and evdev with how to
+  enable it. It also lists "Layer sources": for each layer, whether its
+  answer will come from a live query, a config file, or nothing. Doctor JSON
+  v2 gains `observation_taps` and `layer_sources`; v1 is unchanged.
+- Support matrix: each entry records the lab scenarios that verify it
+  (`lab`) and any hand checks on the maintainer's machine (`live`).
+  `tools/generate_support_matrix.py --lab-results FILE` adds the results of
+  a lab run.
+- zsh and fish adapters were rewritten and checked against the real shells
+  (178 behaviour checks plus the committed lab scenarios). zsh parses
+  `bindkey -L` output and models how ZLE reads keys and keymaps. For
+  example, an unbound Ctrl+Left leaves `;5D` on the line. fish models fish 4
+  key names and fish 3 `-k` names, `--preset`/user precedence, and modes; a
+  bind without `-M` belongs to the default (vi normal) mode. Without
+  `shell-init`, whykey asks the installed shell for its defaults
+  (`zsh -f`, `fish --no-config`) and applies the `bindkey`/`bind` lines in
+  the startup files.
+- bash without `shell-init` now applies `bind`, `bind -x`, `bind -m`, and
+  `set -o vi` from `/etc/bash.bashrc` and `~/.bashrc`.
+- The shell is now taken from the process tree (the nearest interactive
+  shell above whykey), not from `$SHELL`. `$SHELL` is only the fallback. The
+  tmux and Screen rows label `$SHELL` as the login shell.
+
+### Fixes
+
+- i3 was always reported as unavailable ("could not read the running i3
+  config"). `i3-msg -t get_config` prints plain text unless given `-r`.
+  whykey now passes `-r` and also accepts plain text from i3-msg older than
+  4.20.
+- GNOME: shortcuts in the window-manager and mutter schemas (for example
+  the default `<Super>Tab`) were missed, because only media keys were read.
+  The integer `volume-step 6` was read as a binding for the key `6`.
+- Openbox, AwesomeWM, sxhkd, xbindkeys, and KDE bindings that the lab saw
+  fire were reported as conditional. Unbound keys were reported as
+  indeterminate. The X11 grab probe and the kglobalaccel query now decide.
+- zsh: lookups never matched, because escaped bytes (`\x14`) were compared
+  with decoded keys. `bindkey -v`/`-e`/`-A` and bindings without `-M` now
+  follow the keymap `main` points to at that moment.
+- fish `shell-init` sent its bindings as a single line, so nothing matched.
+  It now uses `bind --all | string collect`.
+- zsh `shell-init` now also dumps the `main` keymap alias and the `vicmd`
+  keymap (`bindkey -lL main; bindkey -L; bindkey -LM vicmd`).
+- bash: a user `bind -x` on Ctrl+T was reported as `transpose-chars` when
+  `shell-init` was not loaded.
+- Terminal byte prediction: Alt+F was encoded as `ESC F` (read by bash as
+  `do-lowercase-version`). It is now `ESC f`; uppercase needs Shift. Kitty
+  encoding uses the lowercase codepoint (`\e[102;5u` for Ctrl+F).
+- Sway `--release`: the lab confirms that the focused client receives the
+  press and the release while the command runs on release. The headline
+  now says "Sway handles the shortcut and passes it on; other layers are
+  uncertain." instead of calling Sway's own forwarding unknown. i3
+  `--release` consumes the key, as the lab confirms.
+- Hyprland: with a `hyprland.conf` config, `whykey listen` failed with
+  "failed to arm" and a cleanup warning. Native capture now reports itself
+  unavailable ("needs a Lua config (hyprland.lua)"), and listen falls back
+  to the probe window.
+- Hyprland: the `description` of a Lua `hl.bind(…, { description = … })`
+  is now read. Lua source hints show it, and `code:` binds can recover
+  their key by description.
+- Hyprland (D-073): `wtype` input did fire the Lua key hook, but every key
+  arrived as keycode 9, because wtype uploads its own keymap. With the real
+  layout, keycode 9 is Escape, which ends `listen`; that most likely ended
+  the original host test. The lab's virtual keyboard sends real keycodes,
+  and native Lua capture works with it. Virtual keyboards with their own
+  keymap are still misread (D-089).
+- The portal reachability probe checks `NameHasOwner` first. Before this,
+  `gdbus introspect` started `xdg-desktop-portal`.
+
+### Internal
+
+- The probe windows use `wayland-client` 0.31 (pure-Rust backend, no
+  libwayland at runtime) with `wayland-protocols` 0.32, and `x11rb` 0.14 with
+  XInput. xremap YAML is parsed with `yaml-rust2` 0.13. This replaces the
+  hand-written subset parser: block scalars, tags, and quoted keys are now
+  accepted, while aliases, several documents, and complex keys are still
+  rejected. The new crates and their licences are in
+  `DEPENDENCY_PROVENANCE.md` and `debian/copyright`. The vendor directory
+  of the offline source archive is now about 65 MB. About 18 MB of that is
+  `windows-sys`, which is vendored even though Linux builds do not compile
+  it. The binary still links only libc and libgcc_s; no libwayland or libxcb
+  is linked.
+- `lab/` is excluded from the published crate.
+
 ## [1.5.0] - 2026-10-10
 
 ### Features

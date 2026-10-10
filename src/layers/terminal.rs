@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::os::fd::AsRawFd;
 
-use crate::layers::{LayerId, LayerResult, Outcome, TerminalInput};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
 
 pub struct Terminal;
 
@@ -68,8 +68,10 @@ impl Terminal {
         self.inspect_byte(*byte, input, state)
     }
 
+    /// The byte is judged against termios settings read from the terminal
+    /// device, so the answer is a live query.
     fn inspect_byte(&self, byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
-        let mut result = classify_byte(byte, input, state);
+        let mut result = classify_byte(byte, input, state).with_tier(EvidenceTier::LiveQuery);
         if let Some(alias) = legacy_byte_alias(&input.bytes) {
             result.details.push(alias.into());
         }
@@ -439,6 +441,22 @@ mod tests {
         for byte in [0x03, 0x1c, 0x1a] {
             assert_eq!(inspect_byte(byte, &without_isig).outcome, Outcome::Pass);
         }
+    }
+
+    #[test]
+    fn termios_answers_are_live_and_multibyte_input_has_no_source() {
+        let termios = termios_with(libc::ISIG, libc::IXON);
+        for byte in [0x03, 0x13, b'a'] {
+            assert_eq!(
+                inspect_byte(byte, &termios).tier,
+                Some(EvidenceTier::LiveQuery)
+            );
+        }
+        let input = TerminalInput::predicted(b"\x1b[A".to_vec(), "cursor key");
+        assert_eq!(
+            Terminal.inspect_input_with_termios(&input, &termios).tier,
+            None
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, Outcome, format_bytes};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, format_bytes};
 
 /// Inspect the GNU Screen layer without sending commands to the running
 /// session. Screen has no portable IPC endpoint that lists its effective
@@ -21,6 +21,21 @@ pub fn inspect_after(preceding: &[KeyCombo], key: &KeyCombo) -> LayerResult {
 }
 
 fn inspect_with_config(
+    preceding: &[KeyCombo],
+    key: &KeyCombo,
+    prefix: &[u8],
+    config_lines: &[(usize, String)],
+    config_source: Option<PathBuf>,
+) -> LayerResult {
+    let tier = if config_source.is_some() {
+        EvidenceTier::ConfigFile
+    } else {
+        EvidenceTier::Default
+    };
+    resolve_with_config(preceding, key, prefix, config_lines, config_source).with_tier(tier)
+}
+
+fn resolve_with_config(
     preceding: &[KeyCombo],
     key: &KeyCombo,
     prefix: &[u8],
@@ -479,5 +494,16 @@ mod tests {
         );
         let literal = inspect_with_config(&[ctrl_a.clone(), ctrl_a], &ctrl_l, &[1], &lines, None);
         assert_eq!(literal.outcome, Outcome::UncertainContinues);
+    }
+
+    #[test]
+    fn screenrc_is_a_config_reading_and_its_absence_a_default() {
+        let lines = vec![(1, "bind ^L windowlist".into())];
+        let ctrl_l: KeyCombo = "ctrl+l".parse().unwrap();
+        let read =
+            inspect_with_config(&[], &ctrl_l, &[1], &lines, Some("/home/u/.screenrc".into()));
+        assert_eq!(read.tier, Some(EvidenceTier::ConfigFile));
+        let defaults = inspect_with_config(&[], &ctrl_l, &[1], &[], None);
+        assert_eq!(defaults.tier, Some(EvidenceTier::Default));
     }
 }

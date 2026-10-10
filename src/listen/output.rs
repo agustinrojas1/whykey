@@ -20,10 +20,10 @@ pub(super) struct CapturePlan {
 
 /// Decide the default chain from what each stage reported. `native` is the
 /// native backend that accepted a connection, or why none did; `display` is
-/// the display protocol a probe window would use.
+/// the display protocol a probe window would use, or why it is skipped.
 pub(super) fn plan_default_chain(
     native: Result<&str, &str>,
-    display: Option<&str>,
+    display: Result<&str, &str>,
     tty: bool,
     policy: CapturePolicy,
     events_all: bool,
@@ -65,25 +65,28 @@ pub(super) fn plan_default_chain(
             )),
         };
     }
-    if let Some(display) = display {
-        stages.push(stage(
-            "probe window",
-            format!(
-                "selected: opens a probe window ({display}); press the shortcut there (keys the desktop consumes never reach it)"
-            ),
-        ));
-        stages.push(stage(
-            "terminal",
-            "used only if the probe window cannot be opened".into(),
-        ));
-        return CapturePlan {
-            stages,
-            selected: Ok(format!("Probe window via {display}")),
-        };
-    }
+    let window_skipped = match display {
+        Err(reason) => reason,
+        Ok(display) => {
+            stages.push(stage(
+                "probe window",
+                format!(
+                    "selected: opens a probe window ({display}); press the shortcut there (keys the desktop consumes never reach it)"
+                ),
+            ));
+            stages.push(stage(
+                "terminal",
+                "used only if the probe window cannot be opened".into(),
+            ));
+            return CapturePlan {
+                stages,
+                selected: Ok(format!("Probe window via {display}")),
+            };
+        }
+    };
     stages.push(stage(
         "probe window",
-        format!("unavailable: {}", super::NO_PROBE_DISPLAY),
+        format!("unavailable: {window_skipped}"),
     ));
     let selected = if events_all {
         stages.push(stage(
@@ -133,7 +136,7 @@ pub(super) fn print_capture_plan(environment: &crate::environment::Environment, 
         Some(("Terminal".to_owned(), "--terminal"))
     } else if options.window {
         Some((
-            match crate::probe::available_display() {
+            match crate::probe::planned_display() {
                 Some(display) => format!("Probe window via {display}"),
                 None => format!("Probe window ({})", super::NO_PROBE_DISPLAY),
             },
@@ -155,7 +158,7 @@ pub(super) fn print_capture_plan(environment: &crate::environment::Environment, 
     let native: Result<String, String> = Err(super::NATIVE_UNSUPPORTED.to_owned());
     let plan = plan_default_chain(
         native.as_deref().map_err(String::as_str),
-        crate::probe::available_display(),
+        super::probe_window_display(environment.ssh),
         environment.tty_available,
         options.capture_policy,
         options.events_all,
@@ -624,9 +627,13 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
     loop {
         if signals.received() {
             let _ = backend.close();
-            return Err(ListenError::Message(
-                "interrupted; terminal settings restored".into(),
-            ));
+            // Only a loop that changed termios has terminal settings to restore.
+            let message = if terminal_termios.is_some() {
+                "interrupted; terminal settings restored"
+            } else {
+                "interrupted"
+            };
+            return Err(ListenError::Message(message.into()));
         }
         if deadline.is_some_and(|value| Instant::now() >= value) {
             let _ = backend.close();

@@ -1,21 +1,27 @@
 {
   "id": "gnome-default-bound",
-  "description": "default switch-applications binds <Super>Tab in gsettings",
-  "tier": "runtime-setting",
-  "environment": "session",
-  "session_setup": [],
+  "description": "mutter's default close binding (<Alt>F4) closes the focused probe window and withholds the key",
+  "tier": "observed",
+  "environment": "gnome",
+  "probe": "wayland",
+  "actions": [
+    {
+      "rdkbd": [
+        "alt+F4"
+      ]
+    }
+  ],
   "ground_truth": {
     "fired": {
-      "sh": "for schema in org.gnome.desktop.wm.keybindings org.gnome.shell.keybindings org.gnome.mutter.keybindings org.gnome.mutter.wayland.keybindings org.gnome.settings-daemon.plugins.media-keys; do gsettings list-recursively $schema; done | grep -F \"'<Super>Tab'\""
-    }
+      "sh": "! pgrep -f 'lab/[k]eylog.py'"
+    },
+    "delivered": "probe"
   },
   "whykey": {
-    "args": ["super+Tab"],
+    "args": [
+      "alt+F4"
+    ],
     "layer": "GNOME",
-    "env": {
-      "XDG_CURRENT_DESKTOP": "GNOME",
-      "XDG_SESSION_TYPE": "wayland",
-      "XDG_SESSION_DESKTOP": "gnome"
-    }
+    "detail": "org.gnome.desktop.wm.keybindings close = '<Alt>F4'"
   }
 }

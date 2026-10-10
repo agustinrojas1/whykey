@@ -5,7 +5,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::command;
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Read-only input-method context discovered from the current session.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -204,6 +204,12 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             .collect::<Vec<_>>()
             .join("; "),
     );
+    // Only a daemon's runtime state answers for it; environment variables
+    // and process names merely show that one is present.
+    let tier = detections
+        .iter()
+        .any(|detection| detection.state.is_some())
+        .then_some(EvidenceTier::LiveQuery);
     if transforming {
         return LayerResult::new(
             "Input method",
@@ -211,7 +217,8 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             Outcome::UncertainContinues,
             "an active input method may transform this input before text is committed",
             details,
-        );
+        )
+        .with_optional_tier(tier);
     }
     if unknown {
         return LayerResult::new(
@@ -227,7 +234,8 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
                 "an input-method context may transform this input before text is committed"
             },
             details,
-        );
+        )
+        .with_optional_tier(tier);
     }
     // Every detected daemon reported a runtime state that forwards keys
     // unchanged. Its own global hotkeys (for example the trigger key) are
@@ -243,6 +251,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         ),
         details,
     )
+    .with_optional_tier(tier)
 }
 
 enum RuntimeMode {
@@ -634,6 +643,12 @@ mod tests {
             text_reconstruction: TextReconstruction::default(),
         }]);
         assert!(result.summary.contains("runtime API is unreachable"));
+        // The environment shows an input method exists; nothing answered.
+        assert_eq!(result.tier, None);
+        assert_eq!(
+            inspect_with_detections(&[fcitx5("pinyin", "inactive")]).tier,
+            Some(crate::layers::EvidenceTier::LiveQuery)
+        );
         assert!(
             result
                 .details

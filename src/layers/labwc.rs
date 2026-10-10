@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome, openbox};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome, openbox};
 
 /// Read-only labwc adapter. labwc intentionally keeps an Openbox-compatible
 /// `rc.xml` keybind format, so the shared conservative XML scanner is reused.
@@ -75,7 +75,8 @@ impl Labwc {
                 Outcome::Unknown,
                 "labwc shortcut state is conditional",
                 details,
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         for binding in matches {
             details.push(format!("binding: {}", binding.action));
@@ -87,6 +88,7 @@ impl Labwc {
             "matching labwc keybind configured; runtime activation is conditional",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

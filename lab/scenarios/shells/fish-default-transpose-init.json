@@ -33,7 +33,8 @@
     "fired": {
       "file": "/tmp/effect",
       "equals": "ba"
-    }
+    },
+    "reached": "fired"
   },
   "whykey": {
     "args": [

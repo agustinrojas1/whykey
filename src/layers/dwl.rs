@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -91,7 +91,8 @@ impl Dwl {
                 Outcome::Pass,
                 "no matching dwl key binding found",
                 vec![source],
-            );
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         let mut details = vec![source];
         details.extend(
@@ -109,6 +110,7 @@ impl Dwl {
             "dwl config.h contains a matching key binding",
             details,
         )
+        .with_tier(EvidenceTier::ConfigFile)
     }
 }
 

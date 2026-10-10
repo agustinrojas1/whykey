@@ -31,7 +31,8 @@
   "ground_truth": {
     "fired": {
       "file": "/tmp/fired"
-    }
+    },
+    "reached": "fired"
   },
   "whykey": {
     "args": [

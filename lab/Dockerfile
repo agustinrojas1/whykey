@@ -4,15 +4,17 @@
 FROM registry.fedoraproject.org/fedora:44
 
 # Every package below is available in Fedora 44 (checked 2026-10-10).
-# gnome-shell/mutter are installed for their GSettings schemas and binaries;
-# scenarios read settings through gsettings without starting a shell.
+# "gnome" scenarios run mutter headless (GNOME Shell aborts without
+# systemd-logind) and type through mutter's RemoteDesktop D-Bus API with
+# python3-dbus (lab/rdkbd.py); gnome-shell is installed for its GSettings
+# schemas, which whykey reads.
 RUN dnf -y -q install --setopt=install_weak_deps=False \
         sway wtype foot wev libxkbcommon-utils \
         xorg-x11-server-Xvfb xdotool xev xinput setxkbmap xkbcomp xterm \
         i3 openbox xbindkeys sxhkd awesome \
         gsettings-desktop-schemas gnome-shell mutter gnome-settings-daemon dconf dbus-daemon \
         kf6-kglobalaccel kglobalacceld \
-        python3 mesa-dri-drivers \
+        python3 python3-dbus mesa-dri-drivers \
         bash zsh fish tmux screen neovim \
         procps-ng util-linux-script libcap acl \
     && dnf clean all \

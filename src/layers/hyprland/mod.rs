@@ -12,8 +12,8 @@ use serde::Deserialize;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, LayerId, LayerResult, LayerStatus, Outcome,
-    PhysicalInput, Propagation, SourceLocation,
+    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, LayerStatus,
+    Outcome, PhysicalInput, Propagation, SourceLocation,
 };
 use crate::xkb;
 
