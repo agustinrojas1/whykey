@@ -336,9 +336,7 @@ pub(super) fn collect_records(
             ),
             Some(raw_key) => match code_key_symbol(&raw_key, keymap) {
                 Some((code, symbol)) => {
-                    certainty.push_str(&format!(
-                        "; code:{code} shown as its key in the active XKB layout"
-                    ));
+                    certainty.push_str(&format!("{CODE_SHOWN_PREFIX}{code}{CODE_SHOWN_SUFFIX}"));
                     crate::layers::combo_display(mask, &symbol)
                 }
                 None => crate::layers::combo_display(mask, &raw_key),
@@ -384,6 +382,16 @@ pub(super) fn collect_records(
         });
     }
     records
+}
+
+const CODE_SHOWN_PREFIX: &str = "; code:";
+const CODE_SHOWN_SUFFIX: &str = " shown as its key in the active XKB layout";
+
+/// The keycode of an inventory record whose `code:N` key is listed as its
+/// symbol in the active layout, read back from the record's certainty.
+pub(crate) fn displayed_keycode(certainty: &str) -> Option<u32> {
+    let (_, rest) = certainty.split_once(CODE_SHOWN_PREFIX)?;
+    rest.strip_suffix(CODE_SHOWN_SUFFIX)?.parse().ok()
 }
 
 /// The active-layout key name of a `code:N` binding key, with `N`.

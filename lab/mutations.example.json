@@ -1,0 +1,8 @@
+[
+  {
+    "name": "tiling-binding-passes",
+    "file": "src/layers/tiling.rs",
+    "search": "Outcome::Consumed,\n            \"active binding found\".to_owned(),",
+    "replace": "Outcome::Pass,\n            \"active binding found\".to_owned(),"
+  }
+]

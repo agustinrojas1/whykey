@@ -1,0 +1,58 @@
+{
+  "id": "tmux-root-quoted-brace",
+  "description": "root `bind -n M-{` (list-keys prints it quoted \"M-{\") consumes Alt+{",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": [
+      "set -g prefix C-Space",
+      "set -g prefix2 C-b",
+      "set -g status off",
+      "set -sg escape-time 10",
+      "bind -n 'M-{' run-shell 'touch /tmp/fired'"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "bind -x '\"\\e{\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "tmux",
+      "-f",
+      "/root/.tmux.conf",
+      "new-session",
+      "-s",
+      "lab",
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\e{"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "alt+braceleft"
+    ],
+    "layer": "tmux",
+    "run": "pty",
+    "detail": "touch /tmp/fired"
+  }
+}

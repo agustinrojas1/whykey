@@ -170,9 +170,16 @@ def lisp_string(text):
 
 
 class QueryError(Exception):
-    def __init__(self, status, summary, detail):
+    def __init__(self, status, summary, detail, remediation=None):
         super().__init__(summary)
         self.status, self.summary, self.detail = status, summary, detail
+        if remediation is None and status == "unavailable":
+            remediation = NO_SERVER_REMEDIATION
+        self.remediation = remediation
+
+
+NO_SERVER_REMEDIATION = "start Emacs daemon with `emacs --daemon` or evaluate `(server-start)`"
+NOT_INSTALLED_REMEDIATION = "install Emacs (emacsclient ships with it), then start its server"
 
 
 def query_emacs(notations):
@@ -187,7 +194,12 @@ def query_emacs(notations):
     try:
         res = subprocess.run(cmd, capture_output=True, timeout=QUERY_TIMEOUT)
     except FileNotFoundError:
-        raise QueryError("unavailable", no_server, "error: emacsclient not found on PATH")
+        raise QueryError(
+            "unavailable",
+            "Emacs is not installed (emacsclient not found on PATH)",
+            "error: emacsclient not found on PATH",
+            NOT_INSTALLED_REMEDIATION,
+        )
     except subprocess.TimeoutExpired:
         raise QueryError(
             "indeterminate",
@@ -260,8 +272,8 @@ def inspect_key(req, query=query_emacs):
         data = query([n for n, _, _ in lookup_plan(key_obj)])
     except QueryError as exc:
         details = [exc.detail]
-        if exc.status == "unavailable":
-            details.append("remediation: start Emacs daemon with `emacs --daemon` or evaluate `(server-start)`")
+        if exc.remediation:
+            details.append(f"remediation: {exc.remediation}")
         return result(exc.status, "indeterminate", exc.summary, details)
     if not isinstance(data, dict):
         return result("indeterminate", "indeterminate", "Emacs returned an unexpected reply", [])
@@ -333,6 +345,16 @@ def self_test():
         raise QueryError("unavailable", "No running Emacs server found", "error: no socket")
     res = ask(CTRL, "X", missing)
     assert res["status"] == "unavailable" and any("emacs --daemon" in d for d in res["details"])
+
+    # No emacsclient at all: the fix is installing Emacs, not starting a daemon.
+    def not_installed(notations):
+        raise QueryError(
+            "unavailable", "Emacs is not installed (emacsclient not found on PATH)",
+            "error: emacsclient not found on PATH", NOT_INSTALLED_REMEDIATION,
+        )
+    res = ask(CTRL, "X", not_installed)
+    assert "not installed" in res["summary"]
+    assert not any("--daemon" in d for d in res["details"]), res["details"]
     print("whykey-emacs self_test passed")
 
 

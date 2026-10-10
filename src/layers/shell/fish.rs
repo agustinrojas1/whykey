@@ -378,7 +378,10 @@ fn evaluate(bindings: &Bindings, inputs: &[TerminalInput]) -> Verdict {
         ),
         Resolution::Unbound => (
             Outcome::Pass,
-            format!("not bound in bind mode {}", bindings.mode),
+            format!(
+                "not bound in bind mode {}: fish reads the key and drops it",
+                bindings.mode
+            ),
             None,
         ),
     };
@@ -828,7 +831,7 @@ bind --preset -M insert -m default escape 'commandline -f backward-char'
         let insert = bindings(&user, "insert");
         assert_eq!(
             verdict(&insert, &[&[0x14]]).summary,
-            "not bound in bind mode insert"
+            "not bound in bind mode insert: fish reads the key and drops it"
         );
         assert_eq!(
             verdict(&insert, &[b"\x1b[1;5D"]).summary,

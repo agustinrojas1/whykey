@@ -366,13 +366,18 @@ fn kind_from_program(program: &str) -> Option<TerminalKind> {
 }
 
 /// Terminal program named by `TERM_PROGRAM` / `LC_TERMINAL`, or inferred
-/// from a terminal-specific `TERM`. The single identity source shared by the
-/// Ghostty and generic terminal adapters.
+/// from a terminal-specific `TERM`. Empty variables count as unset. The
+/// single identity source shared by the Ghostty and generic terminal
+/// adapters.
 pub(crate) fn terminal_program() -> Option<String> {
-    env::var("TERM_PROGRAM")
-        .ok()
-        .or_else(|| env::var("LC_TERMINAL").ok())
-        .or_else(|| program_from_term(&env::var("TERM").ok()?).map(str::to_owned))
+    program_from_env(|name| env::var(name).ok())
+}
+
+fn program_from_env(var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let set = |name: &str| var(name).filter(|value| !value.is_empty());
+    set("TERM_PROGRAM")
+        .or_else(|| set("LC_TERMINAL"))
+        .or_else(|| program_from_term(&var("TERM")?).map(str::to_owned))
 }
 
 fn program_from_term(term: &str) -> Option<&'static str> {
@@ -1134,6 +1139,34 @@ mod tests {
                 Some(kind)
             );
         }
+    }
+
+    #[test]
+    fn empty_terminal_variables_count_as_unset() {
+        let env = |vars: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(program_from_env(env(&[("TERM_PROGRAM", "")])), None);
+        assert_eq!(
+            program_from_env(env(&[("TERM_PROGRAM", ""), ("LC_TERMINAL", "iTerm2")])),
+            Some("iTerm2".into())
+        );
+        assert_eq!(
+            program_from_env(env(&[
+                ("TERM_PROGRAM", ""),
+                ("LC_TERMINAL", ""),
+                ("TERM", "xterm-kitty")
+            ])),
+            Some("kitty".into())
+        );
+        assert_eq!(
+            program_from_env(env(&[("TERM_PROGRAM", "foot"), ("TERM", "xterm-kitty")])),
+            Some("foot".into())
+        );
     }
 
     #[test]

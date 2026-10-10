@@ -582,32 +582,28 @@ fn inspect_default_chain_inner_without_remapper(
         return acc.finish();
     }
 
-    // 3. TTY driver
-    let terminal = terminal::Terminal;
-    let terminal_result = match (input.as_ref(), request.termios) {
-        (Some(input), Some(termios)) => terminal.inspect_input_with_termios(input, termios),
-        (Some(input), None) => terminal.inspect_input(input),
-        (None, _) => terminal.inspect_unknown(),
-    };
-    if !acc.append(terminal_result, ContinuationPolicy::StopOnBlockingResult) {
-        return acc.finish();
-    }
-    if acc.check_deadline() {
-        return acc.finish();
-    }
-
-    // 4. Session / multiplexer
-    let preceding = request
-        .sequence_prefix
-        .map_or(&[][..], |prefix| prefix.multiplexer_keys.as_slice());
-    if !acc.intercepted() {
-        delivery.multiplexer_key = Some(key.clone());
-    }
-    let session_result = session::inspect_with_env(preceding, key, bytes_available, session);
-    if !acc.append(session_result, ContinuationPolicy::StopOnBlockingResult) {
-        return acc.finish();
-    }
-    if acc.check_deadline() {
+    // 3-4. TTY driver and session / multiplexer, in route order.
+    let in_multiplexer = session.tmux || session.screen || session.zellij;
+    let continues = append_tty_and_session(&mut acc, in_multiplexer, |step, acc| match step {
+        RouteStep::TtyDriver => {
+            let terminal = terminal::Terminal;
+            match (input.as_ref(), request.termios) {
+                (Some(input), Some(termios)) => terminal.inspect_input_with_termios(input, termios),
+                (Some(input), None) => terminal.inspect_input(input),
+                (None, _) => terminal.inspect_unknown(),
+            }
+        }
+        RouteStep::Session => {
+            let preceding = request
+                .sequence_prefix
+                .map_or(&[][..], |prefix| prefix.multiplexer_keys.as_slice());
+            if !acc.intercepted() {
+                delivery.multiplexer_key = Some(key.clone());
+            }
+            session::inspect_with_env(preceding, key, bytes_available, session)
+        }
+    });
+    if !continues {
         return acc.finish();
     }
 
@@ -643,6 +639,50 @@ fn inspect_default_chain_inner_without_remapper(
     }
 
     acc.finish()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteStep {
+    TtyDriver,
+    Session,
+}
+
+/// A multiplexer reads the terminal through its own raw client tty and
+/// writes what it forwards into the pane's pty, so inside one it comes
+/// before the pane's TTY driver (the termios whykey reads is the pane's).
+fn tty_and_session_order(in_multiplexer: bool) -> [RouteStep; 2] {
+    if in_multiplexer {
+        [RouteStep::Session, RouteStep::TtyDriver]
+    } else {
+        [RouteStep::TtyDriver, RouteStep::Session]
+    }
+}
+
+/// Appends the TTY driver and session layers in route order; false when the
+/// route stops. An unavailable multiplexer cannot be shown to consume the
+/// key, so the pane's TTY driver after it is still recorded before the
+/// route stops there.
+fn append_tty_and_session(
+    acc: &mut RouteAccumulator,
+    in_multiplexer: bool,
+    mut inspect: impl FnMut(RouteStep, &RouteAccumulator) -> LayerResult,
+) -> bool {
+    let mut stop_after_steps = false;
+    for step in tty_and_session_order(in_multiplexer) {
+        let result = inspect(step, acc);
+        let session_unavailable =
+            step == RouteStep::Session && result.outcome == Outcome::Unavailable;
+        if !acc.append(result, ContinuationPolicy::StopOnBlockingResult) {
+            if !session_unavailable {
+                return false;
+            }
+            stop_after_steps = true;
+        }
+        if acc.check_deadline() {
+            return false;
+        }
+    }
+    !stop_after_steps
 }
 
 /// Shell editors interpret multi-key sequences, so a later sequence step is
@@ -743,6 +783,62 @@ mod tests {
         );
         assert!(!stops);
         assert_eq!(acc.results.len(), 2);
+    }
+
+    #[test]
+    fn an_unavailable_multiplexer_keeps_the_pane_tty_row_then_stops() {
+        let step_result = |session: Outcome| {
+            move |step: RouteStep, _: &RouteAccumulator| match step {
+                RouteStep::TtyDriver => {
+                    LayerResult::new("TTY", LayerId::Unknown, Outcome::Pass, "tty", Vec::new())
+                }
+                RouteStep::Session => {
+                    LayerResult::new("tmux", LayerId::Unknown, session, "tmux", Vec::new())
+                }
+            }
+        };
+        let names = |acc: RouteAccumulator| {
+            acc.finish()
+                .into_iter()
+                .map(|result| result.layer)
+                .collect::<Vec<_>>()
+        };
+
+        let mut acc = RouteAccumulator::new(false);
+        assert!(!append_tty_and_session(
+            &mut acc,
+            true,
+            step_result(Outcome::Unavailable)
+        ));
+        assert_eq!(names(acc), ["tmux", "TTY"]);
+
+        let mut acc = RouteAccumulator::new(false);
+        assert!(!append_tty_and_session(
+            &mut acc,
+            true,
+            step_result(Outcome::Consumed)
+        ));
+        assert_eq!(names(acc), ["tmux"]);
+
+        let mut acc = RouteAccumulator::new(false);
+        assert!(!append_tty_and_session(
+            &mut acc,
+            false,
+            step_result(Outcome::Unavailable)
+        ));
+        assert_eq!(names(acc), ["TTY", "tmux"]);
+    }
+
+    #[test]
+    fn multiplexer_precedes_the_pane_tty_driver() {
+        assert_eq!(
+            tty_and_session_order(true),
+            [RouteStep::Session, RouteStep::TtyDriver]
+        );
+        assert_eq!(
+            tty_and_session_order(false),
+            [RouteStep::TtyDriver, RouteStep::Session]
+        );
     }
 
     #[test]

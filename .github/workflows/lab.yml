@@ -36,7 +36,9 @@ jobs:
         run: cargo build --release --locked
       # Hyprland scenarios boot a KVM guest inside their container; run.py
       # passes /dev/kvm through (GitHub's Linux runners expose it) and the
-      # guest falls back to much slower TCG emulation without it.
+      # guest falls back to much slower TCG emulation without it. On the
+      # 4-CPU runner --vms defaults to 1 (2 vCPUs), leaving the other CPUs
+      # for the container scenarios: about 5 minutes for the whole lab.
       - name: Run lab scenarios
         run: python3 lab/run.py -j "$(nproc)"
       - name: Upload results

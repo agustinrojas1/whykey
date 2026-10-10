@@ -1,0 +1,35 @@
+{
+  "id": "sway-return-not-keypad-enter",
+  "description": "Return does not fire bindsym Mod4+KP_Enter and reaches the focused client",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "bindsym Mod4+KP_Enter exec touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+return"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+return"
+    ],
+    "layer": "Sway",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    }
+  }
+}

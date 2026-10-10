@@ -598,8 +598,8 @@ fn encode_qt_key(combo: &KeyCombo) -> Option<Vec<i32>> {
             codes.push(flags | i32::try_from(u32::from(upper)).ok()?);
         }
     }
-    // Keypad Enter is a separate Qt key; whykey folds it into Return.
-    if key == "RETURN" {
+    // Qt reports keypad Enter as Key_Enter with or without KeypadModifier.
+    if key == "KP_ENTER" {
         codes.push(flags | QT_KEYPAD | 0x0100_0005);
     }
     Some(codes)
@@ -786,8 +786,11 @@ mod tests {
         );
         assert_eq!(
             encode_qt_key(&combo("super+return")),
+            Some(vec![QT_META | 0x0100_0004])
+        );
+        assert_eq!(
+            encode_qt_key(&combo("super+kp_enter")),
             Some(vec![
-                QT_META | 0x0100_0004,
                 QT_META | 0x0100_0005,
                 QT_META | QT_KEYPAD | 0x0100_0005
             ])

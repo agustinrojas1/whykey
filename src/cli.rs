@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use whykey::style::ColorChoice;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GlobalArguments {
-    pub arguments: Vec<String>,
+    pub arguments: Vec<OsString>,
     pub json: bool,
     pub ndjson: bool,
     pub verbose: bool,
@@ -17,48 +18,51 @@ pub(crate) struct GlobalArguments {
 
 /// Remove global presentation flags while preserving command-local arguments.
 /// Validation is centralized here so every dispatch path sees the same schema
-/// and output-mode rules.
-pub(crate) fn parse_global_arguments(raw: Vec<String>) -> Result<GlobalArguments, String> {
+/// and output-mode rules. Arguments stay `OsString` so file paths that are not
+/// UTF-8 (legal on Linux) reach the commands that open them unchanged.
+pub(crate) fn parse_global_arguments(raw: Vec<OsString>) -> Result<GlobalArguments, String> {
+    fn flag(argument: &OsStr) -> &str {
+        argument.to_str().unwrap_or("")
+    }
     let json = raw
         .iter()
-        .any(|argument| matches!(argument.as_str(), "--json" | "--json-v2" | "--ndjson"));
+        .any(|argument| matches!(flag(argument), "--json" | "--json-v2" | "--ndjson"));
     let ndjson = raw.iter().any(|argument| argument == "--ndjson");
     let verbose = raw
         .iter()
-        .any(|argument| matches!(argument.as_str(), "--verbose" | "-v"));
+        .any(|argument| matches!(flag(argument), "--verbose" | "-v"));
     let mut color = ColorChoice::Auto;
     let mut schema_version = None;
     let mut arguments = Vec::with_capacity(raw.len());
-    let mut index = 0;
-    while index < raw.len() {
-        match raw[index].as_str() {
+    let mut raw = raw.into_iter();
+    while let Some(argument) = raw.next() {
+        match flag(&argument) {
             "--json" | "--ndjson" | "--verbose" | "-v" => {}
             "--color" => {
-                let Some(value) = raw.get(index + 1) else {
-                    return Err("--color requires auto, always, or never".into());
-                };
-                color = value.parse()?;
-                index += 1;
+                color = raw
+                    .next()
+                    .as_ref()
+                    .and_then(|value| value.to_str())
+                    .ok_or("--color requires auto, always, or never")?
+                    .parse()?;
             }
             option if option.starts_with("--color=") => {
                 color = option["--color=".len()..].parse()?;
             }
             "--json-v2" => select_schema_version(&mut schema_version, 2, "--json-v2")?,
             "--schema-version" => {
-                let Some(value) = raw.get(index + 1) else {
+                let Some(value) = raw.next() else {
                     return Err("--schema-version requires 1 or 2".into());
                 };
-                let (version, flag) = match value.parse::<u8>() {
-                    Ok(1) => (1, "--schema-version 1"),
-                    Ok(2) => (2, "--schema-version 2"),
+                let (version, flag) = match value.to_str().and_then(|value| value.parse().ok()) {
+                    Some(1) => (1, "--schema-version 1"),
+                    Some(2) => (2, "--schema-version 2"),
                     _ => return Err("--schema-version must be 1 or 2".into()),
                 };
                 select_schema_version(&mut schema_version, version, flag)?;
-                index += 1;
             }
-            argument => arguments.push(argument.to_owned()),
+            _ => arguments.push(argument),
         }
-        index += 1;
     }
     Ok(GlobalArguments {
         arguments,
@@ -122,11 +126,11 @@ pub(crate) fn parse_inventory_filters(
 }
 
 /// Take `--option value`, preserving each caller's exact missing-value error.
-pub(crate) fn take_value(
-    arguments: &mut impl Iterator<Item = String>,
+pub(crate) fn take_value<T>(
+    arguments: &mut impl Iterator<Item = T>,
     option: &str,
     noun: &str,
-) -> Result<String, ExitCode> {
+) -> Result<T, ExitCode> {
     match arguments.next() {
         Some(value) => Ok(value),
         None => {
@@ -382,17 +386,36 @@ pub(crate) fn parse_capabilities_arguments(arguments: Vec<String>) -> Result<boo
 
 pub(crate) struct SnapshotRequest {
     pub combination: String,
-    pub output_path: Option<String>,
+    pub output_path: Option<OsString>,
+}
+
+/// Require a UTF-8 argument. Keys, options and values other than file paths
+/// are text; a non-UTF-8 one is a usage error, never a panic.
+pub(crate) fn utf8_argument(argument: OsString) -> Result<String, ExitCode> {
+    argument.into_string().map_err(|argument| {
+        eprintln!(
+            "error: argument {} is not valid UTF-8",
+            whykey::key::abbreviate(&argument.to_string_lossy())
+        );
+        ExitCode::from(2)
+    })
+}
+
+pub(crate) fn utf8_arguments(
+    arguments: impl Iterator<Item = OsString>,
+) -> Result<Vec<String>, ExitCode> {
+    arguments.map(utf8_argument).collect()
 }
 
 pub(crate) fn parse_snapshot_arguments(
-    arguments: Vec<String>,
+    arguments: Vec<OsString>,
 ) -> Result<Parsed<SnapshotRequest>, ExitCode> {
     let mut arguments = arguments.into_iter();
     let Some(combination) = arguments.next() else {
         eprintln!("error: usage is `{}`", usage("snapshot"));
         return Err(ExitCode::from(2));
     };
+    let combination = utf8_argument(combination)?;
     if combination == "-h" || combination == "--help" {
         return Ok(Parsed::Help);
     }
@@ -417,20 +440,76 @@ pub(crate) fn parse_snapshot_arguments(
 
 /// Dispatch one already-separated command through the existing command
 /// runners. This owns command selection while `main` remains responsible only
-/// for global flags, help, and version handling.
+/// for global flags, help, and version handling. File-path arguments (replay,
+/// diff, snapshot `--output`, extension program) stay `OsString`; every other
+/// argument must be UTF-8.
 pub(crate) fn dispatch(
     argument: String,
-    raw_arguments: Vec<String>,
+    raw_arguments: Vec<OsString>,
     json: bool,
     ndjson: bool,
     verbose: bool,
     color: ColorChoice,
     schema_version: u8,
 ) -> ExitCode {
-    let mut arguments = raw_arguments.into_iter();
     if ndjson && argument != "listen" {
         eprintln!("error: --ndjson is only supported by `whykey listen`");
         return ExitCode::from(2);
+    }
+    if argument == "replay" {
+        let mut arguments = raw_arguments.into_iter();
+        let (Some(path), None) = (arguments.next(), arguments.next()) else {
+            eprintln!("error: usage is `{}`", usage("replay"));
+            return ExitCode::from(2);
+        };
+        return crate::run_replay(path.into(), json, verbose, color, schema_version);
+    }
+    if argument == "snapshot" {
+        return match parse_snapshot_arguments(raw_arguments) {
+            Ok(Parsed::Help) => {
+                println!("Usage: {}", usage("snapshot"));
+                println!("\nSave a static diagnostic snapshot. No key is captured or injected.");
+                ExitCode::SUCCESS
+            }
+            Ok(Parsed::Run(request)) => crate::run_snapshot(request),
+            Err(code) => code,
+        };
+    }
+    if argument == "diff" {
+        if raw_arguments.len() != 2 {
+            eprintln!("error: usage is `{}`", usage("diff"));
+            return ExitCode::from(2);
+        }
+        let paths = raw_arguments.into_iter().map(Into::into).collect();
+        return crate::run_diff(paths, json, color, schema_version);
+    }
+    let mut raw_arguments = raw_arguments.into_iter();
+    let extension_program = if argument == "extension" {
+        let Some(program) = raw_arguments.next() else {
+            eprintln!("error: usage is `{}`", usage("extension"));
+            return ExitCode::from(2);
+        };
+        Some(program)
+    } else {
+        None
+    };
+    let mut arguments = match utf8_arguments(raw_arguments) {
+        Ok(arguments) => arguments.into_iter(),
+        Err(code) => return code,
+    };
+    if let Some(program) = extension_program {
+        let combinations: Vec<_> = arguments.collect();
+        if combinations.is_empty() {
+            eprintln!("error: usage is `{}`", usage("extension"));
+            return ExitCode::from(2);
+        }
+        return crate::run_extension(
+            &program,
+            combinations.join(" "),
+            json,
+            color,
+            schema_version,
+        );
     }
     if argument == "inspect" {
         return crate::run_inspect(arguments.collect(), json, verbose, color, schema_version);
@@ -480,44 +559,6 @@ pub(crate) fn dispatch(
             }
         };
         return run(json, schema_version, filters, color);
-    }
-    if argument == "extension" {
-        let Some(program) = arguments.next() else {
-            eprintln!("error: usage is `{}`", usage("extension"));
-            return ExitCode::from(2);
-        };
-        let combinations: Vec<_> = arguments.collect();
-        if combinations.is_empty() {
-            eprintln!("error: usage is `{}`", usage("extension"));
-            return ExitCode::from(2);
-        }
-        return crate::run_extension(program, combinations.join(" "), json, color, schema_version);
-    }
-    if argument == "replay" {
-        let (Some(path), None) = (arguments.next(), arguments.next()) else {
-            eprintln!("error: usage is `{}`", usage("replay"));
-            return ExitCode::from(2);
-        };
-        return crate::run_replay(path, json, verbose, color, schema_version);
-    }
-    if argument == "snapshot" {
-        return match parse_snapshot_arguments(arguments.collect()) {
-            Ok(Parsed::Help) => {
-                println!("Usage: {}", usage("snapshot"));
-                println!("\nSave a static diagnostic snapshot. No key is captured or injected.");
-                ExitCode::SUCCESS
-            }
-            Ok(Parsed::Run(request)) => crate::run_snapshot(request),
-            Err(code) => code,
-        };
-    }
-    if argument == "diff" {
-        let paths: Vec<_> = arguments.collect();
-        if paths.len() != 2 {
-            eprintln!("error: usage is `{}`", usage("diff"));
-            return ExitCode::from(2);
-        }
-        return crate::run_diff(paths, json, color, schema_version);
     }
     if argument == "shell-init" || argument == "completions" {
         let print: fn(&str) -> String = if argument == "shell-init" {
@@ -699,9 +740,9 @@ pub(crate) mod doctor_support {
     }
 
     pub(crate) fn detected_terminal_program() -> Option<String> {
-        env::var("TERM_PROGRAM")
-            .ok()
-            .or_else(|| env::var("LC_TERMINAL").ok())
+        let set = |name: &str| env::var(name).ok().filter(|value| !value.is_empty());
+        set("TERM_PROGRAM")
+            .or_else(|| set("LC_TERMINAL"))
             .or_else(|| {
                 let term = env::var("TERM").ok()?;
                 let normalized = term.to_ascii_lowercase();
@@ -1481,8 +1522,8 @@ mod tests {
         );
     }
 
-    fn strings(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
+    fn strings(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
     }
 
     #[test]
@@ -1526,7 +1567,7 @@ mod tests {
                         .iter()
                         .any(|global| global.long == option.long)
                     {
-                        parse_global_arguments(arguments)
+                        parse_global_arguments(arguments.into_iter().map(Into::into).collect())
                             .is_ok_and(|parsed| parsed.arguments.is_empty())
                     } else {
                         match command.name {
@@ -1553,6 +1594,7 @@ mod tests {
                             }
                             "snapshot" => {
                                 arguments.insert(0, "ctrl+x".into());
+                                let arguments = arguments.into_iter().map(Into::into).collect();
                                 matches!(parse_snapshot_arguments(arguments), Ok(Parsed::Run(_)))
                             }
                             other => panic!("{other} documents {name} but has no parser check"),
@@ -1602,7 +1644,7 @@ mod tests {
         ] {
             let code = dispatch(
                 "listen".into(),
-                arguments.iter().map(|value| (*value).to_owned()).collect(),
+                arguments.iter().map(OsString::from).collect(),
                 false,
                 false,
                 false,

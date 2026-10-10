@@ -165,69 +165,70 @@ const EVDEV: &[(u16, &str)] = &[
     (225, "BRIGHTNESSUP"),
 ];
 
-/// Keysyms every XKB layout produces from the same key, with the primary
-/// key code and keypad codes that produce the same Whykey key name.
-const LAYOUT_INVARIANT: &[(&str, u16, &[u16])] = &[
-    ("ESCAPE", 1, &[]),
-    ("BACKSPACE", 14, &[]),
-    ("TAB", 15, &[]),
-    ("RETURN", 28, &[96]),
-    ("SPACE", 57, &[]),
-    ("CAPS_LOCK", 58, &[]),
-    ("F1", 59, &[]),
-    ("F2", 60, &[]),
-    ("F3", 61, &[]),
-    ("F4", 62, &[]),
-    ("F5", 63, &[]),
-    ("F6", 64, &[]),
-    ("F7", 65, &[]),
-    ("F8", 66, &[]),
-    ("F9", 67, &[]),
-    ("F10", 68, &[]),
-    ("F11", 87, &[]),
-    ("F12", 88, &[]),
-    ("F13", 183, &[]),
-    ("F14", 184, &[]),
-    ("F15", 185, &[]),
-    ("F16", 186, &[]),
-    ("F17", 187, &[]),
-    ("F18", 188, &[]),
-    ("F19", 189, &[]),
-    ("F20", 190, &[]),
-    ("F21", 191, &[]),
-    ("F22", 192, &[]),
-    ("F23", 193, &[]),
-    ("F24", 194, &[]),
-    ("NUM_LOCK", 69, &[]),
-    ("SCROLL_LOCK", 70, &[]),
-    ("PRINT", 99, &[]),
-    ("PAUSE", 119, &[]),
-    ("HOME", 102, &[71]),
-    ("UP", 103, &[72]),
-    ("PAGE_UP", 104, &[73]),
-    ("LEFT", 105, &[75]),
-    ("RIGHT", 106, &[77]),
-    ("END", 107, &[79]),
-    ("DOWN", 108, &[80]),
-    ("PAGE_DOWN", 109, &[81]),
-    ("INSERT", 110, &[82]),
-    ("DELETE", 111, &[83]),
-    ("MENU", 127, &[]),
-    ("CONTROL_L", 29, &[]),
-    ("CONTROL_R", 97, &[]),
-    ("SHIFT_L", 42, &[]),
-    ("SHIFT_R", 54, &[]),
-    ("ALT_L", 56, &[]),
-    ("SUPER_L", 125, &[]),
-    ("SUPER_R", 126, &[]),
-    ("XF86AUDIOMUTE", 113, &[]),
-    ("XF86AUDIOLOWERVOLUME", 114, &[]),
-    ("XF86AUDIORAISEVOLUME", 115, &[]),
-    ("XF86AUDIOPLAY", 164, &[]),
-    ("XF86AUDIONEXT", 163, &[]),
-    ("XF86AUDIOPREV", 165, &[]),
-    ("XF86MONBRIGHTNESSDOWN", 224, &[]),
-    ("XF86MONBRIGHTNESSUP", 225, &[]),
+/// Keysyms every XKB layout produces from the same key, with that key's
+/// code. Keypad keysyms are distinct (see [`KEYPAD`]): `Return` is not
+/// `KP_Enter`, and `Home` is not `KP_Home`.
+const LAYOUT_INVARIANT: &[(&str, u16)] = &[
+    ("ESCAPE", 1),
+    ("BACKSPACE", 14),
+    ("TAB", 15),
+    ("RETURN", 28),
+    ("SPACE", 57),
+    ("CAPS_LOCK", 58),
+    ("F1", 59),
+    ("F2", 60),
+    ("F3", 61),
+    ("F4", 62),
+    ("F5", 63),
+    ("F6", 64),
+    ("F7", 65),
+    ("F8", 66),
+    ("F9", 67),
+    ("F10", 68),
+    ("F11", 87),
+    ("F12", 88),
+    ("F13", 183),
+    ("F14", 184),
+    ("F15", 185),
+    ("F16", 186),
+    ("F17", 187),
+    ("F18", 188),
+    ("F19", 189),
+    ("F20", 190),
+    ("F21", 191),
+    ("F22", 192),
+    ("F23", 193),
+    ("F24", 194),
+    ("NUM_LOCK", 69),
+    ("SCROLL_LOCK", 70),
+    ("PRINT", 99),
+    ("PAUSE", 119),
+    ("HOME", 102),
+    ("UP", 103),
+    ("PAGE_UP", 104),
+    ("LEFT", 105),
+    ("RIGHT", 106),
+    ("END", 107),
+    ("DOWN", 108),
+    ("PAGE_DOWN", 109),
+    ("INSERT", 110),
+    ("DELETE", 111),
+    ("MENU", 127),
+    ("CONTROL_L", 29),
+    ("CONTROL_R", 97),
+    ("SHIFT_L", 42),
+    ("SHIFT_R", 54),
+    ("ALT_L", 56),
+    ("SUPER_L", 125),
+    ("SUPER_R", 126),
+    ("XF86AUDIOMUTE", 113),
+    ("XF86AUDIOLOWERVOLUME", 114),
+    ("XF86AUDIORAISEVOLUME", 115),
+    ("XF86AUDIOPLAY", 164),
+    ("XF86AUDIONEXT", 163),
+    ("XF86AUDIOPREV", 165),
+    ("XF86MONBRIGHTNESSDOWN", 224),
+    ("XF86MONBRIGHTNESSUP", 225),
 ];
 
 /// US-layout characters for printable keys: (code, unshifted, shifted).
@@ -281,18 +282,37 @@ const US_PRINTABLE: &[(u16, char, char)] = &[
     (53, '/', '?'),
 ];
 
-/// Keypad keys that produce a digit when NumLock is on.
-const KEYPAD_DIGITS: &[(char, u16)] = &[
-    ('0', 82),
-    ('1', 79),
-    ('2', 80),
-    ('3', 81),
-    ('4', 75),
-    ('5', 76),
-    ('6', 77),
-    ('7', 71),
-    ('8', 72),
-    ('9', 73),
+/// Keypad keysyms and their key code, the same in every layout. The
+/// navigation keysyms share the digit keys; NumLock selects between them.
+const KEYPAD: &[(&str, u16)] = &[
+    ("KP_ENTER", 96),
+    ("KP_0", 82),
+    ("KP_1", 79),
+    ("KP_2", 80),
+    ("KP_3", 81),
+    ("KP_4", 75),
+    ("KP_5", 76),
+    ("KP_6", 77),
+    ("KP_7", 71),
+    ("KP_8", 72),
+    ("KP_9", 73),
+    ("KP_ADD", 78),
+    ("KP_SUBTRACT", 74),
+    ("KP_MULTIPLY", 55),
+    ("KP_DIVIDE", 98),
+    ("KP_DECIMAL", 83),
+    ("KP_EQUAL", 117),
+    ("KP_INSERT", 82),
+    ("KP_END", 79),
+    ("KP_DOWN", 80),
+    ("KP_PAGE_DOWN", 81),
+    ("KP_LEFT", 75),
+    ("KP_BEGIN", 76),
+    ("KP_RIGHT", 77),
+    ("KP_HOME", 71),
+    ("KP_UP", 72),
+    ("KP_PAGE_UP", 73),
+    ("KP_DELETE", 83),
 ];
 
 /// Look up a Linux key name, case-insensitively, with or without `KEY_`.
@@ -324,8 +344,8 @@ pub(crate) fn keysym_code(name: &str) -> Option<u16> {
     };
     LAYOUT_INVARIANT
         .iter()
-        .find(|(candidate, ..)| *candidate == upper)
-        .map(|(_, code, _)| *code)
+        .find(|(candidate, _)| *candidate == upper)
+        .map(|(_, code)| *code)
 }
 
 /// The modifier bit a held modifier key contributes.
@@ -380,7 +400,7 @@ pub(crate) struct QueryPresses {
 }
 
 /// Map a query to physical presses. A captured keycode is exact; a
-/// layout-independent keysym maps to its keys; a printable keysym maps to
+/// layout-independent or keypad keysym maps to its key; a printable keysym maps to
 /// its US position, flagged unless the layout is known to be US.
 pub(crate) fn query_presses(
     key: &KeyCombo,
@@ -395,16 +415,13 @@ pub(crate) fn query_presses(
         });
     }
     let name = key.key();
-    if let Some((_, primary, alternates)) = LAYOUT_INVARIANT
+    if let Some((_, code)) = LAYOUT_INVARIANT
         .iter()
-        .find(|(candidate, ..)| *candidate == name)
+        .chain(KEYPAD)
+        .find(|(candidate, _)| *candidate == name)
     {
-        let presses = std::iter::once(*primary)
-            .chain(alternates.iter().copied())
-            .map(|code| Press::new(mods, code))
-            .collect();
         return Some(QueryPresses {
-            presses,
+            presses: vec![Press::new(mods, *code)],
             layout_assumed: false,
         });
     }
@@ -424,10 +441,7 @@ pub(crate) fn query_presses(
         }
     })?;
     let mods = if shifted { mods | SHIFT } else { mods };
-    let mut presses = vec![Press::new(mods, code)];
-    if let Some((_, keypad)) = KEYPAD_DIGITS.iter().find(|(digit, _)| *digit == character) {
-        presses.push(Press::new(mods, *keypad));
-    }
+    let presses = vec![Press::new(mods, code)];
     Some(QueryPresses {
         presses,
         layout_assumed: !layout_us,
@@ -437,9 +451,9 @@ pub(crate) fn query_presses(
 /// The key combination downstream layers receive for an emitted press, when
 /// its keysym does not depend on an unknown layout.
 pub(crate) fn downstream_combo(press: Press, layout_us: bool) -> Option<KeyCombo> {
-    if let Some((name, ..)) = LAYOUT_INVARIANT
+    if let Some((name, _)) = LAYOUT_INVARIANT
         .iter()
-        .find(|(_, primary, _)| *primary == press.code)
+        .find(|(_, code)| *code == press.code)
     {
         return Some(KeyCombo::from_parts(press.mods, name));
     }
@@ -505,5 +519,20 @@ mod tests {
             downstream_combo(Press::new(CTRL, 48), true),
             Some(KeyCombo::parse_query("ctrl+b").unwrap())
         );
+    }
+
+    #[test]
+    fn keypad_keys_are_distinct_from_their_main_keys() {
+        let presses = |query: &str| {
+            let key = KeyCombo::parse_query(query).unwrap();
+            query_presses(&key, None, true).unwrap().presses
+        };
+        assert_eq!(presses("return"), vec![Press::new(0, 28)]);
+        assert_eq!(presses("kp_enter"), vec![Press::new(0, 96)]);
+        assert_eq!(presses("1"), vec![Press::new(0, 2)]);
+        assert_eq!(presses("kp_1"), vec![Press::new(0, 79)]);
+        assert_eq!(presses("home"), vec![Press::new(0, 102)]);
+        assert_eq!(presses("kp_home"), vec![Press::new(0, 71)]);
+        assert_eq!(presses("kp_add"), vec![Press::new(0, 78)]);
     }
 }

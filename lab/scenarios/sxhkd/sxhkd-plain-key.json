@@ -1,0 +1,12 @@
+{
+  "id": "sxhkd-plain-key",
+  "description": "a binding without modifiers (F5) fires and sxhkd consumes the key; xdotool sends keycode 71 because its keysym lookup in Xvfb's keymap presses Alt_L with F5",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/sxhkd/sxhkdrc": ["F5", "    touch /tmp/fired"]},
+  "x11": {"daemons": [{"argv": ["sxhkd", "-c", "/root/.config/sxhkd/sxhkdrc"], "ready_grab": [0, 71]}]},
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "71"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {"args": ["f5"], "layer": "sxhkd", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

@@ -31,7 +31,7 @@ use whykey::style::{ColorChoice, RenderOptions};
 /// completions render from [`cli::help::COMMANDS`]; the parser tests in
 /// `cli` prove every listed option is accepted.
 fn main() -> ExitCode {
-    let parsed = match cli::parse_global_arguments(env::args().skip(1).collect()) {
+    let parsed = match cli::parse_global_arguments(env::args_os().skip(1).collect()) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("error: {error}");
@@ -51,6 +51,20 @@ fn main() -> ExitCode {
         eprintln!("{}", help_text());
         return ExitCode::from(2);
     };
+    let argument = match cli::utf8_argument(argument) {
+        Ok(argument) => argument,
+        Err(code) => return code,
+    };
+    // A closed stdout (`whykey --help | head -1`) ends one-shot commands
+    // quietly with status 141, as SIGPIPE ends other Unix filters, not with a
+    // "failed printing" panic. SIGPIPE itself stays ignored (Rust's default):
+    // a SIG_DFL disposition would also kill whykey when an extension closes
+    // its stdin before reading the request, instead of reporting that error.
+    // `listen` keeps the plain panic: its terminal, kitty-flag, and
+    // native-hook guards restore state in `Drop`, which an exit would skip.
+    if argument != "listen" {
+        exit_quietly_on_closed_stdout();
+    }
 
     if matches!(argument.as_str(), "-h" | "--help") {
         println!("{}", help_text());
@@ -69,6 +83,26 @@ fn main() -> ExitCode {
         color,
         schema_version,
     )
+}
+
+/// Turns `println!`'s "failed printing to stdout: Broken pipe" panic into a
+/// silent exit with the shell's SIGPIPE status, leaving other panics alone.
+fn exit_quietly_on_closed_stdout() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied());
+        let broken_pipe = std::io::Error::from_raw_os_error(libc::EPIPE).to_string();
+        if let Some(message) = message {
+            if message.starts_with("failed printing to stdout") && message.ends_with(&broken_pipe) {
+                std::process::exit(128 + libc::SIGPIPE);
+            }
+        }
+        default_hook(info);
+    }));
 }
 
 fn run_listen(options: listen::Options) -> ExitCode {
@@ -108,21 +142,31 @@ fn run_inspect(
             let resolved_source = focused_target.as_ref().map(|target| target.source.as_str());
             let target = resolved_pid.map(|pid| (pid, resolved_source));
             let reports = inspect_sequence(sequence.as_slice(), target);
-            Ok::<_, String>(reports)
+            Ok::<_, String>((reports, resolved_pid))
         })
     };
     let reports_result = match instance.as_deref() {
         Some(instance) => hyprland::with_instance_override(instance, inspect_with_budget),
         None => inspect_with_budget(),
     };
-    let reports = match reports_result {
-        Ok(reports) => reports,
+    let (reports, resolved_pid) = match reports_result {
+        Ok(result) => result,
         Err(error) => {
             eprintln!("whykey inspect --focused: {error}");
             return ExitCode::from(1);
         }
     };
     let has_explicit_target = target_pid.is_some() || focused;
+    if let Some(pid) = resolved_pid.filter(|pid| !focus::shares_terminal_with_whykey(*pid)) {
+        // The terminal emulator and TTY driver layers read whykey's own
+        // environment and /dev/tty; only the application and shell layers
+        // follow the target. Say so instead of mixing the two silently.
+        eprintln!(
+            "note: process {pid} is not on whykey's terminal; the terminal emulator and TTY \
+             driver rows describe the terminal whykey runs in, the application and shell \
+             rows describe process {pid}"
+        );
+    }
     let unavailable = reports
         .iter()
         .any(|steps| cli::inspection_failed(steps, has_explicit_target));
@@ -236,7 +280,7 @@ fn run_conflicts(
 }
 
 fn run_extension(
-    program: String,
+    program: &std::ffi::OsStr,
     input: String,
     json: bool,
     _color: ColorChoice,
@@ -250,7 +294,7 @@ fn run_extension(
         }
     };
     let result = command::with_deadline(command::configured_diagnostic_timeout(), || {
-        extensions::inspect(&program, &key)
+        extensions::inspect(program, &key)
     });
     let result = match result {
         Ok(result) => result,
@@ -275,13 +319,13 @@ fn run_extension(
 }
 
 fn run_replay(
-    path: String,
+    path: std::path::PathBuf,
     json: bool,
     verbose: bool,
     _color: ColorChoice,
     schema_version: u8,
 ) -> ExitCode {
-    let documents = match replay::load(std::path::Path::new(&path)) {
+    let documents = match replay::load(&path) {
         Ok(documents) => documents,
         Err(error) => {
             eprintln!("whykey replay: {error}");
@@ -314,33 +358,46 @@ fn run_snapshot(request: cli::SnapshotRequest) -> ExitCode {
     let results = command::with_deadline(command::configured_diagnostic_timeout(), || {
         inspect_default_chain(&key)
     });
-    let unavailable = results
-        .iter()
-        .any(|result| result.outcome == Outcome::Unavailable);
+    // Same exit rule as `whykey KEY`: a report with an unavailable layer is
+    // still a completed inspection unless nothing could be inspected.
+    let failed = cli::inspection_failed(&results, false);
     let value = snapshot::create(&key, &results);
     if let Some(path) = output_path {
-        if let Err(error) = snapshot::save(std::path::Path::new(&path), &value) {
-            eprintln!("whykey snapshot: could not write {path}: {error}");
+        let path = std::path::Path::new(&path);
+        if let Err(error) = snapshot::save(path, &value) {
+            eprintln!(
+                "whykey snapshot: could not write {}: {error}",
+                path.display()
+            );
             return ExitCode::from(1);
         }
-        eprintln!("whykey snapshot: wrote {path}");
+        eprintln!("whykey snapshot: wrote {}", path.display());
     } else {
         print!("{}", snapshot::render(&value));
     }
-    if unavailable {
+    if failed {
+        eprintln!(
+            "whykey snapshot: exit 1 because the inspection is incomplete (every layer was \
+             unavailable or the diagnostic budget expired); the snapshot still records it"
+        );
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
     }
 }
 
-fn run_diff(paths: Vec<String>, json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
-    let load_one = |path: &str| -> Result<serde_json::Value, String> {
-        let documents =
-            replay::load(std::path::Path::new(path)).map_err(|error| error.to_string())?;
+fn run_diff(
+    paths: Vec<std::path::PathBuf>,
+    json: bool,
+    _color: ColorChoice,
+    schema_version: u8,
+) -> ExitCode {
+    let load_one = |path: &std::path::Path| -> Result<serde_json::Value, String> {
+        let documents = replay::load(path).map_err(|error| error.to_string())?;
         if documents.len() != 1 {
             return Err(format!(
-                "{path} contains {} reports; expected exactly one",
+                "{} contains {} reports; expected exactly one",
+                path.display(),
                 documents.len()
             ));
         }
@@ -396,10 +453,14 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     let shell = environment.shell.clone();
     let shell_snapshot = shell_snapshot_available(&shell);
     let evdev = listen::evdev_available();
-    let native_compositor = whykey::capabilities::native_capture_available_for_doctor();
+    let hyprland_native = whykey::capabilities::hyprland_native_capture();
+    let native_compositor = hyprland_native.is_ok();
+    // Hyprland IPC answers but the key hook cannot be installed (a hyprlang
+    // `.conf` config): `listen` would fall back, so doctor must not say OK.
+    let hyprland_hook_unavailable = hyprland_native.err().flatten();
     let native_sway = whykey::sway_capture::probe_available();
     let native_available = native_compositor || native_sway;
-    let native_backend = if native_compositor {
+    let native_backend = if native_compositor || hyprland_hook_unavailable.is_some() {
         whykey::capture::NativeBackendId::Hyprland.display()
     } else {
         whykey::capture::NativeBackendId::Sway.display()
@@ -424,9 +485,13 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
                         "sway" => native_sway,
                         _ => false,
                     } {
-                        "IPC connection accepted"
+                        "IPC connection accepted".to_owned()
+                    } else if let (true, "hyprland", Some(reason)) =
+                        (candidate.ipc, candidate.id, hyprland_hook_unavailable.as_deref())
+                    {
+                        reason.to_owned()
                     } else {
-                        "IPC connection unavailable"
+                        "IPC connection unavailable".to_owned()
                     },
                 })
             })
@@ -434,6 +499,8 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         .collect::<Vec<_>>();
     let native_cause = if native_available {
         whykey::doctor::Cause::Available
+    } else if hyprland_hook_unavailable.is_some() {
+        whykey::doctor::Cause::ApiDoesNotExpose
     } else if native_attempts.is_empty() {
         whykey::doctor::Cause::NotInstalled
     } else {
@@ -590,6 +657,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
                 "available": native_available,
                 "backend": native_available.then_some(native_backend),
                 "cause": native_cause,
+                "detail": hyprland_hook_unavailable,
                 "next_check": native_cause.next_check(),
                 "attempted": native_attempts.clone(),
             },
@@ -645,11 +713,14 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
             "run inside a supported compositor session and ensure its IPC is reachable",
         );
         if !native_available {
-            let cause = format!(
-                "cause: {} — {}",
-                native_cause.label(),
-                native_cause.next_check()
-            );
+            let cause = match hyprland_hook_unavailable.as_deref() {
+                Some(reason) => format!("cause: {reason}"),
+                None => format!(
+                    "cause: {} — {}",
+                    native_cause.label(),
+                    native_cause.next_check()
+                ),
+            };
             for line in whykey::style::wrap_hanging(&cause, render_options.width, "  ", "  ") {
                 println!("{}", render_options.uncertain(line));
             }

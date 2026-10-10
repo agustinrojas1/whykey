@@ -1,0 +1,12 @@
+{
+  "id": "sxhkd-release",
+  "description": "an @super + t binding runs when t is released while Super is held; sxhkd takes the press with its grab and does not replay it. xdotool key Super_L+t releases Super_L before t, which never matches, so the keys are pressed and released explicitly",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/sxhkd/sxhkdrc": ["@super + t", "    touch /tmp/fired"]},
+  "x11": {"daemons": [{"argv": ["sxhkd", "-c", "/root/.config/sxhkd/sxhkdrc"], "ready_grab": [64, 28]}]},
+  "probe": "x11",
+  "actions": [{"xdotool": ["keydown", "Super_L", "keydown", "t", "keyup", "t", "keyup", "Super_L"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {"args": ["super+t"], "layer": "sxhkd", "detail": "@: the command runs on key release", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

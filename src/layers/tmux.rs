@@ -223,7 +223,7 @@ fn resolve_key(
     tables: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Resolution {
     // The prefix takes precedence over every table except the prefix table.
-    if table != "prefix" && prefixes.contains(key) {
+    if table != "prefix" && prefixes.contains(&tmux_query_key(key)) {
         return Resolution::PrefixEntered;
     }
     let output = match tables(table) {
@@ -369,32 +369,73 @@ struct Binding {
     description: String,
 }
 
+/// Finds the binding for `key` in `list-keys` output. tmux prints each line
+/// as `bind-key [-r] [-N note] -T TABLE KEY COMMAND...`: the key is the token
+/// right after the table name, quoted (`"M-{"`) or backslash-escaped (`\%`,
+/// `C-\\`) when it holds a character special to tmux's parser.
 fn find_binding(output: &[u8], key: &KeyCombo, expected_table: &str) -> Option<Binding> {
     let text = std::str::from_utf8(output).ok()?;
+    let wanted = tmux_query_key(key);
     text.lines().find_map(|line| {
-        let tokens: Vec<_> = line.split_whitespace().collect();
-        if tokens.first().copied() != Some("bind-key") {
+        let rest = line.strip_prefix("bind-key")?;
+        let after_table_flag = rest[rest.find(" -T ")? + 4..].trim_start();
+        let table_end = after_table_flag
+            .find(char::is_whitespace)
+            .unwrap_or(after_table_flag.len());
+        if &after_table_flag[..table_end] != expected_table {
             return None;
         }
-        let table_index = tokens.iter().position(|token| *token == "-T")?;
-        if tokens.get(table_index + 1).copied() != Some(expected_table) {
+        let (raw_key, action) = split_key_token(after_table_flag[table_end..].trim_start())?;
+        if parse_tmux_key(&raw_key)? != wanted {
             return None;
         }
-        let key_index = tokens
-            .iter()
-            .enumerate()
-            .skip(table_index + 2)
-            .find_map(|(index, token)| (!token.starts_with('-')).then_some(index))?;
-        let parsed = parse_tmux_key(tokens[key_index])?;
-        if parsed != *key {
-            return None;
-        }
-        let action = tokens.get(key_index + 1..)?.join(" ");
         Some(Binding {
-            action,
+            action: action.split_whitespace().collect::<Vec<_>>().join(" "),
             description: line.to_owned(),
         })
     })
+}
+
+/// Reads one tmux key token: `"..."` quoted, or a bare token whose `\x`
+/// escapes stand for `x`. Returns the unescaped key and the remaining text.
+fn split_key_token(text: &str) -> Option<(String, &str)> {
+    let mut key = String::new();
+    let mut chars = text.char_indices();
+    if text.starts_with('"') {
+        chars.next();
+        while let Some((index, character)) = chars.next() {
+            match character {
+                '\\' => key.push(chars.next()?.1),
+                '"' => return Some((key, &text[index + 1..])),
+                other => key.push(other),
+            }
+        }
+        return None;
+    }
+    while let Some((index, character)) = chars.next() {
+        match character {
+            '\\' => key.push(chars.next()?.1),
+            character if character.is_whitespace() => return Some((key, &text[index..])),
+            other => key.push(other),
+        }
+    }
+    (!key.is_empty()).then_some((key, ""))
+}
+
+/// The tmux key a queried combination arrives as. A shifted punctuation
+/// character already names the shifted symbol (`shift+%` is `%`), while
+/// Shift on a letter selects the uppercase key, as tmux's case-sensitive
+/// `C` versus `c` does.
+fn tmux_query_key(key: &KeyCombo) -> KeyCombo {
+    let mut characters = key.key().chars();
+    match (characters.next(), characters.next()) {
+        (Some(character), None)
+            if key.modmask() & SHIFT != 0 && character.is_ascii_punctuation() =>
+        {
+            KeyCombo::from_parts(key.modmask() & !SHIFT, key.key())
+        }
+        _ => key.clone(),
+    }
 }
 
 fn tmux_prefixes() -> Vec<String> {
@@ -413,37 +454,84 @@ fn tmux_prefixes() -> Vec<String> {
         .collect()
 }
 
+const SHIFT: u32 = 1;
+const CTRL: u32 = 4;
+const ALT: u32 = 8;
+
+/// Parses an unescaped tmux key name into the combination it matches. Single
+/// characters are case-sensitive in tmux (`C` is Shift+c), so an uppercase
+/// letter carries Shift; `BTab` is Shift+Tab.
 fn parse_tmux_key(raw: &str) -> Option<KeyCombo> {
     let mut modifiers = 0;
     let mut key = raw;
-    while let Some((prefix, rest)) = key.split_once('-') {
-        match prefix.to_ascii_uppercase().as_str() {
-            "C" => modifiers |= 4,
-            "M" => modifiers |= 8,
-            "S" => modifiers |= 1,
+    loop {
+        if key.len() > 1 {
+            if let Some(rest) = key.strip_prefix('^') {
+                modifiers |= CTRL;
+                key = rest;
+                continue;
+            }
+        }
+        let Some((prefix, rest)) = key.split_once('-') else {
+            break;
+        };
+        if rest.is_empty() {
+            break;
+        }
+        match prefix {
+            "C" | "c" => modifiers |= CTRL,
+            "M" | "m" => modifiers |= ALT,
+            "S" | "s" => modifiers |= SHIFT,
             _ => break,
         }
         key = rest;
     }
-    let key_lower = key.to_ascii_lowercase();
-    let normalized = match key_lower.as_str() {
+    let mut characters = key.chars();
+    if let (Some(character), None) = (characters.next(), characters.next()) {
+        if character.is_ascii_uppercase() {
+            modifiers |= SHIFT;
+        }
+        return Some(KeyCombo::from_parts(modifiers, key));
+    }
+    let normalized = match key.to_ascii_lowercase().as_str() {
         "left" => "LEFT",
         "right" => "RIGHT",
         "up" => "UP",
         "down" => "DOWN",
         "home" => "HOME",
         "end" => "END",
-        "npage" | "pagedown" => "PAGE_DOWN",
-        "ppage" | "pageup" => "PAGE_UP",
+        "npage" | "pagedown" | "pgdn" => "PAGE_DOWN",
+        "ppage" | "pageup" | "pgup" => "PAGE_UP",
         "ic" | "insert" => "INSERT",
         "dc" | "delete" => "DELETE",
-        "btab" | "backtab" => "TAB",
+        "escape" => "ESCAPE",
+        "bspace" => "BACKSPACE",
+        "tab" => "TAB",
+        "btab" => {
+            modifiers |= SHIFT;
+            "TAB"
+        }
         "space" => "SPACE",
-        "enter" | "return" => "RETURN",
+        "enter" => "RETURN",
+        "kpenter" => "KP_ENTER",
+        "kp/" => "KP_DIVIDE",
+        "kp*" => "KP_MULTIPLY",
+        "kp-" => "KP_SUBTRACT",
+        "kp+" => "KP_ADD",
+        "kp." => "KP_DECIMAL",
+        value
+            if value.len() == 3
+                && value.starts_with("kp")
+                && value.as_bytes()[2].is_ascii_digit() =>
+        {
+            return Some(KeyCombo::from_parts(
+                modifiers,
+                format!("KP_{}", &value[2..]),
+            ));
+        }
         value if value.starts_with('f') && value[1..].parse::<u8>().is_ok() => {
             return Some(KeyCombo::from_parts(modifiers, value.to_ascii_uppercase()));
         }
-        value if value.len() == 1 => value,
         _ => return None,
     };
     Some(KeyCombo::from_parts(modifiers, normalized))
@@ -466,6 +554,129 @@ mod tests {
             "ALT + SHIFT + X"
         );
         assert_eq!(parse_tmux_key("C-b").unwrap().to_string(), "CTRL + B");
+    }
+
+    /// Verbatim `tmux 3.7c list-keys` lines (uppercase before lowercase,
+    /// escaped and quoted keys, `-r` flags before `-T`).
+    const LIST_KEYS: &[u8] = br##"bind-key    -T prefix \"      split-window
+bind-key    -T prefix \#      list-buffers
+bind-key    -T prefix \$      command-prompt -I "#S" { rename-session "%%" }
+bind-key    -T prefix \%      split-window -h
+bind-key    -T prefix \'      command-prompt -T window-target -p index { select-window -t ":%%" }
+bind-key    -T prefix -       delete-buffer
+bind-key    -T prefix \;      last-pane
+bind-key    -T prefix C       new-session -c "#{pane_current_path}"
+bind-key    -T prefix D       choose-client -Z
+bind-key    -T prefix c       new-window -c "#{pane_current_path}"
+bind-key    -T prefix d       detach-client
+bind-key    -T prefix \{      swap-pane -U
+bind-key    -T prefix \}      swap-pane -D
+bind-key    -T prefix \~      show-messages
+bind-key -r -T prefix DC      refresh-client -c
+bind-key    -T prefix C-z     suspend-client
+bind-key  -T root M-Escape                  kill-pane
+bind-key  -T root "M-{"                     display-message x
+bind-key  -T root C-\\                      display-message q
+bind-key  -T root BSpace                    display-message z
+bind-key  -T root BTab                      display-message y
+bind-key  -T root M-S-a                     display-message a
+bind-key  -T root M--                       display-message m
+"##;
+
+    fn action(table: &str, key: &str) -> Option<String> {
+        let key = KeyCombo::parse_query(key).unwrap();
+        find_binding(LIST_KEYS, &key, table).map(|binding| binding.action)
+    }
+
+    #[test]
+    fn tmux_keys_are_case_sensitive() {
+        assert_eq!(
+            action("prefix", "c").as_deref(),
+            Some("new-window -c \"#{pane_current_path}\"")
+        );
+        assert_eq!(
+            action("prefix", "shift+c").as_deref(),
+            Some("new-session -c \"#{pane_current_path}\"")
+        );
+        assert_eq!(action("prefix", "d").as_deref(), Some("detach-client"));
+        assert_eq!(
+            action("prefix", "shift+d").as_deref(),
+            Some("choose-client -Z")
+        );
+        assert_eq!(
+            action("root", "alt+shift+a").as_deref(),
+            Some("display-message a")
+        );
+        assert_eq!(action("root", "alt+a"), None);
+    }
+
+    #[test]
+    fn escaped_quoted_and_dash_keys_match() {
+        for (key, expected) in [
+            ("percent", "split-window -h"),
+            ("shift+percent", "split-window -h"),
+            ("quotedbl", "split-window"),
+            ("numbersign", "list-buffers"),
+            (
+                "dollar",
+                "command-prompt -I \"#S\" { rename-session \"%%\" }",
+            ),
+            (
+                "apostrophe",
+                "command-prompt -T window-target -p index { select-window -t \":%%\" }",
+            ),
+            ("semicolon", "last-pane"),
+            ("minus", "delete-buffer"),
+            ("braceleft", "swap-pane -U"),
+            ("braceright", "swap-pane -D"),
+            ("asciitilde", "show-messages"),
+            ("delete", "refresh-client -c"),
+            ("ctrl+z", "suspend-client"),
+        ] {
+            assert_eq!(action("prefix", key).as_deref(), Some(expected), "{key}");
+        }
+        assert_eq!(
+            action("root", "alt+braceleft").as_deref(),
+            Some("display-message x")
+        );
+        assert_eq!(
+            action("root", "ctrl+backslash").as_deref(),
+            Some("display-message q")
+        );
+        assert_eq!(
+            action("root", "alt+minus").as_deref(),
+            Some("display-message m")
+        );
+    }
+
+    #[test]
+    fn named_tmux_keys_match() {
+        assert_eq!(action("root", "alt+escape").as_deref(), Some("kill-pane"));
+        assert_eq!(
+            action("root", "backspace").as_deref(),
+            Some("display-message z")
+        );
+        assert_eq!(
+            action("root", "shift+tab").as_deref(),
+            Some("display-message y")
+        );
+        assert_eq!(action("root", "tab"), None);
+        assert_eq!(
+            parse_tmux_key("^B").unwrap().to_string(),
+            "CTRL + SHIFT + B"
+        );
+        assert_eq!(parse_tmux_key("^b").unwrap().to_string(), "CTRL + B");
+        for (tmux, query) in [
+            ("KPEnter", "kp_enter"),
+            ("KP1", "kp_1"),
+            ("KP/", "kp_divide"),
+        ] {
+            assert_eq!(
+                parse_tmux_key(tmux),
+                Some(KeyCombo::parse_query(query).unwrap()),
+                "{tmux}"
+            );
+        }
     }
 
     #[test]

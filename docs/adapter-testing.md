@@ -43,3 +43,11 @@ add at least one bound and one unbound scenario under
 `python3 tools/generate_support_matrix.py` so that the support matrix
 records the scenario. Without a scenario, the adapter stays *unverified*
 in the support matrix, however many fixtures pass.
+
+A scenario counts for an adapter only when the adapter's own logic decided
+the verdict. On X11, verdicts the grab probe decided are credited to
+`compositor.x11-grab`; add a `-no-display` variant (whykey run without
+`DISPLAY`) to test the adapter alone. To check that the scenarios catch a
+broken adapter, run `lab/mutate.py` with a few mutations of its decision
+logic (see the lab README); a mutation no scenario catches is a coverage
+gap.

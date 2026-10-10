@@ -17,7 +17,11 @@ pub struct Conflict {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submap: Option<String>,
     pub classification: String,
+    /// Distinct actions in the order the source runs them.
     pub actions: Vec<String>,
+    /// Code of a `code:N` key listed as its layout symbol, for `--key code:N`.
+    #[serde(skip)]
+    pub(crate) keycode: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,12 +107,12 @@ fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize
             }
             continue;
         }
-        let mut actions = entries
-            .iter()
-            .map(|entry| entry.action.clone())
-            .collect::<Vec<_>>();
-        actions.sort();
-        actions.dedup();
+        let mut actions: Vec<String> = Vec::new();
+        for entry in &entries {
+            if !actions.contains(&entry.action) {
+                actions.push(entry.action.clone());
+            }
+        }
         if actions.len() < 2 {
             continue;
         }
@@ -116,13 +120,12 @@ fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize
             .iter()
             .all(|entry| entry.certainty == "runtime effective binding");
         let classification = if source == crate::layers::hyprland::INVENTORY_SOURCE {
-            // Hyprland runs every matching bind in order; only a `submap`
-            // bind stops the binds after it.
-            if actions
-                .iter()
-                .any(|action| action.split_whitespace().next() == Some("submap"))
-            {
-                "possible; a submap bind stops later matching binds"
+            // Hyprland runs every matching bind in order until a `submap`
+            // bind, which stops the binds after it; a submap bind listed
+            // last therefore fires together with the others.
+            let is_submap = |action: &String| action.split_whitespace().next() == Some("submap");
+            if actions[..actions.len() - 1].iter().any(is_submap) {
+                "the submap bind stops the binds listed after it"
             } else {
                 "multiple binds fire together; Hyprland runs every matching bind"
             }
@@ -131,6 +134,9 @@ fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize
         } else {
             "possible; runtime activation or precedence is unknown"
         };
+        let keycode = entries
+            .first()
+            .and_then(|entry| bindings::record_keycode(entry));
         conflicts.push(Conflict {
             key,
             source,
@@ -139,6 +145,7 @@ fn build_conflicts(entries: &[bindings::BindingRecord]) -> (Vec<Conflict>, usize
             submap,
             classification: classification.into(),
             actions,
+            keycode,
         });
     }
 
@@ -153,8 +160,10 @@ pub fn filter(
     device: Option<&str>,
     submap: Option<&str>,
 ) -> Report {
+    let key = key.map(bindings::KeyFilter::new);
     report.conflicts.retain(|conflict| {
-        contains(&conflict.key, key)
+        key.as_ref()
+            .is_none_or(|key| key.matches(&conflict.key, conflict.keycode))
             && conflict.actions.iter().any(|value| {
                 action.is_none_or(|needle| {
                     value
@@ -366,6 +375,71 @@ mod tests {
     }
 
     #[test]
+    fn hyprland_actions_keep_bind_order_and_a_leading_submap_bind_stops_the_rest() {
+        let runtime = "runtime effective binding";
+        let entries = vec![
+            hyprland_record("ESCAPE", "submap reset", runtime),
+            hyprland_record("ESCAPE", "exec touch /tmp/after", runtime),
+        ];
+        let (conflicts, _) = build_conflicts(&entries);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["submap reset", "exec touch /tmp/after"]
+        );
+        assert_eq!(
+            conflicts[0].classification,
+            "the submap bind stops the binds listed after it"
+        );
+
+        // A submap bind listed last runs after the others: they all fire.
+        let entries = vec![
+            hyprland_record("ESCAPE", "exec touch /tmp/before", runtime),
+            hyprland_record("ESCAPE", "submap reset", runtime),
+        ];
+        let (conflicts, _) = build_conflicts(&entries);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["exec touch /tmp/before", "submap reset"]
+        );
+        assert_eq!(
+            conflicts[0].classification,
+            "multiple binds fire together; Hyprland runs every matching bind"
+        );
+    }
+
+    #[test]
+    fn key_filter_matches_normalized_keys_and_displayed_keycodes() {
+        let runtime = "runtime effective binding";
+        let shown = "runtime effective binding; code:10 shown as its key in the active XKB layout";
+        let entries = vec![
+            hyprland_record("SUPER+RETURN", "exec foot", runtime),
+            hyprland_record("SUPER+RETURN", "exec kitty", runtime),
+            hyprland_record("SUPER+,", "exec a", runtime),
+            hyprland_record("SUPER+,", "exec b", runtime),
+            hyprland_record("SUPER+1", "workspace 1", shown),
+            hyprland_record("SUPER+1", "exec c", shown),
+        ];
+        let report = || Report {
+            schema_version: 1,
+            conflicts: build_conflicts(&entries).0,
+            unavailable: Vec::new(),
+            limitations: Vec::new(),
+        };
+        let keys = |query: &str| {
+            filter(report(), Some(query), None, None, None, None)
+                .conflicts
+                .into_iter()
+                .map(|conflict| conflict.key)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys("super+enter"), vec!["SUPER+RETURN"]);
+        assert_eq!(keys("super+,"), vec!["SUPER+,"]);
+        assert_eq!(keys("super+code:10"), vec!["SUPER+1"]);
+        assert_eq!(keys("code:10"), vec!["SUPER+1"]);
+        assert!(keys("super+kp_enter").is_empty());
+    }
+
+    #[test]
     fn extension_manifest_bindings_are_grouped_for_conflicts() {
         let entries = vec![
             bindings::BindingRecord {
@@ -472,6 +546,7 @@ mod tests {
                     submap: Some("default".into()),
                     classification: "possible".into(),
                     actions: vec!["Open terminal".into(), "Open editor".into()],
+                    keycode: None,
                 },
                 Conflict {
                     key: "SUPER+X".into(),
@@ -481,6 +556,7 @@ mod tests {
                     submap: None,
                     classification: "possible".into(),
                     actions: vec!["Open overview".into(), "Open settings".into()],
+                    keycode: None,
                 },
             ],
             unavailable: Vec::new(),

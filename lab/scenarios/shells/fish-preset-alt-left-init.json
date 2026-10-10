@@ -1,0 +1,53 @@
+{
+  "id": "fish-preset-alt-left-init",
+  "description": "fish 4.6's preset alt-left runs the whole `if fish_in_macos_terminal; ...; else prevd-or-backward-token; end` script (cursor moves back a token); whykey shows the full command, not the text before the first `;`",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/fish/config.fish": [
+      "function fish_prompt; echo -n '> '; end",
+      "whykey shell-init fish | source"
+    ]
+  },
+  "pty": {
+    "command": [
+      "fish",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo ab cd"
+    },
+    {
+      "type": "\\e[1;3D"
+    },
+    {
+      "type": "X"
+    },
+    {
+      "type": "\\x05 > /tmp/effect\\r"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/effect",
+      "equals": "ab Xcd"
+    },
+    "reached": "fired"
+  },
+  "whykey": {
+    "args": [
+      "alt+left"
+    ],
+    "layer": "Fish",
+    "run": "pty",
+    "summary": "else prevd-or-backward-token; end"
+  }
+}

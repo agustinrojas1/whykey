@@ -1,0 +1,60 @@
+{
+  "id": "i3-keypad-digit-without-numlock-modifier",
+  "description": "bindsym $mod+KP_1 without Mod2: i3 finds no keycode producing KP_1 in its Mod4 state and grabs nothing, so the key reaches the client even with NumLock on",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/i3/config": [
+      "set $mod Mod4",
+      "bindsym $mod+KP_1 exec touch /tmp/fired",
+      "bindsym $mod+t exec touch /tmp/ready"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": [
+          "i3",
+          "-c",
+          "/root/.config/i3/config"
+        ],
+        "ready": "wm",
+        "ready_grab": [
+          64,
+          28
+        ]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [
+    {
+      "xdotool": [
+        "key",
+        "Num_Lock"
+      ]
+    },
+    {
+      "xdotool": [
+        "key",
+        "Super_L+KP_1"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+kp_1"
+    ],
+    "layer": "i3",
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "i3"
+    }
+  }
+}

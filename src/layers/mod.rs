@@ -216,21 +216,19 @@ mod tests {
 
     #[test]
     fn active_application_target_does_not_append_parent_shell() {
+        // Target this test process: it is never a shell, unlike PID 1, which is
+        // a shell in containers and in the Nix build sandbox.
         let key: KeyCombo = "ctrl+w".parse().unwrap();
         let mut request = InspectRequest::new(&key);
         request.force_continue = true;
-        request.application_pid = Some(1);
+        request.application_pid = Some(std::process::id());
         request.application_source = Some("test");
         let session = crate::environment::Environment::collect();
         let results = inspect_with_environment(&request, &session);
-        let app_result = results.iter().find(|l| l.id == LayerId::Application);
-        assert!(app_result.is_some());
-        let app = app_result.unwrap();
-        if app.outcome != Outcome::UnadaptedTarget {
-            assert!(
-                results.iter().all(|l| l.id != LayerId::Shell),
-                "when an interactive application is active, parent shell must not be appended"
-            );
-        }
+        assert!(results.iter().any(|l| l.id == LayerId::Application));
+        assert!(
+            results.iter().all(|l| l.id != LayerId::Shell),
+            "when an interactive application is active, parent shell must not be appended"
+        );
     }
 }

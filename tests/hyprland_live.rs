@@ -1,11 +1,13 @@
 //! Live Hyprland tests: mutate a dedicated compositor session.
 //!
-//! These tests never run in the ordinary suite. They require all three:
-//! `--ignored`, `WHYKEY_RUN_LIVE_TESTS=1`, and an explicit test instance
+//! These tests never run in the ordinary suite. They require all four:
+//! `--ignored`, `WHYKEY_RUN_LIVE_TESTS=1`, an explicit test instance
 //! signature (`WHYKEY_LIVE_INSTANCE_SIGNATURE` equal to
-//! `HYPRLAND_INSTANCE_SIGNATURE`). Anything else fails with a prerequisite
-//! message instead of passing silently. Run only in a dedicated Hyprland
-//! session; they change the active submap and issue `hyprctl reload`.
+//! `HYPRLAND_INSTANCE_SIGNATURE`), and a Hyprland running a Lua config
+//! (`hyprland.lua`): the key hook is Lua, and a hyprlang `.conf` session
+//! rejects `hyprctl eval`. Anything else fails with a prerequisite message
+//! instead of passing silently. Run only in a dedicated Hyprland session;
+//! they change the active submap and issue `hyprctl reload`.
 
 use std::process::Command;
 use std::time::Duration;

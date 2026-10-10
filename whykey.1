@@ -1,4 +1,4 @@
-.TH WHYKEY 1 "October 2026" "whykey 2.0.0" "User Commands"
+.TH WHYKEY 1 "October 2026" "whykey 2.1.0" "User Commands"
 .SH NAME
 whykey \- explain which layer handles a keyboard shortcut
 .SH SYNOPSIS
@@ -149,7 +149,22 @@ directive; whykey reads
 otherwise the
 .B -c
 file and extra configuration files of the running sxhkd, otherwise the
-default sxhkdrc.
+default sxhkdrc. The sxhkd parser follows sxhkd 0.6.1:
+.B {a,b}
+and
+.B {1-9}
+expand together with the command,
+.B _
+is an empty element, plain keys without modifiers are bindings,
+.B ~
+replays the key to the focused client, and
+.B @
+binds the release. A continued line follows sxhkd's shared hotkey and
+command offset, non-ASCII characters at a line's edges are trimmed as sxhkd
+does, and a line that expands to more than 4096 renderings is skipped with
+a note. Chord chains, pointer buttons, and
+.B any
+are skipped.
 .PP
 On a native X11 session (no Wayland display), whykey asks the X server
 whether another client holds a passive grab for the key on the root window,
@@ -163,10 +178,21 @@ layer. A free key means only that no client holds a root-window grab for it,
 and a configured binding is then reported as inactive. Under XWayland a grab
 only adds a note; over SSH the probe is skipped. The X server does not say
 which client holds a grab.
+When the grabbing program is known to replay the key (an sxhkd
+.B ~
+binding), the result stays handled and passed on with the grab as evidence.
 .PP
 The doctor command also checks kglobalaccel, GNOME GSettings, and
 xdg-desktop-portal GlobalShortcuts through bounded read-only queries. It never
 starts a service, registers a shortcut, or invents a binding list.
+On Hyprland, doctor and capabilities send the same no-op
+.B hyprctl eval
+as
+.B listen
+and report native capture unavailable when the configuration is a hyprlang
+.I hyprland.conf
+rather than a Lua
+.IR hyprland.lua .
 .PP
 External integration commands use a two-second timeout and a one-megabyte
 stdout/stderr limit. Set
@@ -225,6 +251,13 @@ keycodes. If the active layout is not exposed, Whykey does
 not invent a US layout. Malformed individual
 Hyprland binding entries are reported and lower confidence rather than
 discarding valid entries.
+Bindings are walked in Hyprland's order: a matching submap bind that runs on
+press stops the binds after it, catchall included, and those binds are listed
+as
+.BR "not reached" .
+Other matching binds that fire together are shown as
+.BR "also fires" ;
+release and long-press binds are not, because they do not run on press.
 .SH COMMANDS
 .TP
 .BI combination
@@ -239,7 +272,16 @@ key, or
 .BR code:N .
 .B meta-key
 is not a modifier; a combination containing it exits with status 2.
+Keypad keys are their own keys: kp_enter (alias kp_return) is not return,
+and kp_0 to kp_9, kp_home, kp_end, kp_page_up, kp_page_down, kp_add,
+kp_subtract, kp_multiply, kp_divide, kp_equal, and kp_decimal are not the
+main keys. Remapper rules on keypad keys match only the keypad keys. For
+keypad digits i3 needs Mod2 in the
+.B bindsym
+to fire with NumLock on, while Sway fires only without it; whykey follows
+each rule.
 An unknown key name exits with status 2 and suggests the closest valid name.
+Every argument except a file path must be valid UTF-8.
 An altgr combination predicts the text of the active layout's third level
 (fourth with shift), sent as UTF-8; a dead key is reported as starting
 dead-key composition with no bytes sent (JSON v2 path entries carry its
@@ -255,10 +297,21 @@ across steps: Readline multi-key bindings and prefix keys, tmux prefix and
 .B switch-client -T
 tables, and the GNU Screen command escape apply to the keys that follow.
 A layer only receives the earlier keys that actually reached it. A bare key
-is looked up only in tmux's root or active table. Use the separate
+is looked up only in tmux's root or active table. tmux keys are
+case-sensitive (C is shift+c, BTab is shift+tab), and escaped, quoted, and
+.B -
+keys from
+.B list-keys
+are understood. Inside tmux, GNU Screen, or Zellij the multiplexer is
+inspected before the pane's TTY driver; if the multiplexer cannot be
+inspected, the TTY row is still shown. Use the separate
 .B conflicts
 command for enumerated binding collisions. Focused-window discovery is supported by Hyprland, Sway, and i3; other
-desktops report the missing API.
+desktops report the missing API. When the focused window is a terminal
+emulator with one pty,
+.B --focused
+follows that pty's foreground process; with several ptys the focused
+terminal is reported as unknown.
 .B --pid pid
 selects the process whose ancestry is used for interactive-application
 discovery. A missing process is reported as unavailable.
@@ -390,7 +443,8 @@ command does not capture or inject keyboard input. Snapshots redact shell
 identity, private paths, and secret-bearing assignments mechanically. Inspect
 a snapshot before sharing it. Use
 .B replay
-to render the saved snapshot offline.
+to render the saved snapshot offline. The exit status follows the inspect
+rule (see EXIT STATUS).
 .TP
 .B diff before after [--json]
 Compare two saved snapshots or reports without querying the current desktop.
@@ -429,7 +483,13 @@ inhibitor, or firmware state is not observable. Use
 .B --key , --action ,
 .B --source , --device , and
 .B --submap
-to filter the enumerated fields case-insensitively. Device and submap filters
+to filter the enumerated fields. A
+.B --key
+value that parses as a key is compared like an inspected key: a bare key
+matches under any modifiers, a combination needs exactly its modifiers, and
+.B code:N
+matches a Hyprland bind shown as its layout symbol. Other values match
+case-insensitive substrings. Device and submap filters
 match only entries whose adapter reported that metadata; missing metadata
 never matches an active filter.
 .TP
@@ -440,7 +500,8 @@ are reported as possible conflicts. The same
 .B --key , --action ,
 .B --source , --device , and
 .B --submap
-filters apply to the conflict list.
+filters apply to the conflict list, and actions are listed in the order the
+source reports the binds.
 .TP
 .BI extension\ program\ combination
 Run one explicitly selected application extension through the versioned JSON
@@ -504,7 +565,13 @@ plus the
 .B bindkey
 or
 .B bind
-lines in their startup files. Such answers are reported as unverified.
+lines in their startup files, and Readline defaults are those of a pristine
+bash 5.3 (the vi-insert keymap in vi mode). Such answers are reported as
+unverified.
+A key the line editor does not bind is not passed on: the shell is the last
+layer that reads it, and the report states the editor's effect (Readline
+rings the bell and inserts leftover bytes, ZLE runs undefined-key, fish
+drops the key).
 .TP
 .B completions bash|zsh|fish
 Print a completion script for the selected shell. The scripts are generated
@@ -613,11 +680,25 @@ An unavailable prerequisite or inspection error.
 .TP
 .B 2
 Invalid command-line usage or key combination, including an unknown key name,
+a non-UTF-8 argument other than a file path,
 two different JSON schema selections, a
 .B --suppress
 combination that cannot suppress, and
 .B --window
 combined with another capture backend.
+.PP
+.B snapshot
+uses the inspect rule: it exits 1 only when every layer is unavailable or the
+diagnostic budget expired, explains why on stderr, and still writes the
+snapshot.
+SIGPIPE stays ignored. When standard output is closed early, every command
+except
+.B listen
+exits quietly with status 141, the status a shell shows for SIGPIPE;
+.B listen
+keeps its normal error handling so that it always restores the terminal and
+removes its hook. An extension that exits without reading its request is an
+extension error (status 1).
 .SH EXAMPLES
 .EX
 whykey ctrl+left

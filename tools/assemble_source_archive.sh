@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # Create the source archive consumed by the native package recipes.  It has the
-# project files, the locked Cargo dependency set, and a local Cargo
-# configuration so downstream builders never contact crates.io.
+# tracked project files (as in the working tree; untracked files are never
+# included), the locked Cargo dependency set, and a local Cargo configuration
+# so downstream builders never contact crates.io.
 
 if [[ $# -gt 1 ]]; then
     echo "usage: $0 [output-directory]" >&2
@@ -26,7 +27,7 @@ mkdir -p "$output_dir" "$work_dir/$archive_root/.cargo"
         if [[ -e "$path" || -L "$path" ]]; then
             printf '%s\0' "$path"
         fi
-    done < <(git ls-files -co --exclude-standard -z) \
+    done < <(git ls-files -c -z) \
         | tar --null --files-from=- --create --file=- \
         | tar --extract --file=- --directory="$work_dir/$archive_root"
 )

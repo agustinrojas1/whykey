@@ -32,6 +32,12 @@ pub(crate) struct Family {
     /// Whether a `--release` binding delivers the key press to the focused
     /// client. `None` when the compositor's behavior is not verified.
     pub release_press_forwarded: Option<bool>,
+    /// Whether a `bindsym` keysym is resolved in the binding's own modifier
+    /// state, so a keypad digit (the NumLock level) binds only with `Mod2`
+    /// in the binding and a keypad navigation keysym only without it. i3
+    /// does this (`translate_keysyms` in src/bindings.c); Sway matches the
+    /// translated keysym with NumLock consumed, so `Mod4+KP_1` fires there.
+    pub keysym_in_binding_state: bool,
     /// Configuration paths the compositor searches, in order.
     pub config_candidates: fn() -> Vec<PathBuf>,
 }
@@ -917,12 +923,19 @@ pub(crate) fn inspect(
         .iter()
         .filter(|binding| binding.mode == mode)
         .collect::<Vec<_>>();
+    // i3 resolves a keypad digit only in a state that holds NumLock: the
+    // binding fires for the key's digit level when its mask includes Mod2.
+    let query_mask = if family.keysym_in_binding_state && is_num_lock_level(key.key()) {
+        key.modmask() | NUM_LOCK_MASK
+    } else {
+        key.modmask()
+    };
     let matches_key = |binding: &&ConfigBinding| {
         (match (&binding.key, query_code) {
             (BindKey::Code(code), Some(query)) => *code == query,
             (BindKey::Sym(name), None) => name.eq_ignore_ascii_case(key.key()),
             _ => false,
-        }) && binding.mask.is_none_or(|mask| mask == key.modmask())
+        }) && binding.mask.is_none_or(|mask| mask == query_mask)
     };
     let candidates = in_mode
         .iter()
@@ -1139,6 +1152,17 @@ pub(crate) fn focused_pid_in_tree(value: &serde_json::Value) -> Option<u32> {
         })
 }
 
+/// Mod2, which NumLock is bound to in the standard keymaps.
+const NUM_LOCK_MASK: u32 = 16;
+
+/// Keypad keysyms of the NumLock level of a KEYPAD-type key.
+fn is_num_lock_level(key: &str) -> bool {
+    key == "KP_DECIMAL"
+        || key
+            .strip_prefix("KP_")
+            .is_some_and(|digit| digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,6 +1174,7 @@ mod tests {
         msg_args: &["-r"],
         config_raw_args: &[],
         release_press_forwarded: Some(true),
+        keysym_in_binding_state: false,
         config_candidates: Vec::new,
     };
 
@@ -1318,6 +1343,25 @@ bar {
             &query("super+shift+return"),
         );
         assert_eq!(result.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn keypad_digits_follow_each_compositors_num_lock_rule() {
+        // Lab-verified: i3 binds KP_1 only with Mod2 in the binding (it
+        // resolves the keysym in the binding's state); Sway fires the plain
+        // binding with NumLock on and not the Mod2 one.
+        let outcome = |family: &Family, config: &str, key: &str| {
+            inspect(family, loaded(config, Some("default")), &query(key)).outcome
+        };
+        let plain = "bindsym Mod4+KP_1 exec touch /tmp/fired";
+        let num_lock = "bindsym Mod4+Mod2+KP_1 exec touch /tmp/fired";
+        assert_eq!(outcome(&I3, num_lock, "super+kp_1"), Outcome::Consumed);
+        assert_eq!(outcome(&I3, plain, "super+kp_1"), Outcome::Pass);
+        assert_eq!(outcome(&SWAY, plain, "super+kp_1"), Outcome::Consumed);
+        assert_eq!(outcome(&SWAY, num_lock, "super+kp_1"), Outcome::Pass);
+        // The navigation level is the state without NumLock.
+        let end = "bindsym Mod4+KP_End exec touch /tmp/fired";
+        assert_eq!(outcome(&I3, end, "super+kp_end"), Outcome::Consumed);
     }
 
     #[test]

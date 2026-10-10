@@ -1,0 +1,12 @@
+{
+  "id": "sxhkd-brace",
+  "description": "super + {t,y} expands in lockstep with its command: super + y runs the second command and sxhkd consumes the key",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/sxhkd/sxhkdrc": ["super + {t,y}", "    touch /tmp/fired-{t,y}"]},
+  "x11": {"daemons": [{"argv": ["sxhkd", "-c", "/root/.config/sxhkd/sxhkdrc"], "ready_grab": [64, 29]}]},
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired-y"}, "delivered": "probe"},
+  "whykey": {"args": ["super+y"], "layer": "sxhkd", "detail": "binding: touch /tmp/fired-y", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

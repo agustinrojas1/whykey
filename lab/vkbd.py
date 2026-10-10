@@ -12,7 +12,10 @@ modifiers up. Virtual keyboards do not derive modifier state from key events
 the modifiers request after each modifier change, as wayvnc and on-screen
 keyboards do.
 
-    python3 vkbd.py super+t [ctrl+shift+F7 ...]
+    python3 vkbd.py [--numlock] super+t [ctrl+shift+F7 ...]
+
+--numlock types with NumLock locked (Mod2 in the locked modifiers), so the
+keypad digit keys produce KP_0..KP_9.
 """
 
 from __future__ import annotations
@@ -38,6 +41,10 @@ EVDEV = {
     "f11": 87, "f12": 88, "home": 102, "up": 103, "pageup": 104, "left": 105,
     "right": 106, "end": 107, "down": 108, "pagedown": 109, "insert": 110,
     "delete": 111,
+    "kp_0": 82, "kp_1": 79, "kp_2": 80, "kp_3": 81, "kp_4": 75, "kp_5": 76,
+    "kp_6": 77, "kp_7": 71, "kp_8": 72, "kp_9": 73, "kp_enter": 96,
+    "kp_add": 78, "kp_subtract": 74, "kp_multiply": 55, "kp_divide": 98,
+    "kp_decimal": 83,
 }
 # name -> (evdev keycode, real-modifier bit in the standard XKB keymap)
 MODIFIERS = {
@@ -125,7 +132,12 @@ def parse_chord(chord: str) -> tuple[list[tuple[int, int]], int]:
 
 
 def main() -> None:
-    chords = [parse_chord(chord) for chord in sys.argv[1:]]
+    arguments = sys.argv[1:]
+    locked = 0
+    if arguments[:1] == ["--numlock"]:
+        arguments = arguments[1:]
+        locked = 16  # Mod2, NumLock in the standard XKB keymap
+    chords = [parse_chord(chord) for chord in arguments]
     keymap = subprocess.run(
         ["xkbcli", "compile-keymap", "--layout", "us"],
         check=True, capture_output=True,
@@ -173,8 +185,16 @@ def main() -> None:
         time.sleep(0.02)
 
     def modifiers(mask: int) -> None:
-        wayland.send(keyboard, 2, struct.pack("<IIII", mask, 0, 0, 0))
+        wayland.send(keyboard, 2, struct.pack("<IIII", mask, 0, locked, 0))
         wayland.roundtrip(lambda *event: None)
+
+    # Prime the new device: its first event makes the compositor switch the
+    # seat to this keyboard and send clients the new keymap. A key press that
+    # is that first event can be swallowed by the switch (seen on Sway: only
+    # the release reached foot), so make the switch with a no-op modifiers
+    # event and give clients time to apply the keymap before typing.
+    modifiers(0)
+    time.sleep(0.15)
 
     for chord_modifiers, code in chords:
         mask = 0

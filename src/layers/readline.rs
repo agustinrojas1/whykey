@@ -13,122 +13,233 @@ const SHELL_INIT_HINT: &str =
 /// Continuations listed for a prefix key; `\C-x` alone has over a dozen.
 const MAX_CONTINUATIONS: usize = 4;
 
-/// GNU Readline 8.3 / Bash 5.3 emacs keymap defaults, as printed by
-/// `env -i INPUTRC=/dev/null bash --norc --noprofile -ic 'bind -p'`.
-/// `self-insert`, `digit-argument`, and `do-lowercase-version` are omitted.
+/// Built-in Readline defaults, regenerated from bash 5.3.9(1)-release
+/// (GNU Readline 8.3) in the lab image with
+/// `env -i HOME=/tmp/e INPUTRC=/dev/null bash --norc --noprofile -i -c 'bind -p'`
+/// (`set -o vi` first for the vi-insert table; `bind -s` lists no macros).
+/// Only `self-insert` lines are left out: a printable key inserts itself.
 /// `\C-x` and `\e` are prefix keys: they are unbound on their own.
 const EMACS_DEFAULTS: &[(&str, &str)] = &[
-    (r"\C-@", "set-mark"),
-    (r"\C-a", "beginning-of-line"),
-    (r"\C-b", "backward-char"),
-    (r"\C-d", "delete-char"),
-    (r"\C-e", "end-of-line"),
-    (r"\C-f", "forward-char"),
-    (r"\C-g", "abort"),
-    (r"\C-h", "backward-delete-char"),
-    (r"\C-i", "complete"),
-    (r"\C-j", "accept-line"),
-    (r"\C-k", "kill-line"),
-    (r"\C-l", "clear-screen"),
-    (r"\C-m", "accept-line"),
-    (r"\C-n", "next-history"),
-    (r"\C-o", "operate-and-get-next"),
-    (r"\C-p", "previous-history"),
-    (r"\C-q", "quoted-insert"),
-    (r"\C-r", "reverse-search-history"),
-    (r"\C-s", "forward-search-history"),
-    (r"\C-t", "transpose-chars"),
-    (r"\C-u", "unix-line-discard"),
-    (r"\C-v", "quoted-insert"),
-    (r"\C-w", "unix-word-rubout"),
-    (r"\C-y", "yank"),
-    (r"\C-]", "character-search"),
-    (r"\C-_", "undo"),
-    (r"\C-?", "backward-delete-char"),
-    (r"\C-x\C-?", "backward-kill-line"),
-    (r"\C-x\C-e", "edit-and-execute-command"),
-    (r"\C-x\C-g", "abort"),
-    (r"\C-x\C-r", "re-read-init-file"),
-    (r"\C-x\C-u", "undo"),
-    (r"\C-x\C-v", "display-shell-version"),
-    (r"\C-x\C-x", "exchange-point-and-mark"),
-    (r"\C-x(", "start-kbd-macro"),
-    (r"\C-x)", "end-kbd-macro"),
-    (r"\C-xe", "call-last-kbd-macro"),
-    (r"\C-xg", "glob-list-expansions"),
-    (r"\C-xs", "spell-correct-word"),
-    (r"\C-x*", "glob-expand-word"),
-    (r"\C-x!", "possible-command-completions"),
-    (r"\C-x/", "possible-filename-completions"),
-    (r"\C-x@", "possible-hostname-completions"),
-    (r"\C-x~", "possible-username-completions"),
-    (r"\C-x$", "possible-variable-completions"),
-    (r"\e\C-?", "backward-kill-word"),
-    (r"\e\C-]", "character-search-backward"),
-    (r"\e\C-b", "shell-backward-word"),
-    (r"\e\C-d", "shell-kill-word"),
-    (r"\e\C-e", "shell-expand-line"),
-    (r"\e\C-f", "shell-forward-word"),
-    (r"\e\C-g", "abort"),
-    (r"\e\C-h", "backward-kill-word"),
-    (r"\e\C-i", "dynamic-complete-history"),
-    (r"\e\C-l", "clear-display"),
-    (r"\e\C-r", "revert-line"),
-    (r"\e\C-t", "shell-transpose-words"),
-    (r"\e\C-y", "yank-nth-arg"),
-    (r"\e\e", "complete"),
-    (r"\e ", "set-mark"),
-    (r"\e!", "complete-command"),
-    (r"\e#", "insert-comment"),
-    (r"\e$", "complete-variable"),
-    (r"\e&", "tilde-expand"),
-    (r"\e*", "insert-completions"),
-    (r"\e.", "insert-last-argument"),
-    (r"\e/", "complete-filename"),
-    (r"\e<", "beginning-of-history"),
-    (r"\e=", "possible-completions"),
-    (r"\e>", "end-of-history"),
-    (r"\e?", "possible-completions"),
-    (r"\e@", "complete-hostname"),
-    (r"\e^", "history-expand-line"),
-    (r"\e_", "insert-last-argument"),
-    (r"\e{", "complete-into-braces"),
-    (r"\e~", "complete-username"),
-    (r"\eb", "backward-word"),
-    (r"\ec", "capitalize-word"),
-    (r"\ed", "kill-word"),
-    (r"\ef", "forward-word"),
-    (r"\eg", "glob-complete-word"),
-    (r"\el", "downcase-word"),
-    (r"\en", "non-incremental-forward-search-history"),
-    (r"\ep", "non-incremental-reverse-search-history"),
-    (r"\er", "revert-line"),
-    (r"\et", "transpose-words"),
-    (r"\eu", "upcase-word"),
-    (r"\ex", "execute-named-command"),
-    (r"\ey", "yank-pop"),
-    (r"\e[A", "previous-history"),
-    (r"\e[B", "next-history"),
-    (r"\e[C", "forward-char"),
-    (r"\e[D", "backward-char"),
-    (r"\e[H", "beginning-of-line"),
-    (r"\e[F", "end-of-line"),
-    (r"\eOA", "previous-history"),
-    (r"\eOB", "next-history"),
-    (r"\eOC", "forward-char"),
-    (r"\eOD", "backward-char"),
-    (r"\eOH", "beginning-of-line"),
-    (r"\eOF", "end-of-line"),
-    (r"\e[2~", "overwrite-mode"),
-    (r"\e[3~", "delete-char"),
-    (r"\e[3;5~", "kill-word"),
-    (r"\e[5~", "history-search-backward"),
-    (r"\e[6~", "history-search-forward"),
-    (r"\e[1;3C", "forward-word"),
-    (r"\e[1;3D", "backward-word"),
-    (r"\e[1;5C", "forward-word"),
-    (r"\e[1;5D", "backward-word"),
-    (r"\e[200~", "bracketed-paste-begin"),
+    (r#"\C-g"#, "abort"),
+    (r#"\C-x\C-g"#, "abort"),
+    (r#"\e\C-g"#, "abort"),
+    (r#"\C-j"#, "accept-line"),
+    (r#"\C-m"#, "accept-line"),
+    (r#"\C-b"#, "backward-char"),
+    (r#"\eOD"#, "backward-char"),
+    (r#"\e[D"#, "backward-char"),
+    (r#"\C-h"#, "backward-delete-char"),
+    (r#"\C-?"#, "backward-delete-char"),
+    (r#"\C-x\C-?"#, "backward-kill-line"),
+    (r#"\e\C-h"#, "backward-kill-word"),
+    (r#"\e\C-?"#, "backward-kill-word"),
+    (r#"\e[1;3D"#, "backward-word"),
+    (r#"\e[1;5D"#, "backward-word"),
+    (r#"\eb"#, "backward-word"),
+    (r#"\e<"#, "beginning-of-history"),
+    (r#"\C-a"#, "beginning-of-line"),
+    (r#"\eOH"#, "beginning-of-line"),
+    (r#"\e[H"#, "beginning-of-line"),
+    (r#"\e[200~"#, "bracketed-paste-begin"),
+    (r#"\C-xe"#, "call-last-kbd-macro"),
+    (r#"\ec"#, "capitalize-word"),
+    (r#"\C-]"#, "character-search"),
+    (r#"\e\C-]"#, "character-search-backward"),
+    (r#"\e\C-l"#, "clear-display"),
+    (r#"\C-l"#, "clear-screen"),
+    (r#"\C-i"#, "complete"),
+    (r#"\e\e"#, "complete"),
+    (r#"\e!"#, "complete-command"),
+    (r#"\e/"#, "complete-filename"),
+    (r#"\e@"#, "complete-hostname"),
+    (r#"\e{"#, "complete-into-braces"),
+    (r#"\e~"#, "complete-username"),
+    (r#"\e$"#, "complete-variable"),
+    (r#"\C-d"#, "delete-char"),
+    (r#"\e[3~"#, "delete-char"),
+    (r#"\e\\"#, "delete-horizontal-space"),
+    (r#"\e-"#, "digit-argument"),
+    (r#"\e0"#, "digit-argument"),
+    (r#"\e1"#, "digit-argument"),
+    (r#"\e2"#, "digit-argument"),
+    (r#"\e3"#, "digit-argument"),
+    (r#"\e4"#, "digit-argument"),
+    (r#"\e5"#, "digit-argument"),
+    (r#"\e6"#, "digit-argument"),
+    (r#"\e7"#, "digit-argument"),
+    (r#"\e8"#, "digit-argument"),
+    (r#"\e9"#, "digit-argument"),
+    (r#"\C-x\C-v"#, "display-shell-version"),
+    (r#"\C-xA"#, "do-lowercase-version"),
+    (r#"\C-xB"#, "do-lowercase-version"),
+    (r#"\C-xC"#, "do-lowercase-version"),
+    (r#"\C-xD"#, "do-lowercase-version"),
+    (r#"\C-xE"#, "do-lowercase-version"),
+    (r#"\C-xF"#, "do-lowercase-version"),
+    (r#"\C-xG"#, "do-lowercase-version"),
+    (r#"\C-xH"#, "do-lowercase-version"),
+    (r#"\C-xI"#, "do-lowercase-version"),
+    (r#"\C-xJ"#, "do-lowercase-version"),
+    (r#"\C-xK"#, "do-lowercase-version"),
+    (r#"\C-xL"#, "do-lowercase-version"),
+    (r#"\C-xM"#, "do-lowercase-version"),
+    (r#"\C-xN"#, "do-lowercase-version"),
+    (r#"\C-xO"#, "do-lowercase-version"),
+    (r#"\C-xP"#, "do-lowercase-version"),
+    (r#"\C-xQ"#, "do-lowercase-version"),
+    (r#"\C-xR"#, "do-lowercase-version"),
+    (r#"\C-xS"#, "do-lowercase-version"),
+    (r#"\C-xT"#, "do-lowercase-version"),
+    (r#"\C-xU"#, "do-lowercase-version"),
+    (r#"\C-xV"#, "do-lowercase-version"),
+    (r#"\C-xW"#, "do-lowercase-version"),
+    (r#"\C-xX"#, "do-lowercase-version"),
+    (r#"\C-xY"#, "do-lowercase-version"),
+    (r#"\C-xZ"#, "do-lowercase-version"),
+    (r#"\eA"#, "do-lowercase-version"),
+    (r#"\eB"#, "do-lowercase-version"),
+    (r#"\eC"#, "do-lowercase-version"),
+    (r#"\eD"#, "do-lowercase-version"),
+    (r#"\eE"#, "do-lowercase-version"),
+    (r#"\eF"#, "do-lowercase-version"),
+    (r#"\eG"#, "do-lowercase-version"),
+    (r#"\eH"#, "do-lowercase-version"),
+    (r#"\eI"#, "do-lowercase-version"),
+    (r#"\eJ"#, "do-lowercase-version"),
+    (r#"\eK"#, "do-lowercase-version"),
+    (r#"\eL"#, "do-lowercase-version"),
+    (r#"\eM"#, "do-lowercase-version"),
+    (r#"\eN"#, "do-lowercase-version"),
+    (r#"\eP"#, "do-lowercase-version"),
+    (r#"\eQ"#, "do-lowercase-version"),
+    (r#"\eR"#, "do-lowercase-version"),
+    (r#"\eS"#, "do-lowercase-version"),
+    (r#"\eT"#, "do-lowercase-version"),
+    (r#"\eU"#, "do-lowercase-version"),
+    (r#"\eV"#, "do-lowercase-version"),
+    (r#"\eW"#, "do-lowercase-version"),
+    (r#"\eX"#, "do-lowercase-version"),
+    (r#"\eY"#, "do-lowercase-version"),
+    (r#"\eZ"#, "do-lowercase-version"),
+    (r#"\el"#, "downcase-word"),
+    (r#"\e\C-i"#, "dynamic-complete-history"),
+    (r#"\C-x\C-e"#, "edit-and-execute-command"),
+    (r#"\C-x)"#, "end-kbd-macro"),
+    (r#"\e>"#, "end-of-history"),
+    (r#"\C-e"#, "end-of-line"),
+    (r#"\eOF"#, "end-of-line"),
+    (r#"\e[F"#, "end-of-line"),
+    (r#"\C-x\C-x"#, "exchange-point-and-mark"),
+    (r#"\ex"#, "execute-named-command"),
+    (r#"\C-f"#, "forward-char"),
+    (r#"\eOC"#, "forward-char"),
+    (r#"\e[C"#, "forward-char"),
+    (r#"\C-s"#, "forward-search-history"),
+    (r#"\e[1;3C"#, "forward-word"),
+    (r#"\e[1;5C"#, "forward-word"),
+    (r#"\ef"#, "forward-word"),
+    (r#"\eg"#, "glob-complete-word"),
+    (r#"\C-x*"#, "glob-expand-word"),
+    (r#"\C-xg"#, "glob-list-expansions"),
+    (r#"\e^"#, "history-expand-line"),
+    (r#"\e[5~"#, "history-search-backward"),
+    (r#"\e[6~"#, "history-search-forward"),
+    (r#"\e#"#, "insert-comment"),
+    (r#"\e*"#, "insert-completions"),
+    (r#"\e."#, "insert-last-argument"),
+    (r#"\e_"#, "insert-last-argument"),
+    (r#"\C-k"#, "kill-line"),
+    (r#"\e[3;5~"#, "kill-word"),
+    (r#"\ed"#, "kill-word"),
+    (r#"\C-n"#, "next-history"),
+    (r#"\eOB"#, "next-history"),
+    (r#"\e[B"#, "next-history"),
+    (r#"\en"#, "non-incremental-forward-search-history"),
+    (r#"\ep"#, "non-incremental-reverse-search-history"),
+    (r#"\C-o"#, "operate-and-get-next"),
+    (r#"\e[2~"#, "overwrite-mode"),
+    (r#"\C-x!"#, "possible-command-completions"),
+    (r#"\e="#, "possible-completions"),
+    (r#"\e?"#, "possible-completions"),
+    (r#"\C-x/"#, "possible-filename-completions"),
+    (r#"\C-x@"#, "possible-hostname-completions"),
+    (r#"\C-x~"#, "possible-username-completions"),
+    (r#"\C-x$"#, "possible-variable-completions"),
+    (r#"\C-p"#, "previous-history"),
+    (r#"\eOA"#, "previous-history"),
+    (r#"\e[A"#, "previous-history"),
+    (r#"\C-q"#, "quoted-insert"),
+    (r#"\C-v"#, "quoted-insert"),
+    (r#"\C-x\C-r"#, "re-read-init-file"),
+    (r#"\C-r"#, "reverse-search-history"),
+    (r#"\e\C-r"#, "revert-line"),
+    (r#"\er"#, "revert-line"),
+    (r#"\C-@"#, "set-mark"),
+    (r#"\e "#, "set-mark"),
+    (r#"\e\C-b"#, "shell-backward-word"),
+    (r#"\e\C-e"#, "shell-expand-line"),
+    (r#"\e\C-f"#, "shell-forward-word"),
+    (r#"\e\C-d"#, "shell-kill-word"),
+    (r#"\e\C-t"#, "shell-transpose-words"),
+    (r#"\C-xs"#, "spell-correct-word"),
+    (r#"\C-x("#, "start-kbd-macro"),
+    (r#"\e&"#, "tilde-expand"),
+    (r#"\C-t"#, "transpose-chars"),
+    (r#"\et"#, "transpose-words"),
+    (r#"\C-x\C-u"#, "undo"),
+    (r#"\C-_"#, "undo"),
+    (r#"\C-u"#, "unix-line-discard"),
+    (r#"\C-w"#, "unix-word-rubout"),
+    (r#"\eu"#, "upcase-word"),
+    (r#"\C-y"#, "yank"),
+    (r#"\e."#, "yank-last-arg"),
+    (r#"\e_"#, "yank-last-arg"),
+    (r#"\e\C-y"#, "yank-nth-arg"),
+    (r#"\ey"#, "yank-pop"),
+];
+
+/// The vi-insert keymap bash starts in after `set -o vi`, from the same
+/// pristine bash as [`EMACS_DEFAULTS`].
+const VI_INSERT_DEFAULTS: &[(&str, &str)] = &[
+    (r#"\C-j"#, "accept-line"),
+    (r#"\C-m"#, "accept-line"),
+    (r#"\eOD"#, "backward-char"),
+    (r#"\e[D"#, "backward-char"),
+    (r#"\C-h"#, "backward-delete-char"),
+    (r#"\C-?"#, "backward-delete-char"),
+    (r#"\e[1;3D"#, "backward-word"),
+    (r#"\e[1;5D"#, "backward-word"),
+    (r#"\eOH"#, "beginning-of-line"),
+    (r#"\e[H"#, "beginning-of-line"),
+    (r#"\e[200~"#, "bracketed-paste-begin"),
+    (r#"\C-i"#, "complete"),
+    (r#"\e[3~"#, "delete-char"),
+    (r#"\eOF"#, "end-of-line"),
+    (r#"\e[F"#, "end-of-line"),
+    (r#"\eOC"#, "forward-char"),
+    (r#"\e[C"#, "forward-char"),
+    (r#"\C-s"#, "forward-search-history"),
+    (r#"\e[1;3C"#, "forward-word"),
+    (r#"\e[1;5C"#, "forward-word"),
+    (r#"\e[5~"#, "history-search-backward"),
+    (r#"\e[6~"#, "history-search-forward"),
+    (r#"\e[3;5~"#, "kill-word"),
+    (r#"\C-n"#, "menu-complete"),
+    (r#"\C-p"#, "menu-complete-backward"),
+    (r#"\eOB"#, "next-history"),
+    (r#"\e[B"#, "next-history"),
+    (r#"\e[2~"#, "overwrite-mode"),
+    (r#"\eOA"#, "previous-history"),
+    (r#"\e[A"#, "previous-history"),
+    (r#"\C-v"#, "quoted-insert"),
+    (r#"\C-r"#, "reverse-search-history"),
+    (r#"\C-t"#, "transpose-chars"),
+    (r#"\C-u"#, "unix-line-discard"),
+    (r#"\C-d"#, "vi-eof-maybe"),
+    (r#"\e"#, "vi-movement-mode"),
+    (r#"\C-_"#, "vi-undo"),
+    (r#"\C-w"#, "vi-unix-word-rubout"),
+    (r#"\C-y"#, "yank"),
 ];
 
 pub struct Readline;
@@ -258,14 +369,18 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
             )
         }
         Resolution::Unbound => {
-            let summary = match keymap.origin {
+            let lookup = match keymap.origin {
                 Origin::Snapshot => "not bound in the current Readline keymap",
                 Origin::Files { emacs: true } => "no Readline default or INPUTRC binding",
                 Origin::Files { emacs: false } => {
-                    "no INPUTRC binding; Readline vi keymap defaults are not modelled"
+                    details.push("vi mode: the vi-insert keymap bash starts in is assumed".into());
+                    "no Readline vi-insert default or INPUTRC binding"
                 }
             };
-            (Outcome::Pass, summary.into())
+            (
+                Outcome::Pass,
+                format!("{lookup}: {}", unbound_effect(keymap, &bytes)),
+            )
         }
     };
     append_mode_detail(&mut details);
@@ -289,6 +404,52 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
         Some((action, entry)) => result.with_binding(unverified_evidence(action, entry)),
         None => result,
     }
+}
+
+/// What Readline does with an unbound sequence. It is the last consumer, so
+/// the key never goes further: Readline walks the keymap until the first
+/// byte that neither completes nor continues a binding, rings the bell and
+/// discards the bytes read so far, then reads the remaining bytes as new
+/// input (so Shift+Up, `\e[1;2A`, inserts `A`).
+fn unbound_effect(keymap: &Keymap, bytes: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        if text.chars().count() == 1 && !text.chars().any(char::is_control) {
+            return format!("the printable key self-inserts {text:?}");
+        }
+    }
+    let (stop, resolution) = (1..=bytes.len())
+        .map(|end| (end, keymap.resolve(&bytes[..end])))
+        .find(|(_, resolution)| !matches!(resolution, Resolution::Prefix { .. }))
+        .unwrap_or((bytes.len(), Resolution::Unbound));
+    let (discarded, rest) = bytes.split_at(stop);
+    let mut effect = match resolution {
+        Resolution::Bound { entry, .. } => format!(
+            "Readline runs {} for {}",
+            entry.label(),
+            readline_notation(discarded)
+        ),
+        _ => format!(
+            "Readline rings the bell and discards {}",
+            readline_notation(discarded)
+        ),
+    };
+    if !rest.is_empty() {
+        if rest
+            .iter()
+            .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+        {
+            effect.push_str(&format!(
+                ", then inserts the trailing {:?}",
+                String::from_utf8_lossy(rest)
+            ));
+        } else {
+            effect.push_str(&format!(
+                ", then reads the trailing {} as new input",
+                readline_notation(rest)
+            ));
+        }
+    }
+    effect
 }
 
 /// Evidence for a binding read from Readline defaults or INPUTRC rather than
@@ -485,12 +646,15 @@ impl Keymap {
         let mut entries = bashrc.to_vec();
         // Later inputrc declarations override earlier ones.
         entries.extend(inputrc.iter().rev().cloned());
-        if emacs {
-            entries.extend(EMACS_DEFAULTS.iter().map(|(notation, function)| Entry {
-                builtin: true,
-                ..Entry::new(notation, Action::Function, function, "Readline default")
-            }));
-        }
+        let (defaults, source) = if emacs {
+            (EMACS_DEFAULTS, "Readline default")
+        } else {
+            (VI_INSERT_DEFAULTS, "Readline vi-insert default")
+        };
+        entries.extend(defaults.iter().map(|(notation, function)| Entry {
+            builtin: true,
+            ..Entry::new(notation, Action::Function, function, source)
+        }));
         Self {
             entries,
             origin: Origin::Files { emacs },
@@ -504,19 +668,20 @@ impl Keymap {
             Origin::Files { emacs: true } => {
                 "Readline defaults, INPUTRC and startup-file bind commands"
             }
-            Origin::Files { emacs: false } => "INPUTRC and startup-file bind commands",
+            Origin::Files { emacs: false } => {
+                "Readline vi-insert defaults, INPUTRC and startup-file bind commands"
+            }
         }
     }
 
     /// Where the answer for `resolution` came from: the live snapshot, the
     /// entries it rests on (built-in defaults or the user's INPUTRC and
     /// startup-file bindings), or, for an unbound key, every binding that
-    /// was consulted. `None` when nothing was read (vi mode without any user
-    /// binding: vi defaults are not modelled).
+    /// was consulted.
     fn tier(&self, resolution: &Resolution<'_>) -> Option<EvidenceTier> {
-        let Origin::Files { emacs } = self.origin else {
+        if self.origin == Origin::Snapshot {
             return Some(EvidenceTier::LiveQuery);
-        };
+        }
         let from = |builtin: bool| {
             Some(if builtin {
                 EvidenceTier::Default
@@ -529,11 +694,7 @@ impl Keymap {
             Resolution::Prefix { continuations, .. } => {
                 from(continuations.iter().all(|entry| entry.builtin))
             }
-            Resolution::Unbound if self.entries.iter().any(|entry| !entry.builtin) => {
-                Some(EvidenceTier::ConfigFile)
-            }
-            Resolution::Unbound if emacs => Some(EvidenceTier::Default),
-            Resolution::Unbound => None,
+            Resolution::Unbound => from(self.entries.iter().all(|entry| entry.builtin)),
         }
     }
 
@@ -1120,6 +1281,57 @@ mod tests {
     }
 
     #[test]
+    fn default_tables_match_pristine_bash_5_3() {
+        // `bind -p | grep -vc self-insert` in the pristine lab bash 5.3.9.
+        assert_eq!(EMACS_DEFAULTS.len(), 176);
+        assert_eq!(VI_INSERT_DEFAULTS.len(), 39);
+        let keymap = defaults();
+        for (bytes, action) in [
+            (&b"\x1b1"[..], "digit-argument"),
+            (b"\x1b-", "digit-argument"),
+            (b"\x1b\\", "delete-horizontal-space"),
+            (b"\x1bA", "do-lowercase-version"),
+            (b"\x18A", "do-lowercase-version"),
+        ] {
+            let result = inspect(&keymap, &[bytes]);
+            assert_eq!(result.summary, format!("bound to {action}"), "{bytes:?}");
+        }
+        let vi = Keymap::from_files(&[], &[], false);
+        assert_eq!(inspect(&vi, &[b"\x0e"]).summary, "bound to menu-complete");
+    }
+
+    #[test]
+    fn unbound_sequences_state_what_readline_does() {
+        let snapshot = EMACS_DEFAULTS
+            .iter()
+            .map(|(notation, function)| format!("\"{notation}\": {function}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let keymap = Keymap::from_snapshot(&snapshot, None, None, Some("emacs"));
+        for (bytes, effect) in [
+            (
+                &b"\x1b[1;2A"[..],
+                r#"Readline rings the bell and discards \e[1;2, then inserts the trailing "A""#,
+            ),
+            (
+                b"\x1b[15~",
+                r#"Readline rings the bell and discards \e[15, then inserts the trailing "~""#,
+            ),
+            (
+                b"\x1b[15;5~",
+                r#"Readline rings the bell and discards \e[15, then inserts the trailing ";5~""#,
+            ),
+        ] {
+            let result = inspect(&keymap, &[bytes]);
+            assert_eq!(result.outcome, Outcome::Pass);
+            assert_eq!(
+                result.summary,
+                format!("not bound in the current Readline keymap: {effect}")
+            );
+        }
+    }
+
+    #[test]
     fn startup_file_bind_commands_override_defaults() {
         let mut bashrc = Bashrc::default();
         bashrc.apply_script(
@@ -1203,7 +1415,10 @@ bind "$var"
         // this snapshot, so it must not be claimed.
         let result = inspect(&live(), &[&[0x0f]]);
         assert_eq!(result.outcome, Outcome::Pass);
-        assert_eq!(result.summary, "not bound in the current Readline keymap");
+        assert_eq!(
+            result.summary,
+            r"not bound in the current Readline keymap: Readline rings the bell and discards \C-o"
+        );
 
         let result = inspect(&live(), &[&[0x0c]]);
         assert_eq!(result.summary, "bound to clear-screen");
@@ -1442,9 +1657,9 @@ bind "$var"
             inspect(&defaults(), &[unbound]).tier,
             Some(EvidenceTier::Default)
         );
-        // vi mode with no user binding: nothing modelled was read.
+        // vi mode with no user binding: the vi-insert defaults were read.
         let vi = Keymap::from_files(&[], &[], false);
-        assert_eq!(inspect(&vi, &[unbound]).tier, None);
+        assert_eq!(inspect(&vi, &[unbound]).tier, Some(EvidenceTier::Default));
 
         let mut bashrc = Bashrc::default();
         bashrc.apply_script(

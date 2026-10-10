@@ -1,7 +1,7 @@
 use crate::key::{KeyCombo, KeySequence};
 use crate::layers::{
-    BindingEvidence, EvidenceTier, LayerId, LayerResult, LayerStatus, Outcome, Propagation,
-    UncertaintyReason, format_bytes,
+    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, LayerStatus, Outcome,
+    Propagation, UncertaintyReason, format_bytes,
 };
 use crate::listen::ObservedKey;
 use crate::schema;
@@ -683,6 +683,9 @@ fn diagnosis_text(
         ),
         Conclusion::NoLayersInspected => "No layers were inspected.".into(),
         Conclusion::UnhandledContinues => "No inspected layer matches; it can continue.".into(),
+        Conclusion::EndpointUnbound { layer, .. } => format!(
+            "{layer} reads the key last and has no binding for it; nothing downstream receives it."
+        ),
         Conclusion::SuppressedHandled { .. } => {
             "A matching compositor binding was captured for inspection; its runtime effect is configuration-only.".into()
         }
@@ -709,6 +712,9 @@ fn qualification_text(
             assumes_earlier_forward: true,
             ..
         } | Conclusion::ConfiguredRedirect {
+            assumes_earlier_forward: true,
+            ..
+        } | Conclusion::EndpointUnbound {
             assumes_earlier_forward: true,
             ..
         }
@@ -856,6 +862,13 @@ fn effect_text(
         Conclusion::UnhandledContinues => {
             "No matching configuration was found, so the shortcut can continue downstream.".into()
         }
+        Conclusion::EndpointUnbound { layer, effect, .. } => {
+            let mut effect = effect.trim_end_matches('.').to_owned();
+            if let Some(first) = effect.get(..1) {
+                effect.replace_range(..1, &first.to_ascii_uppercase());
+            }
+            format!("{effect}. {layer} is the last layer that reads the key.")
+        }
         _ => "The report below separates observed events from configuration-based predictions."
             .into(),
     }
@@ -883,6 +896,7 @@ fn relevant_layers<'a>(
         .filter(|layer| {
             !matches!(layer.outcome, Outcome::Pass)
                 || layer.binding.is_some()
+                || layer.is_endpoint()
                 || observation.is_some_and(|observed| {
                     observed.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
                 })
@@ -945,11 +959,19 @@ fn layer_line(
         } else if let Some(keysym) = &layer.dead_key {
             format!("{keysym} starts composition; no bytes until the next key")
         } else if let Some(binding) = &layer.binding {
-            binding
-                .description
-                .clone()
-                .or_else(|| binding.action.clone())
-                .unwrap_or_else(|| concise_summary(&layer.summary))
+            let name = |binding: &BindingEvidence| {
+                binding
+                    .description
+                    .clone()
+                    .or_else(|| binding.action.clone())
+            };
+            let first = name(binding).unwrap_or_else(|| concise_summary(&layer.summary));
+            let also: Vec<String> = layer.also_fires.iter().filter_map(name).collect();
+            if also.is_empty() {
+                first
+            } else {
+                format!("{first}; also fires: {}", also.join("; "))
+            }
         } else if observation.is_some_and(|value| {
             value.source.proves_compositor_receipt() && layer.id == LayerId::Compositor
         }) {
@@ -1019,13 +1041,16 @@ fn concise_detail_evidence(layer: &LayerResult) -> Option<String> {
     None
 }
 
+/// A layer summary for one report row. Summaries are kept whole: a `;` can
+/// belong to the finding itself (a fish or `bind -x` command, an unbound
+/// key's effect), so only an overlong summary is shortened, visibly.
 fn concise_summary(summary: &str) -> String {
-    summary
-        .split(';')
-        .next()
-        .unwrap_or(summary)
-        .trim()
-        .to_owned()
+    const LIMIT: usize = 160;
+    let summary = summary.trim();
+    match summary.char_indices().nth(LIMIT) {
+        Some((end, _)) => format!("{}…", summary[..end].trim_end()),
+        None => summary.to_owned(),
+    }
 }
 
 fn uncertainty_text(
@@ -1064,6 +1089,9 @@ fn uncertainty_text(
             assumes_earlier_forward: true,
             ..
         } | Conclusion::ConfiguredRedirect {
+            assumes_earlier_forward: true,
+            ..
+        } | Conclusion::EndpointUnbound {
             assumes_earlier_forward: true,
             ..
         }
@@ -1474,7 +1502,14 @@ fn render_verbose_evidence(
             }
             push_wrapped(
                 output,
-                &format!("scope: {:?}", binding.scope),
+                &format!(
+                    "scope: {}",
+                    match &binding.scope {
+                        BindingScope::Universal => "every submap (universal bind)".to_owned(),
+                        BindingScope::Submap(name) => format!("submap {name}"),
+                        BindingScope::Unknown => "unknown".to_owned(),
+                    }
+                ),
                 options,
                 "         ",
                 "         ",
@@ -1656,6 +1691,14 @@ pub enum Conclusion {
     },
     NoLayersInspected,
     UnhandledContinues,
+    /// The route ends at a layer that is the key's last consumer (a shell's
+    /// line editor) and has no binding for it. `effect` is that layer's
+    /// summary of what it does with an unbound key.
+    EndpointUnbound {
+        layer: &'static str,
+        effect: String,
+        assumes_earlier_forward: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2008,6 +2051,16 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
         if is_uncertain(layer) && !unknown.contains(&layer.layer) {
             unknown.push(layer.layer);
         }
+    }
+    if let Some(endpoint) = layers
+        .last()
+        .filter(|layer| layer.is_endpoint() && layer.outcome == Outcome::Pass)
+    {
+        return Conclusion::EndpointUnbound {
+            layer: endpoint.layer,
+            effect: endpoint.summary.clone(),
+            assumes_earlier_forward: !unknown.is_empty(),
+        };
     }
     if unknown.is_empty() {
         Conclusion::UnhandledContinues
@@ -2691,6 +2744,60 @@ mod tests {
     }
 
     #[test]
+    fn unbound_key_at_an_endpoint_states_its_effect_not_downstream() {
+        let key: KeyCombo = "ctrl+a".parse().unwrap();
+        let layers = [LayerResult::new(
+            "Readline",
+            LayerId::Shell,
+            Outcome::Pass,
+            "not bound in the current Readline keymap; Readline rings the bell and inserts \"A\"",
+            vec![],
+        )
+        .as_endpoint()];
+        let output = render(&key, &layers, false);
+        let flat = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(!flat.contains("continue downstream"), "{output}");
+        assert!(
+            flat.contains("Readline reads the key last and has no binding for it"),
+            "{output}"
+        );
+        assert!(flat.contains("Readline rings the bell"), "{output}");
+    }
+
+    #[test]
+    fn row_keeps_a_summary_that_contains_semicolons() {
+        let summary = "bound to if fish_in_macos_terminal; commandline -f prevd-or-backward-word; \
+                       else prevd-or-backward-token; end";
+        assert_eq!(concise_summary(summary), summary);
+        let long = "x".repeat(400);
+        assert_eq!(concise_summary(&long).chars().count(), 161);
+    }
+
+    #[test]
+    fn human_row_lists_every_co_firing_binding() {
+        let key: KeyCombo = "alt+tab".parse().unwrap();
+        let binding = |description: &str| {
+            BindingEvidence::action("exec x", BindingScope::Submap("default".into()), None)
+                .with_description(description)
+        };
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec![],
+        )
+        .with_binding(binding("Focus on next window"))
+        .with_also_fires(vec![binding("Reveal active window on top")])];
+        let output = render(&key, &layers, false);
+        let flat = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("Focus on next window; also fires: Reveal active window on top"),
+            "{output}"
+        );
+    }
+
+    #[test]
     fn normal_report_fits_one_screen_while_verbose_keeps_diagnostics() {
         let observed = suppressed_observed();
         let observed = ObservedKey {
@@ -2748,6 +2855,10 @@ mod tests {
                 "--verbose must retain {diagnostic:?}"
             );
         }
+        assert!(
+            verbose.contains("scope: submap default") && !verbose.contains("Submap("),
+            "the binding scope is plain text, not Rust Debug:\n{verbose}"
+        );
         assert_eq!(
             diagnosis_line(&normal),
             diagnosis_line(&verbose),
@@ -3759,5 +3870,40 @@ mod tests {
             RenderOptions::plain(false),
         );
         assert!(!observed.contains("Observe it"));
+    }
+
+    #[test]
+    fn an_unbound_endpoint_after_an_uncertain_layer_states_the_caveat_once() {
+        let key: KeyCombo = "ctrl+x".parse().unwrap();
+        let layers = [
+            LayerResult::new(
+                "tmux",
+                LayerId::Session,
+                Outcome::UncertainContinues,
+                "state unknown",
+                Vec::new(),
+            ),
+            LayerResult::new(
+                "zsh",
+                LayerId::Shell,
+                Outcome::Pass,
+                "inserts nothing",
+                Vec::new(),
+            )
+            .as_endpoint(),
+        ];
+        let conclusion = evaluate_layer_conclusion(&layers, false);
+        assert!(matches!(
+            conclusion,
+            Conclusion::EndpointUnbound {
+                assumes_earlier_forward: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            qualification_text(&key, &layers, None, &conclusion).as_deref(),
+            Some("This applies if earlier layers forward the key.")
+        );
+        assert_eq!(uncertainty_text(&key, &layers, None, &conclusion), None);
     }
 }

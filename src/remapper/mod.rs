@@ -1649,6 +1649,31 @@ mod tests {
     }
 
     #[test]
+    fn keyd_rule_on_a_keypad_key_matches_its_query() {
+        let keyd = detection(
+            "keyd",
+            true,
+            &[(
+                "default.conf",
+                "[ids]\n*\n\n[main]\nkpenter = esc\nkp1 = f5\n",
+            )],
+        );
+        let enter =
+            inspect_detections(&query("kp_enter"), None, std::slice::from_ref(&keyd), false);
+        assert_eq!(enter.outcome, Outcome::Redirected);
+        assert_eq!(action(&enter), Some("ESCAPE"));
+        let digit = inspect_detections(&query("kp_1"), None, std::slice::from_ref(&keyd), false);
+        assert_eq!(digit.outcome, Outcome::Redirected);
+        assert_eq!(action(&digit), Some("F5"));
+        // The main keys are other keys: the keypad rules leave them alone
+        // (US layout, so "1" is known to be the top-row key).
+        for main in ["return", "1"] {
+            let result = inspect_detections(&query(main), None, std::slice::from_ref(&keyd), true);
+            assert_eq!(result.outcome, Outcome::Pass, "{main}");
+        }
+    }
+
+    #[test]
     fn keyd_layer_key_is_consumed() {
         let keyd = detection(
             "keyd",

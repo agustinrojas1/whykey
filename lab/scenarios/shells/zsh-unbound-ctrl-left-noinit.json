@@ -1,0 +1,54 @@
+{
+  "id": "zsh-unbound-ctrl-left-noinit",
+  "description": "Ctrl+Left (\\e[1;5D) is unbound in zsh's emacs keymap: ZLE runs undefined-key on ^[[1 and inserts ;5D; a zsh adapter that over-reports `consumed` fails here",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.zshrc": [
+      "PS1='%% '"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo 'x"
+    },
+    {
+      "type": "\\e[1;5D"
+    },
+    {
+      "type": "' > /tmp/effect\\r"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "file": "/tmp/effect",
+      "equals": "x;5D"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+left"
+    ],
+    "layer": "Zsh / ZLE",
+    "run": "pty",
+    "summary": "undefined-key",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

@@ -415,7 +415,8 @@ impl Drop for PtyJob {
 }
 
 fn read_termios(fd: libc::c_int) -> libc::termios {
-    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    // Zeroed: under musl, tcgetattr does not write the tail of c_cc.
+    let mut termios = std::mem::MaybeUninit::<libc::termios>::zeroed();
     assert_eq!(
         // SAFETY: `termios` is a valid out-pointer for tcgetattr.
         unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) },

@@ -246,6 +246,10 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
     capabilities.extend(runtime_capability_entries());
     capabilities.extend(extension_capability_entries(environment));
     capabilities.extend(vec![
+        {
+            let (grab_probe, detail) = crate::layers::x11_grab::availability();
+            available("compositor.x11-grab", "compositor", grab_probe, detail)
+        },
         available(
             "compositor.generic",
             "compositor",
@@ -308,14 +312,27 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
     capabilities
 }
 
-#[cfg(target_os = "linux")]
 pub fn native_capture_available_for_doctor() -> bool {
-    crate::hyprland_capture::HyprlandCaptureSession::probe_available()
+    hyprland_native_capture().is_ok()
+}
+
+/// Whether `listen` can arm Hyprland native capture. `Err(None)`: socket2 is
+/// unreachable. `Err(Some(reason))`: IPC works but the key hook cannot be
+/// installed, typically because Hyprland runs a hyprlang `.conf` config and
+/// the hook needs `hyprland.lua`. The check sends the same no-op
+/// `hyprctl eval "return nil"` that `listen` sends first; it changes no
+/// compositor state and installs no hook.
+#[cfg(target_os = "linux")]
+pub fn hyprland_native_capture() -> Result<(), Option<String>> {
+    if !crate::hyprland_capture::HyprlandCaptureSession::probe_available() {
+        return Err(None);
+    }
+    crate::hyprland_capture::lua_hook_supported().map_err(Some)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn native_capture_available_for_doctor() -> bool {
-    false
+pub fn hyprland_native_capture() -> Result<(), Option<String>> {
+    Err(None)
 }
 
 /// Human-readable inventory. By default only applicable and available

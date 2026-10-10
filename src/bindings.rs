@@ -72,6 +72,9 @@ pub fn current() -> Inventory {
             .push("the detected desktop has no dedicated binding inventory adapter".into());
     }
 
+    // Stable sort without the action: records of one key keep the order the
+    // source reported them in, which is the order a compositor such as
+    // Hyprland runs them in (a submap bind stops the ones after it).
     inventory.bindings.sort_by(|left, right| {
         (
             &left.source,
@@ -79,7 +82,6 @@ pub fn current() -> Inventory {
             &left.context,
             &left.device,
             &left.submap,
-            &left.action,
         )
             .cmp(&(
                 &right.source,
@@ -87,7 +89,6 @@ pub fn current() -> Inventory {
                 &right.context,
                 &right.device,
                 &right.submap,
-                &right.action,
             ))
     });
     if inventory.bindings.len() > MAX_BINDINGS {
@@ -143,6 +144,48 @@ fn append_extension_inventory(
     });
 }
 
+/// A `--key` filter. Text that parses like an inspect query (`super+enter`,
+/// `super+,`, `code:10`) matches records by normalized key: a bare key
+/// matches it under any modifiers, a combination needs exactly its
+/// modifiers. Any other text is a case-insensitive substring of the key.
+pub(crate) enum KeyFilter<'a> {
+    Combo(crate::key::KeyCombo, &'a str),
+    Text(&'a str),
+}
+
+impl<'a> KeyFilter<'a> {
+    pub(crate) fn new(raw: &'a str) -> Self {
+        match crate::key::KeyCombo::parse_query(raw) {
+            Ok(combo) => Self::Combo(combo, raw),
+            Err(_) => Self::Text(raw),
+        }
+    }
+
+    /// Whether a record key matches; `keycode` is the code of a key shown
+    /// as its layout symbol (see [`record_keycode`]).
+    pub(crate) fn matches(&self, key: &str, keycode: Option<u32>) -> bool {
+        match self {
+            Self::Text(needle) => contains(key, Some(needle)),
+            Self::Combo(query, raw) => match key.parse::<crate::key::KeyCombo>() {
+                Ok(bound) => {
+                    let same_key = bound.key() == query.key()
+                        || keycode.is_some_and(|code| query.key() == format!("CODE:{code}"));
+                    same_key && (query.modmask() == 0 || bound.modmask() == query.modmask())
+                }
+                // A key the parser does not read (for example a modifier
+                // prefix without a key) can still contain the text.
+                Err(_) => contains(key, Some(raw)),
+            },
+        }
+    }
+}
+
+/// The keycode of a record whose `code:N` key is listed as its symbol in
+/// the active layout.
+pub(crate) fn record_keycode(record: &BindingRecord) -> Option<u32> {
+    crate::layers::hyprland::displayed_keycode(&record.certainty)
+}
+
 pub fn filter(
     mut inventory: Inventory,
     key: Option<&str>,
@@ -151,19 +194,24 @@ pub fn filter(
     device: Option<&str>,
     submap: Option<&str>,
 ) -> Inventory {
+    let key = key.map(KeyFilter::new);
+    let matches_key = |binding: &BindingRecord| {
+        key.as_ref()
+            .is_none_or(|key| key.matches(&binding.key, record_keycode(binding)))
+    };
     let matches_other_filters = |binding: &BindingRecord| {
         contains(&binding.action, action)
             && contains(&binding.source, source)
             && contains_optional(binding.device.as_deref(), device)
             && contains_optional(binding.submap.as_deref(), submap)
     };
-    if let Some(query) = key.and_then(|key| key.parse::<crate::key::KeyCombo>().ok()) {
+    if let Some(KeyFilter::Combo(query, _)) = &key {
         inventory.possible_matches = inventory
             .bindings
             .iter()
             .filter(|binding| {
                 unresolved_modmask(binding) == Some(query.modmask())
-                    && !contains(&binding.key, key)
+                    && !matches_key(binding)
                     && matches_other_filters(binding)
             })
             .cloned()
@@ -171,7 +219,7 @@ pub fn filter(
     }
     inventory
         .bindings
-        .retain(|binding| contains(&binding.key, key) && matches_other_filters(binding));
+        .retain(|binding| matches_key(binding) && matches_other_filters(binding));
     inventory
 }
 
@@ -600,5 +648,51 @@ mod tests {
                 .iter()
                 .any(|entry| entry == "extension inventory truncated: diagnostic budget exceeded")
         );
+    }
+
+    #[test]
+    fn key_filter_parses_queries_like_inspect() {
+        let record = |key: &str, certainty: &str| BindingRecord {
+            device: None,
+            submap: Some("default".into()),
+            source: "Hyprland".into(),
+            key: key.into(),
+            action: format!("action {key}"),
+            context: Some("default".into()),
+            certainty: certainty.into(),
+        };
+        let shown = "runtime effective binding; code:10 shown as its key in the active XKB layout";
+        let mut inventory = filter_fixture();
+        inventory.bindings = vec![
+            record("SUPER+RETURN", "runtime effective binding"),
+            record("SUPER+KP_ENTER", "runtime effective binding"),
+            record("SUPER+BACKSPACE", "runtime effective binding"),
+            record("SUPER+B", "runtime effective binding"),
+            record("SUPER+/", "runtime effective binding"),
+            record("SUPER+,", "runtime effective binding"),
+            record("SUPER+1", shown),
+            record("SHIFT+SUPER+CODE:201", "runtime effective binding"),
+            record("RETURN", "runtime effective binding"),
+        ];
+        let keys = |query: &str| {
+            filter(inventory.clone(), Some(query), None, None, None, None)
+                .bindings
+                .into_iter()
+                .map(|binding| binding.key)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys("super+enter"), vec!["SUPER+RETURN"]);
+        assert_eq!(keys("super+KP_Enter"), vec!["SUPER+KP_ENTER"]);
+        assert_eq!(keys("super+b"), vec!["SUPER+B"]);
+        assert_eq!(keys("super+/"), vec!["SUPER+/"]);
+        assert_eq!(keys("super+slash"), vec!["SUPER+/"]);
+        assert_eq!(keys("super+,"), vec!["SUPER+,"]);
+        assert_eq!(keys("super+code:10"), vec!["SUPER+1"]);
+        assert_eq!(keys("code:10"), vec!["SUPER+1"]);
+        assert_eq!(keys("shift+super+code:201"), vec!["SHIFT+SUPER+CODE:201"]);
+        // A bare key matches it under any modifiers.
+        assert_eq!(keys("enter"), vec!["SUPER+RETURN", "RETURN"]);
+        // Text that is not a key stays a substring filter.
+        assert_eq!(keys("shift"), vec!["SHIFT+SUPER+CODE:201"]);
     }
 }

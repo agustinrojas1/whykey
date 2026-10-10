@@ -1,0 +1,12 @@
+{
+  "id": "sxhkd-brace-range",
+  "description": "super + {_,shift + }{1-3} expands ranges and the empty element: super + shift + 2 runs the matching command",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/sxhkd/sxhkdrc": ["super + {_,shift + }{1-3}", "    touch /tmp/{plain,shift}-{1-3}"]},
+  "x11": {"daemons": [{"argv": ["sxhkd", "-c", "/root/.config/sxhkd/sxhkdrc"], "ready_grab": [65, 11]}]},
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+shift+2"]}],
+  "ground_truth": {"fired": {"file": "/tmp/shift-2"}, "delivered": "probe"},
+  "whykey": {"args": ["super+shift+2"], "layer": "sxhkd", "detail": "binding: touch /tmp/shift-2", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

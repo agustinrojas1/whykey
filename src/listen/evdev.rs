@@ -538,7 +538,8 @@ fn evdev_pressed_modifiers_from_kernel(file: &File) -> Vec<u16> {
     let result = unsafe {
         libc::ioctl(
             file.as_raw_fd(),
-            request as libc::c_ulong,
+            // glibc takes the request as c_ulong, musl as c_int.
+            request as _,
             bitmap.as_mut_ptr(),
         )
     };
@@ -569,7 +570,8 @@ fn evdev_locked_modifiers_from_kernel(file: &File) -> u32 {
     let result = unsafe {
         libc::ioctl(
             file.as_raw_fd(),
-            request as libc::c_ulong,
+            // glibc takes the request as c_ulong, musl as c_int.
+            request as _,
             bitmap.as_mut_ptr(),
         )
     };

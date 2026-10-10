@@ -1,0 +1,31 @@
+{
+  "id": "hyprland-keypad-enter-not-return",
+  "description": "keypad Enter does not fire a SUPER, Return bind and reaches the focused window",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, Return, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+kp_enter"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+kp_enter"
+    ],
+    "layer": "Hyprland"
+  }
+}

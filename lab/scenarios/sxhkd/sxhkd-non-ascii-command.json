@@ -1,0 +1,52 @@
+{
+  "id": "sxhkd-non-ascii-command",
+  "description": "sxhkd trims every non-isgraph byte (C locale) at a line's edges, so a leading é is dropped from the command",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/sxhkd/sxhkdrc": [
+      "super + t",
+      "    étouch /tmp/fired"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": [
+          "sxhkd",
+          "-c",
+          "/root/.config/sxhkd/sxhkdrc"
+        ],
+        "ready_grab": [
+          64,
+          28
+        ]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [
+    {
+      "xdotool": [
+        "key",
+        "Super_L+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "sxhkd",
+    "detail": "binding: touch /tmp/fired",
+    "env": {
+      "XDG_SESSION_TYPE": "x11"
+    }
+  }
+}
