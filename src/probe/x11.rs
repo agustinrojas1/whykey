@@ -200,17 +200,23 @@ impl Keymap {
     }
 
     /// Every keycode whose first or second (Shift) column produces one of
-    /// `keysyms`; group 1 only, like the core protocol's keysym lookup.
+    /// `keysyms`; group 1 only, like the core protocol's keysym lookup. A
+    /// keypad keysym in the second column is the NumLock level (Xlib's
+    /// keypad rule), so it needs no Shift: window managers grab the plain
+    /// modifiers, and the grab check already tries the NumLock variants.
     fn targets(&self, keysyms: &[u32]) -> Vec<KeyTarget> {
         self.keycodes()
             .filter_map(|keycode| {
                 let row = self.row(keycode);
                 let level_modifiers = if row.first().is_some_and(|sym| keysyms.contains(sym)) {
                     0
-                } else if row.get(1).is_some_and(|sym| keysyms.contains(sym)) {
-                    SHIFT_MASK
                 } else {
-                    return None;
+                    let sym = row.get(1).filter(|sym| keysyms.contains(sym))?;
+                    if is_keypad_keysym(*sym) {
+                        0
+                    } else {
+                        SHIFT_MASK
+                    }
                 };
                 Some(KeyTarget {
                     keycode,
@@ -219,6 +225,11 @@ impl Keymap {
             })
             .collect()
     }
+}
+
+/// Xlib `IsKeypadKey`: KP_Space through KP_Equal.
+fn is_keypad_keysym(keysym: u32) -> bool {
+    (0xff80..=0xffbd).contains(&keysym)
 }
 
 /// Keycodes bound to each of the eight core modifiers.
@@ -1028,8 +1039,11 @@ mod tests {
     #[test]
     fn resolves_keys_to_keysyms() {
         assert_eq!(keysyms_for_key("T"), vec![0x54, 0x74]);
-        assert_eq!(keysyms_for_key("RETURN"), vec![0xff0d, 0xff8d]);
-        assert_eq!(keysyms_for_key("PAGE_UP"), vec![0xff55, 0xff9a]);
+        // Keypad keys are distinct keysyms: KP_Enter is not Return.
+        assert_eq!(keysyms_for_key("RETURN"), vec![0xff0d]);
+        assert_eq!(keysyms_for_key("KP_ENTER"), vec![0xff8d]);
+        assert_eq!(keysyms_for_key("PAGE_UP"), vec![0xff55]);
+        assert_eq!(keysyms_for_key("KP_PAGE_UP"), vec![0xff9a]);
         assert_eq!(keysyms_for_key("F12"), vec![0xffc9]);
         assert_eq!(keysyms_for_key("SUPER_L"), vec![0xffeb]);
         assert_eq!(keysyms_for_key("XF86AUDIOMUTE"), vec![0x1008ff12]);
@@ -1070,6 +1084,22 @@ mod tests {
                 level_modifiers: SHIFT_MASK
             }]
         );
+    }
+
+    #[test]
+    fn keypad_digit_column_needs_no_shift() {
+        let keymap = Keymap {
+            min_keycode: 87,
+            per_keycode: 2,
+            // keycode 87: KP_End / KP_1, as the core map lists a KEYPAD key.
+            keysyms: vec![0xff9c, 0xffb1],
+        };
+        let plain = vec![KeyTarget {
+            keycode: 87,
+            level_modifiers: 0,
+        }];
+        assert_eq!(keymap.targets(&keysyms_for_key("KP_1")), plain);
+        assert_eq!(keymap.targets(&keysyms_for_key("KP_END")), plain);
     }
 
     #[test]

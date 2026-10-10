@@ -35,11 +35,12 @@ exits 1 on any mismatch.
 | --- | --- |
 | `--only GLOB` | Run matching scenario ids or `scenarios/`-relative paths. Repeatable, e.g. `--only 'i3/*' --only sway-release-bind`. |
 | `-j N` | Run N containers at once. Default: 4, or fewer if there are fewer CPUs. |
-| `--vms N` | Run at most N Hyprland VMs at once (2 vCPUs each, within `-j`). Default: a quarter of the CPUs. Starved VMs time out. |
+| `--vms N` | Run at most N Hyprland VMs at once (2 vCPUs each, within `-j`). Default: a third of the CPUs when `/dev/kvm` exists, a quarter without. Starved VMs time out. |
 | `--binary PATH` | Test this whykey binary. Default: `target/release/whykey`. Pin a build when other work keeps rebuilding `target/`. |
 | `--keep` | Leave each container running afterwards, for `docker exec`. |
 | `--image NAME` | Use this lab image. Default: `whykey-lab`. |
 | `--results FILE` | Write the results to this file. Default: `lab/results.json`. |
+| `--repeat N` | Run every selected scenario N times at once, to hunt flakes, e.g. `--only sway-mode-inactive --repeat 30 -j 12`. |
 
 To add a run's results to the support matrix, run
 `python3 tools/generate_support_matrix.py` (it reads `lab/results.json`) or
@@ -74,9 +75,18 @@ program's reaction through an independent path:
   on Wayland, or `xev` on X11.
 - **Does the probe have focus?** On Wayland (Sway, Hyprland, GNOME) the
   driver types a Shift tap with the scenario's own injector (`vkbd` or
-  `rdkbd`) and waits until foot receives it before any action. Focus as
-  reported by the compositor was not enough: under load it let a scenario
-  pass without proving anything.
+  `rdkbd`) and waits until foot receives the Shift *press* before any
+  action. A lone release does not count: it shows up when the press was
+  lost. Focus as reported by the compositor was not enough: under load it
+  let a scenario pass without proving anything.
+- **No lost first key.** Every `vkbd` run creates a new virtual keyboard.
+  The first event from a new keyboard makes the compositor switch the seat
+  to it and send clients its keymap, and on Sway a key press that is that
+  first event could be lost (foot saw only the release). `vkbd` therefore
+  sends a no-op modifiers event and waits 150 ms before typing. Mutter
+  drops the first key press of every new `rdkbd` remote-desktop session,
+  whatever the delay, so `rdkbd` spends it on a Shift tap; clients see a
+  stray Shift release.
 - **Did the key arrive anywhere?** `reached` is the positive control: the
   bind fired, or a check such as `{"probe": "any"}` (the probe received any
   key press, modifiers included) shows that the input reached the session.
@@ -105,13 +115,21 @@ Indeterminate+Continues is `uncertain-continues`.
 Input sources and what they can prove:
 
 - `vkbd` (`lab/vkbd.py`) is a Wayland virtual keyboard with the real US
-  keymap and real evdev keycodes. Use it for `--to-code` binds and for
-  Hyprland's native capture.
+  keymap and real evdev keycodes. Use it for `--to-code` binds, for
+  Hyprland's native capture, and for keypad keys (`kp_0`–`kp_9`,
+  `kp_enter`, `kp_add`, `kp_subtract`, `kp_multiply`, `kp_divide`,
+  `kp_decimal`; `rdkbd` shares the table). `vkbd.py --numlock KEY…` types
+  with NumLock locked (Mod2 in the locked modifiers).
 - `wtype` uploads its own private keymap. Sway `--to-code` binds do not
   fire for it, and Hyprland's Lua key hook sees every wtype key as keycode
   9, which the real layout reads as Escape (D-073, D-089).
 - `xdotool` sends XTEST input on X11. `lab/xgrab.py` confirms over the raw X11
-  socket that a daemon holds its grab before input is sent.
+  socket that a daemon holds its grab before input is sent. Two traps:
+  `xdotool key Super_L+t` releases Super before `t`, so an sxhkd `@`
+  (release) binding never matches; send `keydown Super_L keydown t keyup t
+  keyup Super_L` instead. In Xvfb's keymap `xdotool key F5` also presses
+  Alt_L; send the keycode (`xdotool key 71`). sxhkd needs `SHELL` in its
+  environment to run commands.
 - `type` writes bytes to a pty. The pty driver answers terminal queries;
   without that, fish 4.6 waits 10 s and swallows input.
 
@@ -127,6 +145,11 @@ says so in its `lab_scope`.
 The KDE scenarios run a bare kglobalacceld on Xvfb. For the inactive
 component, the "fired" truth is `lab/xgrab.py` showing that kglobalacceld
 holds no X11 grab on Meta+Y.
+
+Scenarios ending in `-no-display` (i3 and KDE) run whykey with `DISPLAY`
+unset, so the X11 grab probe cannot decide the verdict and the adapter's own
+logic must. The support matrix credits grab-decided verdicts to
+`compositor.x11-grab`.
 
 ## Scenario format
 
@@ -160,8 +183,8 @@ docstring of `lab/run.py`. A minimal scenario:
 | `probe` | Independent key recorder: `wayland` or `x11` |
 | `actions` | `vkbd`, `rdkbd`, `wtype`, `xdotool`, `type`, `sh`, `sleep`, `wait_quiet`, or `start_whykey` |
 | `ground_truth` | `fired` (did the layer act), `delivered` (`probe`, or a check), and `reached` (`fired`, or a check such as `{"probe": "any"}`); `delivered` or `reached` is required |
-| `whykey.args`, `layer`, `env`, `run` | Command line, layer under test, environment, and how to run it: `direct`, `pty` (typed into the scenario's shell), or `background` (`listen`, with `ready`) |
-| `whykey.summary`, `detail`, `combo`, `stderr` | Substrings or values that must also match, so a right verdict for the wrong binding still fails |
+| `whykey.args`, `layer`, `env`, `run` | Command line, layer under test, environment, and how to run it: `direct`, `pty` (typed into the scenario's shell), or `background` (`listen`, with `ready`). For a key sequence (several key arguments) the verdict is the last key's (`steps[-1].path`) |
+| `whykey.summary`, `detail`, `binding`, `combo`, `stderr` | Substrings or values that must also match, so a right verdict for the wrong binding still fails. `binding` is a substring of the reported layer's primary binding action |
 | `whykey.observation` | Judge `listen`'s observation (`delivered` or not) instead of a layer |
 | `whykey.accept` | Honest-uncertainty verdicts tolerated when the scenario documents that whykey cannot know more (for example, a shell without `shell-init`). Shown as `PASS~` and counted separately in the run summary; such passes never count as verification. |
 | `whykey.confidence` | The report's `assessment.confidence` must equal this value |
@@ -198,3 +221,27 @@ docker exec -it whykey-lab-<pid>-sway-plain-bind bash
 Logs of the started programs are in `/tmp/lab-logs` inside the container.
 The kept container's name is printed at the end of the run. Remove it with
 `docker rm -f` when you are done.
+
+## Mutation check
+
+`lab/mutate.py` shows which scenarios catch a deliberate whykey bug. A
+mutation no scenario catches is a coverage gap. It does not run in CI.
+
+```sh
+python3 lab/mutate.py lab/mutations.example.json --only 'sway/*' -j 12 [--rev HEAD]
+```
+
+The mutation file is a JSON list of `{"name", "file", "search", "replace"}`
+objects. `search` must occur exactly once in `file`. The tool copies the
+tracked files (or `git archive REV` with `--rev`, useful while the working
+tree does not build) to `target/mutate/src`. It builds an unmutated
+baseline, then each mutant, with `CARGO_TARGET_DIR=target/mutate/target`.
+Before every build it runs `cargo clean -p whykey`, because cargo can keep a
+stale whykey artifact between source copies. A mutant whose binary is
+identical to the baseline is reported as such. Scenarios that fail on the
+baseline count as noise, not catches. Lab errors are listed separately
+("lab errors (not counted)") and never count as catches. The results file
+is deleted before every run, and the tool stops if `run.py` exits with a
+status other than 0 or 1 or writes no results. Binaries and per-run results stay in
+`target/mutate`; delete the directory when you are done (it holds about
+600 MB).

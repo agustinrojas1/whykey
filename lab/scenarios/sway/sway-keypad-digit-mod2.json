@@ -1,0 +1,36 @@
+{
+  "id": "sway-keypad-digit-mod2",
+  "description": "bindsym Mod4+Mod2+KP_1 does not fire with NumLock on: Sway drops the consumed NumLock modifier, unlike i3",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "bindsym Mod4+Mod2+KP_1 exec touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "--numlock",
+        "super+kp_1"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+kp_1"
+    ],
+    "layer": "Sway",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    }
+  }
+}

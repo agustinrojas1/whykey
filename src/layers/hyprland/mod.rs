@@ -189,7 +189,7 @@ mod ipc;
 mod keyboard;
 mod matching;
 use config::hyprland_config_paths;
-pub(crate) use ipc::{INVENTORY_SOURCE, collect_probe};
+pub(crate) use ipc::{INVENTORY_SOURCE, collect_probe, displayed_keycode};
 pub use ipc::{applicable, binding_inventory, focused_pid, ipc_available};
 use ipc::{has_hyprland_signature, inspect_system, inspect_system_with_probe};
 pub(crate) use keyboard::{compile_main_xkb_keymap, main_keyboard_active_layout_index};

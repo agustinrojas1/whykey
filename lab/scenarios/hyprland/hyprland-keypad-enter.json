@@ -1,0 +1,33 @@
+{
+  "id": "hyprland-keypad-enter",
+  "description": "bind = SUPER, KP_Enter fires for keypad Enter and the SUPER, Return bind does not",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, Return, exec, touch /tmp/return",
+      "bind = SUPER, KP_Enter, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+kp_enter"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test -e /tmp/fired && test ! -e /tmp/return"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+kp_enter"
+    ],
+    "layer": "Hyprland",
+    "detail": "exec touch /tmp/fired"
+  }
+}

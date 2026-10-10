@@ -36,6 +36,15 @@ def main() -> None:
         bus.get_object(SERVICE, manager.CreateSession()), f"{SERVICE}.Session"
     )
     session.Start()
+    # Mutter drops the first key press of every new remote-desktop session
+    # (seen in foot: `t` arrived as a release only; a lone Shift tap never
+    # showed a press). Waiting does not help, so spend that first press on a
+    # Shift tap; clients see at most a stray Shift release.
+    _, shift = parse_chord("shift")
+    session.NotifyKeyboardKeycode(dbus.UInt32(shift), True)
+    time.sleep(STEP)
+    session.NotifyKeyboardKeycode(dbus.UInt32(shift), False)
+    time.sleep(STEP)
     try:
         for modifiers, key in chords:
             for code, _ in modifiers:

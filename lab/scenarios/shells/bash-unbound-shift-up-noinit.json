@@ -1,0 +1,54 @@
+{
+  "id": "bash-unbound-shift-up-noinit",
+  "description": "Shift+Up (\\e[1;2A) has no Readline binding: Readline, the last consumer, rings the bell, drops \\e[1;2 and inserts the trailing A; nothing runs and nothing passes on",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.bashrc": [
+      "PS1='$ '"
+    ]
+  },
+  "pty": {
+    "command": [
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo 'x"
+    },
+    {
+      "type": "\\e[1;2A"
+    },
+    {
+      "type": "' > /tmp/effect\\r"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "file": "/tmp/effect",
+      "equals": "xA"
+    }
+  },
+  "whykey": {
+    "args": [
+      "shift+up"
+    ],
+    "layer": "Bash / Readline",
+    "run": "pty",
+    "summary": "inserts the trailing \"A\"",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

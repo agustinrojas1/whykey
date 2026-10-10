@@ -2,14 +2,27 @@
 
 rustPlatform.buildRustPackage {
   pname = "whykey";
-  version = "2.0.0";
+  version = "2.1.0";
 
-  src = lib.cleanSource ../.;
+  # The checkout without build outputs, so a local `target/` or `result` is
+  # never copied into the store.
+  src = lib.cleanSourceWith {
+    src = lib.cleanSource ../.;
+    filter = path: type:
+      let rel = lib.removePrefix (toString ../. + "/") (toString path);
+      in !(lib.elem rel [ "target" "result" ]);
+  };
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeCheckInputs = [ util-linux ];
-  # The editor extensions are `#!/usr/bin/env python3` scripts; having python3
-  # in buildInputs lets the fixup phase patch their shebangs to the store path.
+  # The editor extensions and their test fixtures are `#!/usr/bin/env python3`
+  # scripts. The sandbox has no /usr/bin/env, and strictDeps keeps buildInputs
+  # off PATH during checkPhase, so the tests need python3 as a native input and
+  # patched shebangs.
+  nativeCheckInputs = [ util-linux python3 ];
+  postPatch = ''
+    patchShebangs extensions tests/fixtures
+  '';
+  # Lets the fixup phase patch the installed extensions to the store python3.
   buildInputs = [ python3 ];
 
   postInstall = ''

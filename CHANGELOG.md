@@ -1,5 +1,177 @@
 # Changelog
 
+## [2.1.0] - 2026-10-11
+
+A verification sweep of 2.0.0 (host, configuration, packaging, and lab
+stress runs) found the bugs fixed here. The lab now runs 125 scenarios: 111
+match exactly, and 14 pass only as honest uncertainty (13 shells without
+`shell-init`, plus `tmux-root-alt-escape`). None fail.
+
+### Fixes
+
+- A non-UTF-8 argument no longer panics. File arguments (`replay`, `diff`,
+  `snapshot --output`, the `extension` program) accept any path. Any other
+  non-UTF-8 argument is a usage error: "argument X is not valid UTF-8",
+  status 2.
+- Closing stdout early (`whykey --help | true`) no longer panics with
+  "failed printing to stdout". Every command except `listen` exits quietly
+  with status 141, the status a shell shows for SIGPIPE. SIGPIPE itself stays
+  ignored, so `listen`'s terminal and hook guards always restore state, and
+  an extension that exits without reading its request is reported as an
+  extension error (status 1) instead of killing whykey.
+- Error messages echo at most 64 characters of the input. A combination
+  with many `+` segments is summarized ("and N more segments"); 120 000
+  `+` characters used to print the whole input back.
+- `whykey snapshot` uses the same exit rule as `whykey KEY`: status 1 only
+  when every layer is unavailable or the diagnostic budget ran out. stderr
+  then says why; the snapshot is still written.
+- `--verbose` no longer prints Rust debug text for the Hyprland scope. It
+  reads `scope: submap default`, `every submap (universal bind)`, or
+  `unknown`.
+- Key names keep their libxkbcommon spelling (`XF86AudioMute`,
+  `XF86TouchpadOff`), `code:N` is lowercase, and switches read
+  `switch:off:Lid Switch`.
+- Hyprland binds that fire together with the reported one are shown:
+  "Configured to stop: Focus on next window; also fires: Reveal active
+  window on top". Release and long-press binds are not listed as firing on
+  press, and the reported binding prefers a bind that runs on press. Lab
+  `hyprland-release-and-press-bind`.
+- Hyprland inspect follows `handleKeybinds` (0.56.2): a matching submap bind
+  that runs on press stops the binds after it, catchall included, and a
+  catchall is skipped after a consuming release bind. Skipped binds are
+  listed as `not reached: …; <reason>`. Release and long-press binds no
+  longer count as running on press, and a non-consuming bind no longer lets
+  through a key another bind consumed. Lab `hyprland-submap-break`,
+  `hyprland-submap-break-catchall`.
+- Keypad keys are their own keys end to end: `kp_enter` (alias `kp_return`)
+  is not `return`, and `kp_0`–`kp_9`, `kp_home`, `kp_end`, `kp_page_up`,
+  `kp_page_down`, `kp_add`, `kp_subtract`, `kp_multiply`, `kp_divide`,
+  `kp_equal`, and `kp_decimal` are not the main keys. Hyprland resolves
+  them to the keypad keycodes (KP_Enter is 104, Return is 36), KDE encodes
+  `Keypad|Key_Enter`, and terminal prediction encodes keypad keys (Kitty
+  codes 57399–57426; legacy mode notes the application-keypad alternative).
+  Remapper rules on keypad keys (keyd `kpenter`, `kp1`) match only the
+  keypad keys, and main keys no longer match keypad codes. The X11 grab
+  probe resolves keypad digits on the NumLock level without adding Shift.
+  i3 and Sway follow their opposite NumLock rules: i3 matches a keypad digit
+  only with `Mod2` in the `bindsym`, Sway only without it. On a real
+  Hyprland desktop `super+kp_1` used to report workspace 1. Lab
+  `hyprland-keypad-enter`, `hyprland-keypad-enter-not-return`,
+  `hyprland-return-not-keypad-enter`, the three `sway-` equivalents,
+  `i3-keypad-digit-numlock`, `i3-keypad-digit-without-numlock-modifier`,
+  `sway-keypad-digit`, `sway-keypad-digit-mod2`.
+- `bindings --key` and `conflicts --key` parse a key query like inspect: a
+  bare key matches under any modifiers, a combination needs exactly its
+  modifiers, and `code:N` matches Hyprland records listed by layout symbol.
+  Other text stays a case-insensitive substring filter. `super+b` used to
+  return ten substring hits.
+- `conflicts` keeps the order the source reports binds in. A Hyprland submap
+  bind that is not last reads "the submap bind stops the binds listed after
+  it"; otherwise "multiple binds fire together".
+- tmux: `list-keys` keys are read case-sensitively (`C` is Shift+c, `BTab`
+  is Shift+Tab), escaped (`\%`, `\;`) and quoted (`"M-{"`) keys and the `-`
+  key are understood, and `Escape`, `BSpace`, `Tab`, `Enter`, `PgUp`,
+  `PgDn`, and the `KP` names are mapped. Lab `tmux-prefix-lowercase`,
+  `tmux-prefix-uppercase`, `tmux-prefix-escaped-percent`,
+  `tmux-prefix-escaped-semicolon`, `tmux-prefix-dash`,
+  `tmux-root-quoted-brace`, `tmux-root-btab`, `tmux-root-alt-escape`.
+- Inside tmux, Screen, or Zellij the multiplexer comes before the pane's TTY
+  driver in the route, so a tmux bind on `C-c` is no longer reported as
+  SIGINT. If the multiplexer cannot be inspected, the pane TTY row is still
+  reported before the route stops. Lab `tmux-prefix-before-pane-tty`.
+- Readline defaults are regenerated from a pristine bash 5.3.9 / Readline
+  8.3 (176 emacs entries, including `\e0`–`\e9` digit-argument and
+  `do-lowercase-version`). Vi mode uses the 39-entry vi-insert keymap
+  instead of "vi defaults not modelled".
+- A key the shell line editor does not bind is no longer said to continue
+  downstream: the editor is the last layer that reads it. The report states
+  the effect instead: Readline rings the bell and inserts the leftover bytes
+  (`shift+up` inserts `A`), ZLE runs `undefined-key`, fish drops the key.
+  After an uncertain earlier layer the caveat is stated once.
+  Lab `bash-unbound-shift-up-*`, `zsh-unbound-ctrl-left-*`.
+- Row summaries are no longer cut at the first `;`, so fish and `bind -x`
+  commands are shown whole (long summaries end in `…`). Lab
+  `fish-preset-alt-left-init`.
+- The sxhkd parser is a port of sxhkd 0.6.1: `~` (replay: the key also
+  reaches the focused window), `@` (release), `{a,b}` and `{1-9}` expansion
+  in lockstep with the command, `_` empty elements, plain keys without
+  modifiers, `meta`/`mode_switch`, uppercase letter as Shift, line
+  continuations, and column-0 comments. A continued line shares sxhkd's
+  single byte offset between the hotkey and command buffers, as sxhkd does,
+  so odd continuations bind what sxhkd binds (this used to panic inside a
+  multi-byte character). Non-ASCII bytes at a line's edges are trimmed as
+  sxhkd does in the C locale. A line that expands to more than 4096
+  renderings is skipped with a detail saying so. Chord chains, pointer
+  buttons and `any` are skipped. Lab `sxhkd-replay`, `sxhkd-replay-plain`,
+  `sxhkd-brace`, `sxhkd-brace-range`, `sxhkd-plain-key`, `sxhkd-release`,
+  `sxhkd-continuation-shared-offset`, `sxhkd-continuation-past-text`,
+  `sxhkd-non-ascii-command`.
+- The X11 grab probe no longer overrides an adapter that knows the grabbing
+  program replays the key (sxhkd `~`): the result stays handled-and-passed
+  with the grab evidence attached.
+- `whykey doctor` and `capabilities` report native Hyprland capture as
+  unavailable on a `hyprland.conf` session ("needs a Lua config
+  (hyprland.lua)"), using the same no-op `hyprctl eval` as `listen`.
+- `inspect --focused` on a terminal emulator follows the foreground process
+  of its one pty, so the application and shell rows describe the program
+  reading the key. With several ptys the focused terminal is reported as
+  unknown. stderr notes that the terminal and TTY rows describe whykey's own
+  terminal.
+- An empty `TERM_PROGRAM` or `LC_TERMINAL` counts as unset.
+- `whykey-emacs`: when `emacsclient` is not on `PATH` it says Emacs is not
+  installed and suggests installing it, instead of `emacs --daemon`.
+- Support matrix attribution: verdicts decided by the X11 grab probe are
+  credited to the new `compositor.x11-grab` entry (also in `capabilities`).
+  Adapters keep only scenarios their own logic decided, plus a
+  `lab_binding` list where they only named the binding. New `-no-display`
+  scenarios check the i3 and KDE adapters without the grab probe.
+- Removed three ignored `listen` throughput tests that asserted bulk
+  streaming, which `listen` 2.0 does not do.
+
+### Packaging
+
+- Release binaries: `x86_64-unknown-linux-gnu` now needs only glibc 2.28
+  (2.0.0 needed 2.34 and warned about GLIBC_2.39), and new fully static
+  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` archives are
+  published, each with a `.sha256`. Built with cargo-zigbuild; the workflow
+  checks the glibc floor and static linking (no interpreter and no `NEEDED`
+  entry in `readelf`) and runs each binary on Ubuntu
+  20.04, Debian oldstable, and Alpine (amd64 and arm64). CI gains a musl
+  test job.
+- Distribution test suites pass when PID 1 is a shell (containers, the Nix
+  sandbox): the PID-1 test now targets its own process.
+- Nix: `packaging/default.nix` allows `nix-build packaging`; `python3` is a
+  check input, the extension and fixture shebangs are patched, and `target/`
+  and `result` are excluded from the source.
+- Debian: `python3 <!nocheck>` build dependency, tests honor `nocheck`, and
+  the upstream `CHANGELOG.md` is shipped under its own name instead of
+  overwriting the Debian changelog.
+- RPM: `python3` is only Recommended; the automatic `/usr/bin/python3`
+  requirement is excluded.
+- Arch: the PKGBUILD has a Maintainer line (namcap is clean).
+- The source archive contains only Git-tracked files.
+- README: pin `@2` with mise (its `minimum_release_age` can otherwise give
+  an older major), a per-target asset table, and where the extensions are
+  for mise and Cargo installs.
+
+### Lab
+
+- 125 scenarios (from 81): keypad and NumLock, submap-break, release versus
+  press binds, tmux key syntax and ordering, unbound shell keys, sxhkd
+  syntax and continuations, and `-no-display` adapter checks.
+- `vkbd` primes each new virtual keyboard with a no-op modifiers event, and
+  `rdkbd` spends Mutter's dropped first press on a Shift tap. The focus gate
+  requires the Shift press, not a lone release. `sway-mode-inactive` passed
+  30 of 30 repeated runs.
+- `lab/mutate.py` reports which scenarios catch a deliberate whykey bug; all
+  10 X11 adapter mutations are caught. Lab errors are reported separately
+  and never count as catches, and a run that leaves no results stops the
+  tool.
+- `run.py --repeat N` runs scenarios repeatedly to hunt flakes; `--vms`
+  defaults to a third of the CPUs with KVM. A new `binding` check requires
+  a substring of the reported binding's action. `vkbd.py --numlock` types
+  with NumLock locked.
+
 ## [2.0.0] - 2026-10-10
 
 whykey now checks its answers against the running programs. A reality lab

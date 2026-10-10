@@ -415,7 +415,7 @@ fn evaluate(keymaps: &Keymaps, inputs: &[TerminalInput]) -> Verdict {
     details.push(format!("binding source: {}", keymaps.source));
 
     let notation = |start: usize, end: usize| zle_notation(&bytes[start..end]);
-    let (outcome, summary, action) = match relevant.first() {
+    let (outcome, mut summary, action) = match relevant.first() {
         None => (Outcome::Pass, "no terminal input to evaluate".to_owned(), None),
         Some(Step::Pending { start, bound }) => {
             let pending = &bytes[*start..];
@@ -489,9 +489,13 @@ fn evaluate(keymaps: &Keymaps, inputs: &[TerminalInput]) -> Verdict {
             "zsh defaults could not be read; the binding is unknown".to_owned(),
             None,
         ),
-        Some(Step::Undefined { .. }) => (
+        Some(Step::Undefined { start, end }) => (
             Outcome::Pass,
-            format!("not bound in keymap {}", keymaps.main),
+            format!(
+                "not bound in keymap {}: ZLE runs undefined-key (beeps) and discards {}",
+                keymaps.main,
+                notation(*start, *end)
+            ),
             None,
         ),
     };
@@ -530,6 +534,9 @@ fn evaluate(keymaps: &Keymaps, inputs: &[TerminalInput]) -> Verdict {
         ));
         if !inserted.is_empty() {
             details.push(format!("{inserted:?} is inserted into the command line"));
+            if outcome == Outcome::Pass {
+                summary.push_str(&format!(", then inserts {inserted:?}"));
+            }
         }
     }
     Verdict {
@@ -780,7 +787,10 @@ bindkey -a "^G" list-expand
         let keymaps = keymaps(DEFAULTS);
         let result = verdict(&keymaps, &[b"\x1b[1;5D"]);
         assert_eq!(result.outcome, Outcome::Pass);
-        assert_eq!(result.summary, "not bound in keymap emacs");
+        assert_eq!(
+            result.summary,
+            "not bound in keymap emacs: ZLE runs undefined-key (beeps) and discards ^[[1, then inserts \";5D\""
+        );
         assert!(
             result
                 .details

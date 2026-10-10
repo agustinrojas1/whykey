@@ -130,8 +130,8 @@ receive real synthetic input, and their reaction is the ground truth (a bind
 ran a command, a key arrived at an independent test client). Each scenario
 also needs a positive control: the probe must have seen a key, or the bind
 must be shown able to fire, so a dead setup cannot pass by default. whykey's
-verdict must match the ground truth. The current run has 81 scenarios: 70
-match exactly, 11 pass only as honest uncertainty (see below), none fail,
+verdict must match the ground truth. The current run has 125 scenarios: 111
+match exactly, 14 pass only as honest uncertainty (see below), none fail,
 and none are lab errors. The per-capability list is in the
 [support matrix](SUPPORT_MATRIX.md).
 
@@ -139,18 +139,21 @@ and none are lab errors. The per-capability list is in the
 
 | Environment | Version | Scenarios |
 | --- | --- | --- |
-| Hyprland, `hyprland.conf` and `hyprland.lua`, in a KVM guest | 0.56.2 | 16, plus 2 probe-window |
-| Sway (headless) | 1.11 | 9, plus 2 probe-window |
-| i3 on Xvfb | 4.25.1 | 5, plus 3 probe-window (one is a lone Super tap) |
-| KDE kglobalacceld on Xvfb (daemon only, no Plasma session) | 6.7.5 | 3 |
+| Hyprland, `hyprland.conf` and `hyprland.lua`, in a KVM guest | 0.56.2 | 22, plus 2 probe-window |
+| Sway (headless) | 1.11 | 14, plus 2 probe-window |
+| i3 on Xvfb | 4.25.1 | 12 (5 with `DISPLAY` unset, to check the adapter without the X11 grab probe), plus 3 probe-window (one is a lone Super tap) |
+| KDE kglobalacceld on Xvfb (daemon only, no Plasma session) | 6.7.5 | 6 (3 with `DISPLAY` unset) |
 | GNOME: headless mutter (mutter-owned bindings only; GNOME Shell cannot start in the container, so Shell and gnome-settings-daemon bindings are not verified) | mutter 50.5 | 4 |
-| Openbox, AwesomeWM, sxhkd, xbindkeys on Xvfb | 3.6.1, 4.3, 0.6.1, 1.8.7 | 2 each |
-| bash, zsh, fish in a pty | 5.3.9, 5.9, 4.6.0 | 22 (11 with `shell-init`, 11 without) |
-| tmux and GNU Screen, with bash, zsh, or fish inside | 3.7c, 5.0.1 | 7 |
+| sxhkd on Xvfb (replay `~`, release `@`, braces, ranges, plain keys, continuations) | 0.6.1 | 11 |
+| Openbox, AwesomeWM, xbindkeys on Xvfb | 3.6.1, 4.3, 1.8.7 | 2 each |
+| bash, zsh, fish in a pty | 5.3.9, 5.9, 4.6.0 | 27 (14 with `shell-init`, 13 without) |
+| tmux and GNU Screen, with bash, zsh, or fish inside | 3.7c, 5.0.1 | 16 |
 
-Without `shell-init`, the 11 shell scenarios pass only as honest
+Without `shell-init`, the 13 shell scenarios pass only as honest
 uncertainty: whykey says the shell probably handles the key, unverified.
-They do not count as verification.
+`tmux-root-alt-escape` also passes only as uncertainty: the generic terminal
+fallback has no Alt+Escape encoding, so whykey cannot tell which bytes tmux
+receives. These 14 do not count as verification.
 
 **Live-verified by hand on the maintainer's desktop:** static `whykey KEY`
 inspection on Hyprland 0.56.2, bash with `shell-init`, and the Neovim
@@ -185,16 +188,39 @@ every input device.
 ## Install
 
 ```sh
-mise use github:agustinrojas1/whykey
+mise use github:agustinrojas1/whykey@2.1.0
 # or, with Rust 1.85 or newer:
 cargo install --git https://github.com/agustinrojas1/whykey --locked
 ```
 
+Pin a version with mise: the exact `@2.1.0`, or the major `@2`. By default
+mise hides releases younger than 24 hours (`minimum_release_age`), so an
+unpinned `github:agustinrojas1/whykey` can silently resolve to an older major
+release right after a new one is published. During that first day `@2` fails
+instead; an exact version such as `@2.1.0` installs at once.
+
+Each release publishes these binaries, each archive with a `.sha256` file:
+
+| Asset | Runs on |
+| --- | --- |
+| `whykey-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64 with glibc 2.28 or newer (Debian 10, Ubuntu 18.10, RHEL 8 and later) |
+| `whykey-<version>-x86_64-unknown-linux-musl.tar.gz` | any x86_64 Linux: fully static, no libc needed (Alpine, older glibc) |
+| `whykey-<version>-aarch64-unknown-linux-musl.tar.gz` | any aarch64 Linux: fully static |
+
+On glibc systems mise picks the `gnu` archive for x86_64; aarch64 only has
+the static `musl` archive.
+
 whykey builds only on Linux; other targets fail with an explicit message.
 Arch, Debian, RPM, and Nix recipes are in [`packaging/`](packaging/README.md).
 Only the Arch recipe has a package smoke test (L-008 in the
-[defect register](DEFECT_REGISTER.md)). The bundled editor extensions need
-`python3`.
+[defect register](DEFECT_REGISTER.md)).
+
+The editor extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) are
+`python3` scripts. The distribution packages install them next to `whykey`.
+mise and `cargo install` do not put them on `PATH`. With mise they are in
+`"$(mise where github:agustinrojas1/whykey)/extensions"`; with Cargo, take
+them from the repository's `extensions/` directory. Add that directory to
+`PATH` or link the scripts into a directory that is already on it.
 
 ## Usage
 
@@ -217,6 +243,8 @@ whykey extension extensions/whykey-nvim ctrl+x   # ask a running Neovim
 Join modifiers and the key with `+`. Modifiers: `ctrl`, `alt`, `shift`,
 `super`, `hyper`, `altgr` (Mod5), `caps`, `num`. A key is a character, a
 named key (`return`, `left`, `comma`, `f1`), an XF86 media key, or `code:N`.
+Keypad keys are their own keys: `kp_enter` is not `return`, and `kp_1`,
+`kp_home`, `kp_add` and the other `kp_` names are not the main keys.
 Unknown names exit with status 2 and suggest the closest valid name.
 
 Reports open with a diagnosis, its effect, the relevant layers with their

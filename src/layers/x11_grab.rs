@@ -7,10 +7,14 @@
 //! observes whether some client owns it there, independent of which program
 //! that is or where its configuration lives. A grab an application holds on
 //! its own window is invisible to this probe. In an X11 session that
-//! observation decides the compositor-tier outcome; the selected desktop
-//! adapter keeps its identity (binding, command, mode) when it names the
-//! grab's owner, and a configured binding without a root-window grab is
-//! reported as inactive.
+//! observation decides the compositor-tier outcome unless the adapter knows
+//! the grab's owner passes the key on (a replaying grab looks the same to
+//! the probe); the selected desktop adapter keeps its identity (binding,
+//! command, mode) when it names the grab's owner, and a configured binding
+//! without a root-window grab is reported as inactive.
+//!
+//! tools/generate_support_matrix.py recognises a verdict this probe decided
+//! by the `observed:` evidence lines `evidence` writes; keep their prefixes.
 //!
 //! Under XWayland the grab covers X11 clients only: the Wayland compositor's
 //! own bindings are not X grabs, and an X client's grab fires only while an
@@ -67,6 +71,22 @@ pub fn xwayland_session() -> bool {
         false,
         wayland_live,
     ) == Session::XWayland
+}
+
+/// Whether the grab probe can ask an X server here, for `whykey
+/// capabilities`.
+pub fn availability() -> (bool, &'static str) {
+    match session() {
+        Session::X11 => (
+            true,
+            "native X11 session: root-window grabs decide whether a window manager or hotkey daemon takes a key",
+        ),
+        Session::XWayland => (
+            true,
+            "XWayland: root-window grabs show X11 clients' shortcuts, which fire only while an X11 window has focus",
+        ),
+        Session::None => (false, "no local X11 DISPLAY (or an SSH session)"),
+    }
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -235,10 +255,18 @@ fn claims(adapter: &LayerResult) -> bool {
 }
 
 /// Combines the selected desktop adapter's finding with the observed grab
-/// state. The grab decides the outcome; the adapter keeps its identity (and
-/// binding, command, mode) whenever it names the owner of an observed grab
-/// or the layer of a free key. A grab no adapter claims is reported under
-/// the neutral "X11 key grab" layer instead of being attributed to the WM.
+/// state. The adapter keeps its identity (and binding, command, mode)
+/// whenever it names the owner of an observed grab or the layer of a free
+/// key. A grab no adapter claims is reported under the neutral "X11 key
+/// grab" layer instead of being attributed to the WM.
+///
+/// The grab decides the outcome except where the adapter knows the owner
+/// passes the key on: a passive grab delivers the key to its owner only, and
+/// only the owner decides whether to replay it (sxhkd `~` answers a
+/// synchronous grab with `XAllowEvents(ReplayKeyboard)`). The probe cannot
+/// see that choice, so an adapter's `HandledAndPassed` claim stands and gains
+/// the grab evidence; a claim of `Consumed` or an undecided claim becomes
+/// `Consumed`.
 fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult {
     let checks = match observation {
         Observation::Checked(checks) => checks,
@@ -258,14 +286,21 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
     let mut details = evidence(&checks);
     match (grabbed, claims(&adapter)) {
         (true, true) => {
-            if adapter.outcome != Outcome::Consumed {
-                details.push(format!(
-                    "{} configuration: {}",
-                    adapter.layer, adapter.summary
-                ));
-                adapter.summary = GRABBED.into();
+            match adapter.outcome {
+                Outcome::Consumed => {}
+                Outcome::HandledAndPassed => details.push(format!(
+                    "the grab delivers the key to {} first, which passes it on to the focused client",
+                    adapter.layer
+                )),
+                _ => {
+                    details.push(format!(
+                        "{} configuration: {}",
+                        adapter.layer, adapter.summary
+                    ));
+                    adapter.summary = GRABBED.into();
+                    adapter.outcome = Outcome::Consumed;
+                }
             }
-            adapter.outcome = Outcome::Consumed;
             details.append(&mut adapter.details);
             adapter.details = details;
             adapter.with_tier(EvidenceTier::LiveQuery)
@@ -382,6 +417,56 @@ mod tests {
         assert_eq!(result.layer, "X11 xbindkeys");
         assert_eq!(result.outcome, Outcome::Consumed);
         assert_eq!(result.summary, GRABBED);
+    }
+
+    #[test]
+    fn observed_grab_keeps_an_adapter_that_knows_the_key_is_replayed() {
+        let replay = || {
+            LayerResult::handled_and_passed(
+                "sxhkd",
+                LayerId::Compositor,
+                "matching sxhkd binding replays the key to the focused client (~)",
+                vec!["binding: touch /tmp/fired".into()],
+            )
+            .with_tier(EvidenceTier::ConfigFile)
+        };
+        let result = x11_result(replay(), Observation::Checked(vec![check(vec![64], None)]));
+        assert_eq!(result.layer, "sxhkd");
+        assert_eq!(result.outcome, Outcome::HandledAndPassed);
+        assert_eq!(result.summary, replay().summary);
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+        assert!(result.details[0].starts_with("observed: the X server refused"));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("passes it on to the focused client"))
+        );
+        assert!(
+            result
+                .details
+                .contains(&"binding: touch /tmp/fired".to_owned())
+        );
+
+        // Without a grab the replaying binding is not active either.
+        let result = x11_result(
+            replay(),
+            Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
+        );
+        assert_eq!(result.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn evidence_lines_keep_the_prefixes_the_support_matrix_keys_on() {
+        // tools/generate_support_matrix.py GRAB_EVIDENCE.
+        let grabbed = evidence(&[check(vec![64], Some(vec![64]))]);
+        assert!(
+            grabbed
+                .iter()
+                .all(|line| line.starts_with("observed: the X server refused"))
+        );
+        let free = evidence(&[check(Vec::new(), Some(Vec::new()))]);
+        assert!(free[0].starts_with("observed: root-window grabs on"));
     }
 
     #[test]

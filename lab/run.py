@@ -76,8 +76,8 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
     whykey        {"args": [...], "layer": name or [names], "env": {...},
                    "run": "direct" | "pty" | "background", "command": "whykey",
                    "accept": [...], "summary": "text", "detail": "text",
-                   "observation": bool, "combo": {...}, "stderr": "text",
-                   "confidence": "label"}
+                   "binding": "text", "observation": bool, "combo": {...},
+                   "stderr": "text", "confidence": "label"}
                   "pty" types the command into the scenario's shell.
                   "background" starts whykey (`listen`) before the actions or
                   at a start_whykey action, waits for "ready" ("window": its
@@ -86,7 +86,9 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   controlling terminal (`script`).
                   "summary": substring the layer's summary must contain, and
                   "detail" one of its evidence lines must contain, so a right
-                  verdict for the wrong binding still fails.
+                  verdict for the wrong binding still fails. "binding":
+                  substring of the layer's primary binding action (the
+                  bind that decides the key, not every listed match).
                   "observation": judge `whykey listen`'s observation instead
                   of a layer: "delivered" (the key reached its capture point)
                   or "not-delivered" (only modifiers arrived) against the
@@ -214,10 +216,21 @@ def expected_verdicts(truth: dict) -> tuple[str, set[str]]:
     raise PositiveControlFailed("the key neither fired nor was delivered past the layer")
 
 
+def report_path(report: dict | None) -> list[dict]:
+    """The layer path of a report; for a key sequence (`steps`), the last
+    key's path, which carries the sequence's verdict."""
+    if not report:
+        return []
+    if "path" in report:
+        return report["path"]
+    steps = report.get("steps") or []
+    return steps[-1].get("path", []) if steps else []
+
+
 def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | None]:
     if report is None:
         return "error", None
-    for entry in report.get("path", []):
+    for entry in report_path(report):
         if entry.get("layer") in layers:
             status, propagation = entry.get("status"), entry.get("propagation")
             verdict = {
@@ -254,8 +267,8 @@ def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> l
     return command
 
 
-def run_container(args, path: Path, scenario: dict) -> dict:
-    name = f"whykey-lab-{os.getpid()}-{scenario['id']}"
+def run_container(args, path: Path, scenario: dict, copy: int = 0) -> dict:
+    name = f"whykey-lab-{os.getpid()}-{scenario['id']}" + (f"-{copy}" if copy else "")
     command = docker_command(args, path, scenario, name, args.keep)
     started = time.monotonic()
     output = ""
@@ -360,9 +373,14 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         texts = [] if entry is None else [entry.get("summary") or ""] + [
             item.get("text", "") for item in entry.get("evidence", [])
         ]
+        binding = scenario["whykey"].get("binding")
+        reported_binding = ((entry or {}).get("binding") or {}).get("action") or ""
         summary_ok = (summary is None or (entry is not None and summary in texts[0])) and (
             detail is None or any(detail in text for text in texts)
-        )
+        ) and (binding is None or binding in reported_binding)
+        if binding is not None:
+            detail = f"{detail}; " if detail else ""
+            detail += f"binding action containing {binding!r} (reported {reported_binding!r})"
     stderr = scenario["whykey"].get("stderr")
     stderr_ok = stderr is None or stderr in whykey["stderr"]
     if combo is not None:
@@ -392,7 +410,7 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         report = whykey["report"]
         record["whykey_layers"] = [
             f"{item.get('layer')}: {item.get('status')}/{item.get('propagation')} - {item.get('summary')}"
-            for item in (report or {}).get("path", [])
+            for item in report_path(report)
         ]
         record["whykey_stderr"] = whykey["stderr"][-2000:] or None
         if whykey.get("stdout"):
@@ -428,14 +446,18 @@ def main() -> int:
     parser.add_argument("--only", action="append", default=[], metavar="GLOB",
                         help="scenario id or scenarios/-relative path glob (repeatable)")
     parser.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1))
-    parser.add_argument("--vms", type=int, default=max(1, (os.cpu_count() or 1) // 4),
+    parser.add_argument("--vms", type=int,
+                        default=max(1, (os.cpu_count() or 1) // (3 if os.path.exists("/dev/kvm") else 4)),
                         help="Hyprland VMs (2 vCPUs each) run at once, within --jobs "
-                             "(default: a quarter of the CPUs; starved guests time out)")
+                             "(default: a third of the CPUs with KVM, a quarter without; "
+                             "starved guests time out)")
     parser.add_argument("--keep", action="store_true",
                         help="leave each container running after the scenario for docker exec")
     parser.add_argument("--image", default="whykey-lab")
     parser.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "whykey")
     parser.add_argument("--results", type=Path, default=LAB / "results.json")
+    parser.add_argument("--repeat", type=int, default=1, metavar="N",
+                        help="run every selected scenario N times at once (flake hunting)")
     args = parser.parse_args()
     args.binary = args.binary.resolve()
     if not args.binary.is_file():
@@ -451,9 +473,10 @@ def main() -> int:
             concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs - vms)) as pool:
         futures = {
             (vm_pool if scenario["environment"] == "hyprland" else pool).submit(
-                run_container, args, path, scenario
+                run_container, args, path, scenario, copy
             ): (path, scenario)
             for path, scenario in scenarios
+            for copy in range(max(1, args.repeat))
         }
         for future in concurrent.futures.as_completed(futures):
             path, scenario = futures[future]

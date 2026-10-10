@@ -20,6 +20,13 @@ const ALTGR_MASK: u32 = 128;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeyEncoding {
     Bytes(Vec<u8>),
+    /// A keypad key: `normal` in the default (numeric) keypad mode,
+    /// `application` once a program turns on application keypad mode
+    /// (DECKPAM, for example through the terminfo `smkx` string).
+    Keypad {
+        normal: Vec<u8>,
+        application: Vec<u8>,
+    },
     /// A dead keysym starts composition in the terminal; nothing is sent
     /// until the next key completes it.
     DeadKey(String),
@@ -32,7 +39,7 @@ pub(crate) enum KeyEncoding {
 impl KeyEncoding {
     fn into_bytes(self) -> Option<Vec<u8>> {
         match self {
-            Self::Bytes(bytes) => Some(bytes),
+            Self::Bytes(bytes) | Self::Keypad { normal: bytes, .. } => Some(bytes),
             Self::DeadKey(_) | Self::Unknown(_) | Self::Unmodeled => None,
         }
     }
@@ -50,6 +57,17 @@ pub(crate) fn with_default_encoding(
 ) -> (LayerResult, Option<TerminalInput>) {
     match encoding {
         KeyEncoding::Bytes(bytes) => (layer, Some(TerminalInput::predicted(bytes, description))),
+        KeyEncoding::Keypad {
+            normal,
+            application,
+        } => {
+            layer.details.push(format!(
+                "in application keypad mode (DECKPAM, which programs set through terminfo smkx) \
+                 the terminal sends {} instead",
+                crate::layers::format_bytes(&application)
+            ));
+            (layer, Some(TerminalInput::predicted(normal, description)))
+        }
         KeyEncoding::DeadKey(keysym) => {
             if composes && layer.outcome == Outcome::Pass {
                 layer.outcome = Outcome::Consumed;
@@ -341,7 +359,10 @@ fn inspect_config(
             );
         }
         match default_encoding_for_protocol(key, None, layout) {
-            KeyEncoding::Bytes(encoding) => {
+            KeyEncoding::Bytes(encoding)
+            | KeyEncoding::Keypad {
+                normal: encoding, ..
+            } => {
                 details.push(format_encoding_detail(&encoding));
                 return LayerResult::new(
                     "Ghostty",
@@ -703,6 +724,9 @@ pub(crate) fn default_encoding_for_protocol(
     if key.modmask() & ALTGR_MASK != 0 {
         return altgr_encoding(key, protocol_flags, layout);
     }
+    if let Some(encoding) = keypad_encoding(key, protocol_flags) {
+        return encoding;
+    }
     modifier_encoding(key, protocol_flags).map_or(KeyEncoding::Unmodeled, KeyEncoding::Bytes)
 }
 
@@ -774,6 +798,86 @@ fn modifier_encoding(key: &KeyCombo, protocol_flags: Option<u32>) -> Option<Vec<
     } else {
         Some(format!("\x1b[1;{modifiers}{arrow}").into_bytes())
     }
+}
+
+/// A keypad key (`KP_*`): the main key it reports as in legacy encoding,
+/// its Kitty keyboard protocol code, and its application keypad mode final
+/// byte (`ESC O <final>`) when it is a numeric keypad key.
+struct KeypadKey {
+    main: &'static str,
+    kitty_code: u32,
+    application: Option<u8>,
+}
+
+fn keypad_key(key: &str) -> Option<KeypadKey> {
+    let (main, kitty_code, application) = match key {
+        "KP_0" => ("0", 57399, Some(b'p')),
+        "KP_1" => ("1", 57400, Some(b'q')),
+        "KP_2" => ("2", 57401, Some(b'r')),
+        "KP_3" => ("3", 57402, Some(b's')),
+        "KP_4" => ("4", 57403, Some(b't')),
+        "KP_5" => ("5", 57404, Some(b'u')),
+        "KP_6" => ("6", 57405, Some(b'v')),
+        "KP_7" => ("7", 57406, Some(b'w')),
+        "KP_8" => ("8", 57407, Some(b'x')),
+        "KP_9" => ("9", 57408, Some(b'y')),
+        "KP_DECIMAL" => (".", 57409, Some(b'n')),
+        "KP_DIVIDE" => ("/", 57410, Some(b'o')),
+        "KP_MULTIPLY" => ("*", 57411, Some(b'j')),
+        "KP_SUBTRACT" => ("-", 57412, Some(b'm')),
+        "KP_ADD" => ("+", 57413, Some(b'k')),
+        "KP_ENTER" => ("RETURN", 57414, Some(b'M')),
+        "KP_EQUAL" => ("=", 57415, Some(b'X')),
+        "KP_SEPARATOR" => (",", 57416, Some(b'l')),
+        "KP_LEFT" => ("LEFT", 57417, None),
+        "KP_RIGHT" => ("RIGHT", 57418, None),
+        "KP_UP" => ("UP", 57419, None),
+        "KP_DOWN" => ("DOWN", 57420, None),
+        "KP_PAGE_UP" => ("PAGE_UP", 57421, None),
+        "KP_PAGE_DOWN" => ("PAGE_DOWN", 57422, None),
+        "KP_HOME" => ("HOME", 57423, None),
+        "KP_END" => ("END", 57424, None),
+        "KP_INSERT" => ("INSERT", 57425, None),
+        "KP_DELETE" => ("DELETE", 57426, None),
+        _ => return None,
+    };
+    Some(KeypadKey {
+        main,
+        kitty_code,
+        application,
+    })
+}
+
+/// Keypad keys are their own keys (KP_Enter is not Return). In legacy
+/// encoding the terminal sends the bytes of the matching main key, or
+/// `ESC O <final>` in application keypad mode. The Kitty disambiguate flag
+/// reports keys that type no text with their own code; text keys stay text
+/// until report-all-keys (flag 8) or a modifier makes them escape codes.
+fn keypad_encoding(key: &KeyCombo, protocol_flags: Option<u32>) -> Option<KeyEncoding> {
+    let keypad = keypad_key(key.key())?;
+    let mask = key.modmask();
+    let types_text = keypad.main.chars().count() == 1;
+    if let Some(flags) = protocol_flags.filter(|flags| flags & (1 | 8) != 0) {
+        if types_text && mask == 0 && flags & 8 == 0 {
+            return Some(KeyEncoding::Bytes(keypad.main.as_bytes().to_vec()));
+        }
+        let modifier = key_modifier_parameter(mask);
+        let code = keypad.kitty_code;
+        return Some(KeyEncoding::Bytes(if modifier == 1 {
+            format!("\x1b[{code}u").into_bytes()
+        } else {
+            format!("\x1b[{code};{modifier}u").into_bytes()
+        }));
+    }
+    let normal = modifier_encoding(&KeyCombo::from_parts(mask, keypad.main), None);
+    Some(match (normal, keypad.application) {
+        (Some(normal), Some(application)) if mask == 0 => KeyEncoding::Keypad {
+            normal,
+            application: vec![0x1b, b'O', application],
+        },
+        (Some(normal), _) => KeyEncoding::Bytes(normal),
+        (None, _) => KeyEncoding::Unmodeled,
+    })
 }
 
 fn kitty_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
@@ -1156,6 +1260,69 @@ mod tests {
         assert_eq!(
             default_encoding_for_protocol(&key, Some(0), None),
             KeyEncoding::Bytes("é".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn encodes_keypad_keys_as_their_own_keys() {
+        let encode = |key: &str, flags: Option<u32>| {
+            default_encoding_for_protocol(&key.parse().unwrap(), flags, None)
+        };
+        let keypad = |normal: &[u8], application: &[u8]| KeyEncoding::Keypad {
+            normal: normal.to_vec(),
+            application: application.to_vec(),
+        };
+        // Legacy: the main key's bytes, ESC O x in application keypad mode.
+        assert_eq!(encode("kp_enter", None), keypad(b"\r", b"\x1bOM"));
+        assert_eq!(encode("kp_1", None), keypad(b"1", b"\x1bOq"));
+        assert_eq!(encode("kp_add", None), keypad(b"+", b"\x1bOk"));
+        assert_eq!(encode("kp_divide", None), keypad(b"/", b"\x1bOo"));
+        assert_eq!(encode("kp_equal", None), keypad(b"=", b"\x1bOX"));
+        assert_eq!(
+            encode("kp_home", None),
+            KeyEncoding::Bytes(b"\x1b[H".to_vec())
+        );
+        assert_eq!(
+            encode("ctrl+kp_prior", None),
+            KeyEncoding::Bytes(b"\x1b[5;5~".to_vec())
+        );
+        // Kitty disambiguate: keys without text get their own code; text
+        // keys stay text unless modified or under report-all-keys.
+        assert_eq!(
+            encode("kp_enter", Some(1)),
+            KeyEncoding::Bytes(b"\x1b[57414u".to_vec())
+        );
+        assert_eq!(
+            encode("kp_home", Some(1)),
+            KeyEncoding::Bytes(b"\x1b[57423u".to_vec())
+        );
+        assert_eq!(encode("kp_1", Some(1)), KeyEncoding::Bytes(b"1".to_vec()));
+        assert_eq!(
+            encode("kp_1", Some(1 | 8)),
+            KeyEncoding::Bytes(b"\x1b[57400u".to_vec())
+        );
+        assert_eq!(
+            encode("ctrl+kp_enter", Some(1)),
+            KeyEncoding::Bytes(b"\x1b[57414;5u".to_vec())
+        );
+        // Return itself is unchanged.
+        assert_eq!(encode("return", None), KeyEncoding::Bytes(b"\r".to_vec()));
+
+        let (layer, input) = with_default_encoding(
+            LayerResult::pass("Terminal", LayerId::Terminal, "forwarded", Vec::new()),
+            encode("kp_enter", None),
+            "default encoding",
+            true,
+        );
+        assert_eq!(input.unwrap().bytes, b"\r");
+        assert!(
+            layer
+                .details
+                .iter()
+                .any(|detail| detail.contains("application keypad mode")
+                    && detail.contains("ESC O M")),
+            "{:?}",
+            layer.details
         );
     }
 

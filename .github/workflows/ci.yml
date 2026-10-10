@@ -66,6 +66,19 @@ jobs:
       - name: Run installed binary in a clean environment
         run: bash tools/clean_install_smoke.sh "$RUNNER_TEMP/whykey-install/bin/whykey"
 
+  musl:
+    # The static release binaries are built for musl, whose libc types differ
+    # from glibc's (ioctl request, termios size).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-unknown-linux-musl
+      - name: Run tests on the musl target
+        run: cargo test --all-targets --locked --target x86_64-unknown-linux-musl
+
   msrv:
     runs-on: ubuntu-latest
     steps:

@@ -58,7 +58,9 @@ pub struct RunResult {
     pub layer: LayerResult,
 }
 
-pub fn inspect(program: &str, key: &KeyCombo) -> Result<RunResult, String> {
+pub fn inspect(program: &std::ffi::OsStr, key: &KeyCombo) -> Result<RunResult, String> {
+    let program_path = program;
+    let program = program_path.to_string_lossy();
     let request = Request {
         schema_version: SCHEMA_VERSION,
         operation: "inspect",
@@ -74,7 +76,7 @@ pub fn inspect(program: &str, key: &KeyCombo) -> Result<RunResult, String> {
         ));
     }
 
-    let output = command::output_with_input(&mut Command::new(program), &request)
+    let output = command::output_with_input(&mut Command::new(program_path), &request)
         .map_err(|error| format!("extension {program}: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -87,10 +89,10 @@ pub fn inspect(program: &str, key: &KeyCombo) -> Result<RunResult, String> {
     let response: Response = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("extension returned invalid JSON: {error}"))?;
     validate(&response)?;
-    let layer = to_layer(program, response.result);
+    let layer = to_layer(&program, response.result);
     Ok(RunResult {
         schema_version: response.schema_version,
-        extension: program.to_owned(),
+        extension: program.into_owned(),
         capabilities: response.capabilities,
         layer,
     })

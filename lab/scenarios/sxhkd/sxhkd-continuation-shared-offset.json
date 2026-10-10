@@ -1,0 +1,12 @@
+{
+  "id": "sxhkd-continuation-shared-offset",
+  "description": "sxhkd shares one continuation offset between hotkey and command: the continued command cuts the next hotkey line `q` into `a\\xc3q` inside `é`, so q is not bound",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/sxhkd/sxhkdrc": ["aé\\", "b", "  yz\\", "q", "  touch /tmp/fired", "super + t", "  touch /tmp/ready"]},
+  "x11": {"daemons": [{"argv": ["sxhkd", "-c", "/root/.config/sxhkd/sxhkdrc"], "ready_grab": [64, 28]}]},
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "q"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {"args": ["q"], "layer": "sxhkd", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

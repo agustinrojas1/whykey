@@ -44,11 +44,19 @@ pub fn inspect_sequence(inputs: &[TerminalInput], target_pid: Option<u32>) -> La
     let Some(shell) = shell else {
         return unsupported("unknown shell");
     };
-    match shell.name.as_str() {
+    // A line editor reads every key it is given: bound keys run, unbound
+    // ones ring the bell, are dropped or insert their bytes. Nothing is
+    // downstream of it.
+    let result = match shell.name.as_str() {
         "bash" => readline::Readline.inspect_sequence(inputs),
         "zsh" => zle::inspect(inputs, shell.exe.as_deref()),
         "fish" => fish::inspect(inputs, shell.exe.as_deref()),
-        other => unsupported(other),
+        other => return unsupported(other),
+    };
+    if result.outcome == Outcome::Unavailable {
+        result
+    } else {
+        result.as_endpoint()
     }
 }
 

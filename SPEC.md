@@ -84,7 +84,8 @@ always carries it.
 When `DISPLAY` is set and the session is not remote (SSH), inspection asks
 the X server whether another client holds a passive grab on the queried key.
 It resolves the key to a keycode through `GetKeyboardMapping` (a match in
-the shifted column adds Shift; `code:N` is keycode N) and attempts a core
+the shifted column adds Shift, except a keypad keysym there, which is the
+NumLock level and needs no Shift; `code:N` is keycode N) and attempts a core
 `GrabKey` and an XInput2 `XIPassiveGrabDevice` on the root window. Each grab
 is tried with the requested mask alone and with Lock, NumLock, and both,
 with the NumLock bit read from the modifier map. A `BadAccess` (or a failed
@@ -105,6 +106,12 @@ released immediately.
   evidence notes that a grab an application holds on its own window is not
   visible, nor is a client that reads keys some other way. The key passes, and a
   configured binding is reported as not active.
+- Exception: when the claiming adapter knows that the grabbing program
+  replays the key to the focused client (an sxhkd `~` binding gives
+  handled-and-passed), the adapter's outcome and summary are kept. The grab
+  evidence is added with the detail "the grab delivers the key to <layer>
+  first, which passes it on to the focused client", and the tier becomes
+  live query. Only a consuming or undecided claim is forced to Consumed.
 - XWayland: a grab only adds a conditional detail to the Wayland
   compositor's result, because the compositor sees the key first.
 - The probe runs on a helper thread under the diagnostic budget. An X
@@ -152,6 +159,8 @@ command completes only the options its parser accepts. `--pass-through` is
 accepted but not completed, and `replay` and `diff` complete file names.
 
 `whykey doctor` runs read-only prerequisite checks for the controlling TTY, compositor context, terminal adapter, XKB compiler, shell, SSH, multiplexer context, common remappers, and IBus/Fcitx5 session context. When the Hyprland signature is absent, it discovers an instance through `hyprctl instances -j`, preferring the instance whose Wayland socket matches `WAYLAND_DISPLAY` and accepting a sole running instance. It reports the selected dedicated terminal adapter when one is detected. Before querying Fcitx5, the adapter verifies the session D-Bus and the `org.fcitx.Fcitx5` well-known name; it then uses the read-only `org.fcitx.Fcitx.Controller1` methods directly rather than launching `fcitx5-remote`, whose client may abort when the bus is unavailable. A failed preflight is reported as unavailable runtime evidence. The runtime readers are `kglobalaccel-runtime` (the `allComponents` D-Bus call; the daemon is never auto-started), `gnome-gsettings` (the GSettings read used for inspection), and the xdg-desktop-portal GlobalShortcuts probe, which asks `NameHasOwner` first so that introspection never activates the portal. Hyprland, Sway, i3, GNOME, KDE, Xfce, Cinnamon, MATE, Niri, River, Wayfire, labwc, bspwm/sxhkd, Openbox, X11 xbindkeys, and programmable X11 WMs expose separate `applicable` and `ipc` fields; other detected desktops are described through a generic compositor context with their desktop/session/display-server identity. The JSON form includes `schema_version: 1`, matching key reports. It exits `0` when TTY and an applicable compositor context or SSH session are available and either Ghostty is inspectable or a different terminal is detected for the generic terminal fallback; XKB is reported as an optional precision feature.
+
+On Hyprland, `doctor` and `capabilities` check native capture the way `listen` does: after socket2 answers, they send the same no-op `hyprctl eval "return nil"`, which changes no compositor state. If Hyprland rejects it (a hyprlang `.conf` configuration), native capture is reported unavailable with the cause "the Hyprland key hook needs a Lua config (hyprland.lua)"; JSON reports `api-does-not-expose` with the reason in `detail` and in `native_attempts[].reason`.
 
 Human doctor output adds two sections. "Observation taps (what whykey can watch now)" lists, in `listen` chain order, native compositor capture, the probe window (Wayland and/or X11), the X11 grab probe (native X11; "X11 clients only" under XWayland; unavailable when remote or without `DISPLAY`), terminal capture, and evdev. Each tap has its availability, a detail, and, when one exists, the exact step that enables it. "Layer sources (live query, config file, or none)" says, for the remapper, compositor/desktop, X11 key grabs, input method, terminal, multiplexer, shell, and editor layers, whether this session's answer will come from a live query, a configuration file, or nothing.
 
@@ -201,6 +210,30 @@ close, the error suggests it (`ctrl+retrun` → `return`). A combination
 contains exactly one non-modifier key. Configuration adapters parse keys
 leniently, so unusual names in user configuration are still compared.
 
+Keypad keys are distinct from the main keys at every layer: `kp_enter`
+(alias `kp_return`) is not `return`, and `kp_0`–`kp_9`, `kp_home`, `kp_end`,
+`kp_page_up` (alias `kp_prior`), `kp_page_down` (alias `kp_next`), `kp_add`,
+`kp_subtract`, `kp_multiply`, `kp_divide`, `kp_equal`, and `kp_decimal` are
+not the corresponding main keys. Hyprland keycode binds resolve them to the
+keypad keycodes (KP_Enter is XKB 104, Return is 36), and terminal prediction
+encodes them as keypad keys (Kitty codes 57399–57426; in legacy mode the
+main key's bytes, with the application-keypad `ESC O x` alternative noted).
+Remapper rules on keypad keys (keyd `kpenter`, `kp1`) use the keypad's own
+physical codes, and a main key never matches a keypad code. i3 and Sway
+treat NumLock oppositely for keypad digits (`kp_0`–`kp_9`, `kp_decimal`): i3
+resolves the keysym under the binding's own modifiers, so `bindsym
+$mod+Mod2+KP_1` fires with NumLock on and `$mod+KP_1` never fires; Sway
+consumes NumLock, so `Mod4+KP_1` fires and `Mod4+Mod2+KP_1` does not.
+whykey matches each compositor's rule; keypad navigation keysyms (`KP_End`)
+need no `Mod2` on either.
+
+Every argument except a file path must be valid UTF-8. File arguments
+(`replay`, `diff`, `snapshot --output`, and the `extension` program) are
+taken as raw paths; any other non-UTF-8 argument is a usage error
+("argument X is not valid UTF-8", exit status 2). Error messages echo at
+most 64 characters of an input token, and a combination with many `+`
+segments is summarized after the first three.
+
 `whykey inspect <combination-or-sequence>` accepts one or more combinations
 separated by whitespace, for example `whykey inspect ctrl+x ctrl+e`. Each step
 is retained as its own text or JSON report, and all steps share one environment
@@ -213,7 +246,14 @@ sequence first, then the last key alone. tmux switches to the prefix table
 after the prefix key, and to the table named by `switch-client -T`. A binding
 returns the client to root (or to the named table). An unbound key in a
 non-root table is retried in root and otherwise discarded. A bare key is
-looked up only in the active (or root) table. GNU Screen resolves the key after
+looked up only in the active (or root) table. tmux keys come from
+`list-keys`, where the key is the token after `-T TABLE`. They are matched
+case-sensitively (`C` is Shift+c, `^B` is Ctrl+Shift+b, `BTab` is
+Shift+Tab); escaped (`\%`, `\;`) and quoted (`"M-{"`) keys and the `-` key
+are unescaped, and `Escape`, `BSpace`, `Tab`, `Enter`, `PgUp`, `PgDn`, and
+the `KP` names map to whykey keys. A punctuation query drops Shift
+(`shift+percent` is `%`); a Shift+digit query is not mapped to its US
+symbol. The prefix comparison uses the same rules. GNU Screen resolves the key after
 its command escape against `bind`, and a doubled escape is a literal. If an
 earlier step's bytes are unknown, the shell step is reported as unknown.
 `--pid <pid>` changes application-layer discovery to the
@@ -222,7 +262,15 @@ unavailable layer. `--focused` resolves a process through the active Hyprland,
 Sway, or i3 tree API and uses that process for application and shell evidence;
 other desktops report the missing focused-window API. A matching compositor
 manifest can supply conditional focused-PID evidence when no compiled-in focus
-API is available. Sequences are bounded to 64 steps so malformed or
+API is available. When the focused process has no controlling terminal but
+its children use exactly one pty (a terminal emulator), whykey targets that
+pty's foreground process-group leader, so the application and shell layers
+describe the program that reads the key; the source notes "foreground
+process of pid N's terminal". When the emulator serves several ptys, the
+target stays the emulator and the focused terminal is reported as unknown.
+When the target is not on whykey's own terminal, stderr notes that the
+terminal-emulator and TTY rows describe whykey's terminal. An empty
+`TERM_PROGRAM` or `LC_TERMINAL` counts as unset. Sequences are bounded to 64 steps so malformed or
 unbounded command-line input cannot grow the report without limit.
 
 `--instance <id>` explicitly selects a Hyprland instance for the inspection
@@ -260,8 +308,14 @@ the full test suite are checked with that toolchain in CI.
 compositor adapters. Entries contain source, key, action, context, certainty,
 and optional typed `device` and `submap` fields read from the adapter payload,
 never inferred from context strings. `--key`, `--action`, `--source`,
-`--device`, and `--submap` filter case-insensitively with AND logic; missing
-metadata never matches an active filter. `complete` is intentionally false:
+`--device`, and `--submap` filter with AND logic; missing metadata never
+matches an active filter. `--key` text that parses as a key query is compared
+by normalized key, as inspect does: a bare key matches under any modifiers, a
+combination needs exactly its modifiers, and `code:N` also matches a Hyprland
+record listed as its layout symbol. `--key` text that is not a key query
+(for example `shift`), and the other filters, match case-insensitive
+substrings. `conflicts --key` uses the same matcher, and `conflicts` lists
+actions in the order the source reports the binds. `complete` is intentionally false:
 application/plugin bindings, input inhibitors, and firmware transformations
 can remain outside the observable desktop APIs. Adapter errors are listed
 under `unavailable`. A Hyprland bind written with `code:N` is listed as the
@@ -378,7 +432,7 @@ Parsing is case-insensitive. JSON keeps the numeric modifier mask. Text output o
 4. Consider a binding active when it belongs to the active submap or has the universal-submap flag. Keep same-key bindings from inactive submaps in the evidence so mode-dependent shortcuts are visible without treating them as active.
 5. Determine handling and propagation separately. Use Hyprland's `non_consuming`, `auto_consuming`, `release`, and `longPress` flags, the `pass` and `submap` dispatchers, and any dispatcher result visible through the runtime API. A `pass` binding is reported as redirected because its target window is not necessarily the next layer in the inspected chain. `__lua` and plugin dispatchers follow the same rule as every other dispatcher. Hyprland consumes the key unless the bind is `non_consuming`; an `auto_consuming` bind stays uncertain. A Lua callback can forward the key only by returning `pass_event`, which whykey cannot observe, so the evidence says so.
 6. Include active same-key bindings with different modifiers as possible matches unless their `ignore_mods` value is known. Read `ignore_mods` from the runtime JSON field when present. Otherwise, use a Lua hint and then a declarative `.conf` hint for the exact modifier mask and key. A hint for another binding on the same key never applies, and a binding with no hint stays a possible match. For declarative config, follow literal `source`/`include` files and variables. `source` paths expand `*` and `?` per path component like glob(3): a leading dot matches only explicitly, and matches are read in byte-sorted order. Bracket classes `[abc]`, `[a-z]`, `[!x]`, and `[^x]` are matched too (a `]` right after `[` or the negation is literal, an unterminated `[` is literal); POSIX named classes and backslash escapes are not supported, and ranges compare code points. Configuration, `source`, and Lua files are read only when they are regular files of at most 1 MiB. The longest variable name wins; unknown names stay literal, and the bind is skipped. Read bind flags from the keyword suffix (`bindi`, `bindln`; letters `lremnatisodpcgukx`), skip multi-key `s` binds, and apply `unbind = MODS, KEY` in order. In discovered Lua files, scan balanced single- and multi-line literal `o.bind`/`hl.bind` calls in file order, without executing Lua. They supply source and description evidence and a literal `ignore_mods` value, including the helper default of `false`. `hl.unbind("COMBO")` removes earlier hints for that combo, a later bind adds it back, `hl.unbind("all")` clears every hint, and a non-literal unbind changes nothing. Globs and dynamic key or options expressions remain possible matches. Surface `locked`, `dont_inhibit`, and `allow_input_capture` when present, because they qualify inhibitor and capture behavior.
-7. Report every active exact match, including its dispatcher, argument, and description when present. Never execute `__lua` or plugin dispatchers; the evidence states that their runtime action is not executed by whykey.
+7. Report every active exact match that Hyprland reaches, including its dispatcher, argument, and description when present. Binds are walked in order, following Hyprland 0.56.2 `handleKeybinds`: the walk stops at the first certain match whose dispatcher is `submap` and that runs on press (not a release or long-press bind), and a catchall is skipped once an earlier consuming release bind matched. Binds after an uncertain match stay possible. Skipped binds are listed as `not reached: <action> (<scope>); <reason>` and do not affect the outcome. Release and long-press binds do not run on press, and a non-consuming bind does not pass a key another bind consumed. Further matches that fire together with the first are shown in the row as "also fires: …"; release and long-press binds are not among them, and the reported binding is the first certain bind that runs on press when there is one. Never execute `__lua` or plugin dispatchers; the evidence states that their runtime action is not executed by whykey.
 8. Query `hyprctl devices -j` when available and include active keyboard names, main-device status, and keymap in the evidence. Accept both legacy string and structured per-device fields in `hyprctl binds -j`. Kernel keycodes enter as evdev and convert once to the XKB namespace (`+8`); Hyprland socket events and numeric binding fields are treated as already XKB. The native capture hook's keycode is XKB: Hyprland 0.56.2's `LuaEventHandler.cpp` pushes the libinput keycode plus 8. Missing RMLVO or layout data yields explicit uncertainty, never a guessed US layout.
 
 ## Sway and i3 inspection
@@ -392,6 +446,29 @@ KDE asks the running kglobalaccel. The queried key is converted to a Qt key code
 ## sxhkd inspection
 
 sxhkd has no include directive; a configuration file holds only comments, hotkey lines, and indented command lines, and extra files come from its command line. Whykey reads `SXHKD_CONFIG` when it names a file. Otherwise it reads the `-c CONFIG_FILE` and extra configuration arguments of the running sxhkd from `/proc/<pid>/cmdline`, split the way sxhkd's `getopt` string does and resolved against `/proc/<pid>/cwd`. Otherwise it reads the default `sxhkdrc` under whykey's own `XDG_CONFIG_HOME`. Each file is parsed on its own, in sxhkd's load order, so an unfinished hotkey at the end of one file never joins the next file. `include` or `source` lines are never followed.
+
+The parser ports sxhkd 0.6.1's `load_config`, `process_hotkey`, and
+`parse_chain`. A hotkey starts in column 0 and its command on the next
+indented line; `#` starts a comment only in column 0, a trailing `\`
+continues a line, and the latest hotkey pairs with the next command.
+`{a,b}` sequences and `x-y` ranges expand in lockstep with the command (the
+first sequence varies fastest), `_` is an empty element, and `\` escapes.
+Each key token may start with `~` (replay: sxhkd also passes the key to the
+focused client, reported as handled-and-passed) and then `@` (the binding
+runs on release; the press is still withheld). Plain keys without modifiers
+are bindings. `meta` is Mod1, `mode_switch` is Mod5, and an uppercase letter
+means Shift plus the letter. Chord chains (`;` and `:`), pointer buttons,
+and `any` are not bound to one key and are skipped.
+
+Continuations follow sxhkd's buffers exactly: sxhkd keeps one byte offset,
+shared by the hotkey and command buffers, so a continued command moves the
+offset at which the next continued hotkey is written (it may land inside a
+multi-byte character, or past the hotkey's terminating NUL, where the text
+is invisible and nothing binds). Leading and trailing bytes for which C-locale
+`isgraph` is false are trimmed, so non-ASCII characters at a line's edges
+are dropped, as sxhkd does. A hotkey or command that would expand to more
+than 4096 renderings is skipped with a detail; sxhkd renders lazily, whykey
+would materialize every rendering.
 
 ## GNOME inspection
 
@@ -423,16 +500,21 @@ For the named terminal adapters and the generic fallback alike, an `altgr` (Mod5
 2. Inspect the normal bytes produced by the selected terminal adapter, not the Kitty probe bytes used by `listen`. When the terminal has no explicit binding for the key, the dedicated Kitty, Alacritty, Foot, WezTerm, and Konsole adapters use the shared default encoding. Ctrl with a letter, `@ [ \ ] ^ _`, or Space produces the legacy control byte, and Ctrl+Alt adds an ESC prefix. Alt with a letter sends ESC and the lowercase letter; the letter is uppercase only with Shift. Kitty encoding uses the lowercase codepoint (`\e[102;5u` for Ctrl+F).
 3. Report `ISIG` signal characters (`VINTR`, `VQUIT`, `VSUSP`) only while `ISIG` is set, and `IXON` flow-control characters (`VSTOP`, `VSTART`) only while `IXON` is set, each under its own label. For `ctrl+z` with `ISIG` and `VSUSP` set to `^Z`, explain the resulting `SIGTSTP`. When a byte is shared with another key, say so: 0x1b is also Escape, 0x09 Tab, 0x0d Return, 0x00 both Ctrl+@ and Ctrl+Space, and 0x08 Ctrl+H.
 4. The shell is the nearest interactive shell above whykey (or above the `--pid` target) in the process tree. The walk passes only through shell processes, skips shells running a `-c` command or a script, and recognizes login shells started as `-zsh`. `$SHELL` is used only when no shell is found, and the tmux and Screen rows label it as the login shell.
-   - Bash: when `shell-init` supplied a live snapshot (`bind -p` for each keymap, `bind -S`, `bind -X`, and `bind -V`), that snapshot is the only source. Function, macro, and `bind -x` entries are parsed, and `bind -x` entries are labelled `shell command (bind -x)`. Without a snapshot, apply the `bind`, `bind -x`, `bind -m`, `bind -f`, and `set -o vi` commands in `/etc/bash.bashrc` and `~/.bashrc`; they run after INPUTRC and override it. Then check the selected `INPUTRC`, `~/.inputrc`, or `/etc/inputrc`. Follow literal `$include` directives and `set keymap` sections, apply later matching definitions as overrides, and fall back to GNU Readline's emacs defaults only when the active mode is Emacs. Such answers carry the `UnverifiedDefault` reason, because sourced files and plugins may override them, and the report suggests `eval "$(whykey shell-init bash)"`. Prefix keys such as `\C-x` and `\e` are reported as waiting for the next key, with their continuations listed. Static and captured paths must not claim an Emacs default while the active keymap is vi. Bash vi-mode defaults are not modelled.
+   - Bash: when `shell-init` supplied a live snapshot (`bind -p` for each keymap, `bind -S`, `bind -X`, and `bind -V`), that snapshot is the only source. Function, macro, and `bind -x` entries are parsed, and `bind -x` entries are labelled `shell command (bind -x)`. Without a snapshot, apply the `bind`, `bind -x`, `bind -m`, `bind -f`, and `set -o vi` commands in `/etc/bash.bashrc` and `~/.bashrc`; they run after INPUTRC and override it. Then check the selected `INPUTRC`, `~/.inputrc`, or `/etc/inputrc`. Follow literal `$include` directives and `set keymap` sections, apply later matching definitions as overrides, and fall back to the built-in defaults of a pristine bash 5.3.9 with Readline 8.3 (`bind -p` without startup files): 176 emacs entries, or, in vi mode, the 39-entry vi-insert keymap (the detail says "vi-insert keymap assumed"). Such answers carry the `UnverifiedDefault` reason, because sourced files and plugins may override them, and the report suggests `eval "$(whykey shell-init bash)"`. Prefix keys such as `\C-x` and `\e` are reported as waiting for the next key, with their continuations listed. Static and captured paths must not claim an Emacs default while the active keymap is vi. Bash vi-mode defaults are not modelled.
    - Zsh: the `shell-init` wrapper passes `bindkey -lL main; bindkey -L; bindkey -LM vicmd`. Without it, whykey runs the installed `zsh -f -c 'bindkey -lL main; bindkey -LM emacs; bindkey -LM viins; bindkey -LM vicmd'` for its defaults and applies the `bindkey` commands in `/etc/zshenv`, `/etc/zsh/zshenv`, `~/.zshenv`, `/etc/zshrc`, `/etc/zsh/zshrc`, and `~/.zshrc`, in that order. `bindkey` lines are parsed with `-R` ranges, `-a`, `-s`, `-r`, and `-A x main`. `bindkey -v`, `-e`, and `-A`, and bindings without `-M`, apply to the keymap `main` points to at that moment, so `bindkey '^T' w; bindkey -v` leaves `^T` in emacs. Lookup models how ZLE reads keys, so an unbound escape sequence leaves its unmatched tail on the line: unbound Ctrl+Left in emacs mode inserts `;5D`. In vi insert mode, ESC then `f` runs `vi-cmd-mode`. When an earlier Esc has switched to `vicmd` and no `vicmd` bindings were captured, the answer is unknown.
    - Fish: the wrapper passes `bind --all | string collect` and `$fish_bind_mode`. Without it, whykey runs `fish --no-config -c '<preset>; bind --all'` for the preset selected in `fish_variables`, then applies the `bind` commands in `conf.d`, `config.fish`, and `fish_user_key_bindings.fish`. Bindings are parsed with fish quoting and escapes (`\ct`, `\e\[1\;5D`, `\'`), fish 4 key names (`ctrl-x,ctrl-e`, `alt-left`), fish 3 `-k` names, `-M`/`-m`, and `-e`. A user binding beats a `--preset` binding regardless of order. A bind without `-M` belongs to mode `default`, which is vi normal mode when vi bindings are active, not insert mode. Each key press is matched as one unit, and a key that starts no longer binding runs on its own. Kitty-protocol (CSI `u`) and SS3 input are converted to legacy bytes before matching. Mode-specific bindings are selected only when the mode is known.
    - Answers built without a live snapshot are Handled/Indeterminate or Indeterminate/Continues with the `UnverifiedDefault` reason, and the report suggests the matching `shell-init` command. Plugins, sourced files, and conditionals (oh-my-zsh, fzf) are not visible to the static reader.
+   - The shell line editor is an endpoint: it is the last layer that reads the key. A key it does not bind keeps the pass outcome, but the report never says the key continues downstream. The summary states the editor's effect: Readline rings the bell, discards the unmatched prefix, and inserts the trailing printable bytes (unbound Shift+Up inserts `A`); ZLE runs `undefined-key` and leaves the unmatched tail on the line; fish reads the key and drops it. The headline reads "<layer> reads the key last and has no binding for it; nothing downstream receives it", qualified with "applies if earlier layers forward the key" when an earlier layer is uncertain; that caveat is stated once, not repeated in the uncertainty section.
 
 ## Exit status
 
 - `0`: inspection completed, whether or not a binding matched.
 - `1`: a required layer or prerequisite is unavailable. A detected Hyprland IPC failure is represented as an indeterminate compositor result so downstream layers can still be inspected; the report remains conditional rather than claiming that the shortcut is unbound.
-- `2`: invalid CLI input. This includes an unknown key name, more than one non-modifier key, two different JSON schema selections, `--suppress` combined with `--terminal`, `--window`, `--evdev`, `--device`, or `--no-suppress`, and `--window` combined with `--terminal`, `--evdev`, or `--device`.
+- `2`: invalid CLI input. This includes a non-UTF-8 argument other than a file path, an unknown key name, more than one non-modifier key, two different JSON schema selections, `--suppress` combined with `--terminal`, `--window`, `--evdev`, `--device`, or `--no-suppress`, and `--window` combined with `--terminal`, `--evdev`, or `--device`.
+
+`whykey snapshot` uses the inspect rule: it exits `1` only when every layer is unavailable or the diagnostic budget expired, and then explains on stderr that the inspection is incomplete; the snapshot is still written.
+
+`SIGPIPE` stays ignored. When stdout is closed early, every command except `listen` exits quietly with status 141 (the status a shell shows for a process ended by `SIGPIPE`), with nothing on stderr. `listen` keeps its normal error handling so that its terminal, Kitty-flag, and hook guards always restore state. An extension that exits without reading its request is an extension error (status 1), not a crash.
 
 `whykey listen` uses the same statuses; `--suppress` without native suppression exits `1`. `listen` restores the terminal settings before returning, including after normal errors, Escape, and Ctrl+C. A signal guard is installed before raw mode is entered and outlives the capture session, so `SIGTERM` and `SIGHUP` also restore the terminal. On `SIGTSTP`, `listen` restores the terminal, pops the Kitty flags, removes any leased native hook, and then stops; after `SIGCONT` it re-arms capture. `SIGTSTP` arrives from Ctrl+Z only on terminals using the legacy encoding (where the TTY turns `^Z` into the signal), or from an external `kill -TSTP`. With the Kitty keyboard protocol active (Kitty, Ghostty, foot, WezTerm), Ctrl+Z is a CSI `u` key report, so it is captured and explained like any other key. The Hyprland native backend restores the recorded submap before reporting and retries a failed restoration twice; a restoration that still fails stays pending with an explicit error, and a final best-effort attempt on exit warns instead of failing silently. A process killed with `SIGKILL` cannot run restoration code. In that case the hook stays installed until its 5-second lease expires; a suppressing hook then restores the submap.
 
@@ -444,14 +526,14 @@ For the named terminal adapters and the generic fallback alike, an `altgr` (Mod5
 3. Read one event. Escape or Ctrl+C ends capture. CSI and Kitty protocol sequences are buffered for a short bounded interval, and consecutive literal Escape bytes stay separate events.
 4. Decode control bytes, UTF-8 text, Alt-prefixed bytes, common cursor/navigation CSI sequences, and Kitty `u` sequences (including Unicode/function/keypad/media keys, alternate key fields, associated text, and press/repeat/release events) into `KeyCombo`. Preserve unrecognized input as a raw observed key with an explicit unknown-origin warning rather than aborting capture; mark UTF-8 text as potentially produced by Compose/dead-key/layout processing.
 5. Remove or restore the native hook before rendering each report, whether it is pass-through or suppressing, and re-arm it only for the next captured event. Keep terminal capture mode active while rendering repeated reports, inspecting the TTY layer against the saved `termios` snapshot. This prevents capture mode from changing the explanation of `Ctrl+Z` and avoids a restore/reopen gap between reports. Restore the terminal and keyboard protocol on normal exit, cancellation, handled signals (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`), and errors. On `SIGTSTP`, restore before stopping and re-arm after `SIGCONT`. Evdev capture keeps `--events all` across re-arming. A process killed with `SIGKILL` cannot run restoration code.
-6. Run the route in `ROUTE_ORDER`: remapper, compositor, terminal, input method, TTY, session/multiplexer, interactive application, and shell. A consuming layer stops downstream analysis. When a layer is uncertain, later results are retained but marked conditional by the report. What the observation proves depends on the backend. A terminal capture proves that the key passed the remapper, compositor, and terminal. A key delivered to the probe window proves that it passed the remapper, compositor, and any input method. A native capture proves only that the compositor received it. Those layers get the observed tier. A not-delivered probe observation proves only that something above the window consumed the key. Capture mode does not prove forwarding through the TTY, multiplexer, application, or shell. The terminal adapter resolves a separate normal terminal input for the downstream layers. If that input cannot be inferred, the report labels the downstream result as based on captured bytes or unknown.
+6. Run the route in `ROUTE_ORDER`: remapper, compositor, terminal, input method, TTY, session/multiplexer, interactive application, and shell. Inside tmux, GNU Screen, or Zellij the session/multiplexer step runs before the TTY step, because the multiplexer reads the key before the pane's TTY driver does; when the multiplexer step is unavailable, the TTY step is still recorded and then the route stops. A consuming layer stops downstream analysis. When a layer is uncertain, later results are retained but marked conditional by the report. What the observation proves depends on the backend. A terminal capture proves that the key passed the remapper, compositor, and terminal. A key delivered to the probe window proves that it passed the remapper, compositor, and any input method. A native capture proves only that the compositor received it. Those layers get the observed tier. A not-delivered probe observation proves only that something above the window consumed the key. Capture mode does not prove forwarding through the TTY, multiplexer, application, or shell. The terminal adapter resolves a separate normal terminal input for the downstream layers. If that input cannot be inferred, the report labels the downstream result as based on captured bytes or unknown.
 7. When an ancestor is Neovim or Vim, query the current `mode()` and live `maparg()` state through the editor's remote-expression interface when a server address is available; otherwise inspect common mappings in the relevant init/vimrc files. For Emacs, query `key-binding` through `emacsclient` when a server is available, then inspect common `global-set-key` and `define-key` declarations in standard init files. For Helix, Micro, and Kakoune, inspect their conventional static keymap files. Detect common full-screen TUIs such as fzf, less, lazygit, btop, ranger, and yazi as intermediate applications even when their mappings are not parsed. For VS Code/VSCodium, parse literal single-key entries from user `keybindings.json`; for recognized JetBrains IDEs, parse literal `keyboard-shortcut` entries from the selected XML keymap. Chords, `when` clauses, plugins, modes, and runtime overrides remain indeterminate. Plugin precedence and mappings that are not visible through the available RPC endpoint or static parser remain indeterminate.
 
 The listener queries the terminal's existing Kitty keyboard flags before enabling its capture flags. A known previous state controls the normal encoding used by Ghostty. A terminal that does not answer the query uses a legacy fallback with inferred confidence. The evdev backend keeps pressed modifier keys per device, reads the initial pressed-key bitmap and lock LEDs when the kernel permits it, resynchronizes after `SYN_DROPPED`, and removes descriptors reported as disconnected. Evdev observations expose pressed left/right modifier names and locked LED names separately from the compatibility bitmask; XKB-style latched state remains explicitly unavailable. The chain also reports detected tmux, GNU Screen, Zellij, and SSH context. tmux root bindings, the active client key table when available, both configured prefixes, and the `prefix`/`prefix2` tables are read. A bare key is looked up only in the active table, or in root. A prefix-table binding applies only in an `inspect` sequence whose earlier step is the prefix. A bare prefix is reported as `tmux prefix key`, and summaries name the table that matched. Screen reads its system file (`SYSTEM_SCREENRC` or common system paths) followed by the user file (`SCREENRC`, or `~/.screenrc`), preserving the effective override order. It inspects the command prefix and literal `bind`/`bindkey` directives and compares direct sequences with common terminal encodings. In an `inspect` sequence, a key that follows the command prefix is resolved against `bind`. Zellij merges dumped installed defaults with `ZELLIJ_CONFIG_FILE`/`config.kdl`, applying user overrides last; `keybinds clear-defaults=true` disables that merge. If defaults cannot be dumped or the KDL shape is unsupported, an unmatched key remains conditional. `WHYKEY_ZELLIJ_MODE` can provide a known runtime mode; without it, the active Zellij mode remains an explicit assumption. If multiple multiplexer markers are present, each adapter is inspected independently and the nesting order is marked conditional. If capture temporarily bypasses a normal TTY consumer, the report stops at that TTY result instead of claiming that the shell received the key.
 
 ## Architecture
 
-`KeyCombo` and `KeySequence` own parsing and normalization. `TerminalInput` carries the bytes sent to the child PTY, along with their source and confidence. Each concrete layer reports one typed `LayerResult` whose internal state is a `LayerId` identity plus a single `Outcome` control value; the legacy `status`/`propagation` JSON pair is derived during serialization so schema v1 and v2 keep their exact meaning. One static route order (`ROUTE_ORDER`) sequences the remapper, compositor, terminal, IME (before the TTY stage), TTY, multiplexer/session, application, and shell stages. A remapper result that consumes the key stops the route. If a redirect's target parses as a key, the later layers re-run on that key. If it does not parse, their outcomes are made conditional. keyd, kanata, and xremap return redirect and consume results from real configurations; a redirect produces the `Remapped` conclusion, whose headline names the remapper and target ("keyd remaps Caps Lock to Esc.") and whose remaining text comes from the downstream layers' conclusion for the target key. The IME layer is included whenever an IME is detected, right after the terminal. An inactive IME, or one whose engine is a plain keyboard layout (fcitx5 `keyboard-*`, IBus `xkb:*`), passes keys through. The selected terminal adapter (Ghostty, Kitty, Alacritty, Foot, WezTerm, Konsole, or generic fallback) produces `TerminalInput` before TTY, session, application, and shell layers inspect it. JSON reports retain the numeric modifier mask, expose a human-readable `key_display`, and summarize overall confidence as `configured`, `confirmed`, or `conditional`. Captured observations keep associated text separate from the logical key and preserve alternate-key metadata. If propagation is uncertain, later layers are still inspected and the report preserves that uncertainty as a conditional result.
+`KeyCombo` and `KeySequence` own parsing and normalization. `TerminalInput` carries the bytes sent to the child PTY, along with their source and confidence. Each concrete layer reports one typed `LayerResult` whose internal state is a `LayerId` identity plus a single `Outcome` control value; the legacy `status`/`propagation` JSON pair is derived during serialization so schema v1 and v2 keep their exact meaning. One static route order (`ROUTE_ORDER`) sequences the remapper, compositor, terminal, IME (before the TTY stage), TTY, multiplexer/session, application, and shell stages; inside a multiplexer the multiplexer stage runs before the pane TTY stage. A remapper result that consumes the key stops the route. If a redirect's target parses as a key, the later layers re-run on that key. If it does not parse, their outcomes are made conditional. keyd, kanata, and xremap return redirect and consume results from real configurations; a redirect produces the `Remapped` conclusion, whose headline names the remapper and target ("keyd remaps Caps Lock to Esc.") and whose remaining text comes from the downstream layers' conclusion for the target key. The IME layer is included whenever an IME is detected, right after the terminal. An inactive IME, or one whose engine is a plain keyboard layout (fcitx5 `keyboard-*`, IBus `xkb:*`), passes keys through. The selected terminal adapter (Ghostty, Kitty, Alacritty, Foot, WezTerm, Konsole, or generic fallback) produces `TerminalInput` before TTY, session, application, and shell layers inspect it. JSON reports retain the numeric modifier mask, expose a human-readable `key_display`, and summarize overall confidence as `configured`, `confirmed`, or `conditional`. Captured observations keep associated text separate from the logical key and preserve alternate-key metadata. If propagation is uncertain, later layers are still inspected and the report preserves that uncertainty as a conditional result.
 
 Desktop adapters are registered once in `src/registry.rs`. Each entry supplies its detection and IPC probes plus the operations that vary by desktop: key inspection, binding enumeration when supported, focused-window PID lookup when supported, and capability/doctor metadata. Route dispatch, `bindings`, focused-window lookup, `doctor`, `capabilities`, and the support-matrix drift test all read this registry; each command takes one `Environment` snapshot per run, so desktop detection runs once and is shared instead of being repeated per adapter.
 

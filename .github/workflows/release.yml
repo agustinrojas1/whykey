@@ -8,14 +8,23 @@ on:
 permissions:
   contents: write
 
+env:
+  # x86_64 glibc binary linked against glibc 2.28 symbols, plus fully static
+  # musl binaries for x86_64 and aarch64.
+  TARGETS: x86_64-unknown-linux-gnu x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+
 jobs:
-  linux-x86_64:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          target: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - name: Verify Git tag matches Cargo version
         shell: bash
         run: |
@@ -31,21 +40,69 @@ jobs:
           python3 tools/generate_support_matrix.py --check
           python3 tools/generate_dependency_provenance.py --check
           tools/check_package_versions.sh
-      - name: Build release binary
-        run: cargo build --locked --release
+      - name: Install cargo-zigbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install ziglang==0.17.0 cargo-zigbuild==0.23.4
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+      - name: Build release binaries
+        run: |
+          cargo zigbuild --locked --release --target x86_64-unknown-linux-gnu.2.28
+          cargo zigbuild --locked --release --target x86_64-unknown-linux-musl
+          cargo zigbuild --locked --release --target aarch64-unknown-linux-musl
+      - name: Check the glibc floor and static linking
+        shell: bash
+        run: |
+          set -euo pipefail
+          newest=$(objdump -T target/x86_64-unknown-linux-gnu/release/whykey \
+            | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)
+          echo "newest glibc symbol version: $newest"
+          test "$(printf '%s\nGLIBC_2.28\n' "$newest" | sort -V | tail -n 1)" = GLIBC_2.28
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            binary="target/$target/release/whykey"
+            file "$binary"
+            # musl binaries are static-pie: no interpreter, no NEEDED entries.
+            if readelf -lW "$binary" | grep -q 'Requesting program interpreter' \
+              || readelf -dW "$binary" | grep -q '(NEEDED)'; then
+              echo "$binary is dynamically linked" >&2
+              exit 1
+            fi
+          done
+      - name: Run the binaries on old and musl distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          run() {
+            local platform=$1 image=$2 target=$3 output errors
+            errors=$(mktemp)
+            output=$(docker run --rm --platform "$platform" \
+              -v "$PWD/target/$target/release:/b:ro" "$image" /b/whykey --version 2>"$errors")
+            echo "$image ($platform, $target): $output"
+            if [[ -s "$errors" ]]; then
+              cat "$errors" >&2
+              exit 1
+            fi
+            [[ "$output" == "whykey ${GITHUB_REF_NAME#v}" ]]
+          }
+          run linux/amd64 ubuntu:20.04 x86_64-unknown-linux-gnu
+          run linux/amd64 debian:oldstable x86_64-unknown-linux-gnu
+          run linux/amd64 alpine:latest x86_64-unknown-linux-musl
+          run linux/arm64 alpine:latest aarch64-unknown-linux-musl
       - name: Assemble release archives
         shell: bash
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           tools/assemble_source_archive.sh "$GITHUB_WORKSPACE"
-          root="whykey-${version}-x86_64-unknown-linux-gnu"
-          mkdir -p "$root"
-          install -m 0755 target/release/whykey "$root/whykey"
-          install -m 0644 README.md SPEC.md CHANGELOG.md SUPPORT_MATRIX.md ADAPTER_INVENTORY.md DEPENDENCY_PROVENANCE.md support-matrix.json DEFECT_REGISTER.md LICENSE whykey.1 "$root/"
-          cp -a extensions packaging tools "$root/"
-          tar -czf "${root}.tar.gz" "$root"
-          sha256sum "${root}.tar.gz" > "${root}.tar.gz.sha256"
+          for target in $TARGETS; do
+            root="whykey-${version}-${target}"
+            mkdir -p "$root"
+            install -m 0755 "target/${target}/release/whykey" "$root/whykey"
+            install -m 0644 README.md SPEC.md CHANGELOG.md SUPPORT_MATRIX.md ADAPTER_INVENTORY.md DEPENDENCY_PROVENANCE.md support-matrix.json DEFECT_REGISTER.md LICENSE whykey.1 "$root/"
+            cp -a extensions packaging tools "$root/"
+            tar -czf "${root}.tar.gz" "$root"
+            sha256sum "${root}.tar.gz" > "${root}.tar.gz.sha256"
+          done
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:

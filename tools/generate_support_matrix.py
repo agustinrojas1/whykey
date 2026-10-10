@@ -10,6 +10,14 @@ Verification comes from reality, not from fixtures:
               or merely tolerated (PASS~) ones are removed, and scenarios
               that no longer exist are dropped. Scenarios a run skipped
               (`run.py --only`) keep their earlier standing.
+    lab_binding
+              optional: X11 scenarios where whykey's root-window grab probe
+              decided the verdict and this adapter only named the binding
+              that owns the grab. The adapter's own consume, release, and
+              mode logic is not what such a scenario verified, so it counts
+              for `compositor.x11-grab`; the adapter's `lab` lists only the
+              scenarios its own answer decided (whykey run without DISPLAY,
+              or a replay the grab cannot see).
     live      what the maintainer verified by hand on a real desktop.
     lab_scope optional: what the lab scenarios do not reach (e.g. GNOME
               Shell, which cannot start in the lab container), shown next to
@@ -45,9 +53,15 @@ LAYER_ENTRIES: dict[str, tuple[str, ...]] = {
     "AwesomeWM": ("compositor.programmable-x11",),
     "sxhkd": ("compositor.bspwm-sxhkd",),
     "X11 xbindkeys": ("compositor.x11.xbindkeys",),
+    "X11 key grab": ("compositor.x11-grab",),
     "tmux": ("session.multiplexers",),
     "GNU Screen": ("session.multiplexers",),
 }
+# Evidence lines of whykey's X11 grab probe (src/layers/x11_grab.rs
+# `evidence`): a verdict carrying them was decided by the X server's grab
+# state, not by the desktop adapter's own logic.
+GRAB_EVIDENCE = ("observed: the X server refused", "observed: root-window grabs on")
+GRAB_ENTRY = "compositor.x11-grab"
 # Shell answers prove the runtime snapshot only when whykey answered from it.
 SHELL_LAYERS = frozenset({"Bash / Readline", "Zsh / ZLE", "Fish"})
 SHELL_ENTRY = "shell.runtime-snapshot"
@@ -75,7 +89,7 @@ def load_document() -> dict[str, object]:
         if not isinstance(entry, dict):
             raise SystemExit("support-matrix entries must be objects")
         required = {"id", "area", "implemented", "summary", "lab"}
-        if not required <= set(entry) <= required | {"live", "lab_scope"}:
+        if not required <= set(entry) <= required | {"live", "lab_scope", "lab_binding"}:
             raise SystemExit(f"invalid support-matrix entry keys: {entry}")
         identifier = entry["id"]
         if not isinstance(identifier, str) or not identifier or identifier in seen:
@@ -84,11 +98,14 @@ def load_document() -> dict[str, object]:
             raise SystemExit(f"invalid text in support-matrix entry: {identifier}")
         if not isinstance(entry["implemented"], bool):
             raise SystemExit(f"invalid implementation flag: {identifier}")
-        lab = entry["lab"]
-        if not isinstance(lab, list) or not all(isinstance(item, str) for item in lab):
-            raise SystemExit(f"invalid lab scenario list: {identifier}")
-        if lab != sorted(set(lab)):
-            raise SystemExit(f"lab scenarios must be sorted and unique: {identifier}")
+        for field in ("lab", "lab_binding"):
+            scenarios = entry.get(field, [])
+            if not isinstance(scenarios, list) or not all(isinstance(item, str) for item in scenarios):
+                raise SystemExit(f"invalid {field} scenario list: {identifier}")
+            if scenarios != sorted(set(scenarios)):
+                raise SystemExit(f"{field} scenarios must be sorted and unique: {identifier}")
+        if "lab_binding" in entry and not entry["lab_binding"]:
+            raise SystemExit(f"empty lab_binding list: {identifier}")
         if "live" in entry and (not isinstance(entry["live"], str) or not entry["live"]):
             raise SystemExit(f"invalid live verification note: {identifier}")
         if "lab_scope" in entry and (not isinstance(entry["lab_scope"], str) or not entry["lab_scope"]):
@@ -101,14 +118,36 @@ def scenario_ids() -> set[str]:
     return {path.stem for path in SCENARIOS.glob("*/*.json")}
 
 
-def proven_entries(record: dict[str, object]) -> set[str]:
-    """Matrix entries a passing lab record proves."""
+def grab_decided(whykey_layer: dict[str, object]) -> bool:
+    """Whether whykey's X11 grab probe observed this key (see GRAB_EVIDENCE)."""
+    evidence = whykey_layer.get("evidence") or []
+    return any(
+        isinstance(item, dict) and str(item.get("text", "")).startswith(GRAB_EVIDENCE)
+        for item in evidence
+    )
+
+
+def proven_entries(record: dict[str, object]) -> tuple[set[str], set[str]]:
+    """Matrix entries a passing lab record proves: those whose own logic
+    decided the verdict, and adapters that only named the binding of a
+    verdict the X11 grab probe decided."""
     entries: set[str] = set()
+    binding: set[str] = set()
     layer = record.get("layer")
+    whykey_layer = record.get("whykey_layer") or {}
     if isinstance(layer, str):
-        entries.update(LAYER_ENTRIES.get(layer, ()))
-        tier = (record.get("whykey_layer") or {}).get("tier")
-        if layer in SHELL_LAYERS and tier == "live_query":
+        adapter = set(LAYER_ENTRIES.get(layer, ()))
+        if grab_decided(whykey_layer):
+            entries.add(GRAB_ENTRY)
+            if record.get("whykey_verdict") == "handled-passed":
+                # The grab cannot see a replay: the adapter decided that the
+                # key passes on, the grab only showed the binding is active.
+                entries |= adapter
+            elif whykey_layer.get("status") == "Handled":
+                binding |= adapter - {GRAB_ENTRY}
+        else:
+            entries |= adapter
+        if layer in SHELL_LAYERS and whykey_layer.get("tier") == "live_query":
             entries.add(SHELL_ENTRY)
     args = record.get("whykey_args") or []
     if args and args[0] == "listen":
@@ -120,30 +159,37 @@ def proven_entries(record: dict[str, object]) -> set[str]:
             entries.add("capture.probe-window")
         elif str(record.get("environment")) in DEFAULT_CAPTURE:
             entries.add(DEFAULT_CAPTURE[str(record.get("environment"))])
-    return entries
+    return entries, binding
 
 
 def fold_results(entries: list[dict[str, object]], records: list[dict[str, object]]) -> None:
-    """Fold one lab run into the entries' `lab` lists in place."""
+    """Fold one lab run into the entries' `lab` and `lab_binding` lists in place."""
     known = {str(entry["id"]) for entry in entries}
     lab = {str(entry["id"]): set(entry["lab"]) for entry in entries}
+    named = {str(entry["id"]): set(entry.get("lab_binding", [])) for entry in entries}
     for record in records:
         scenario = record.get("scenario")
         if not isinstance(scenario, str):
             raise SystemExit(f"lab result without a scenario id: {record}")
         proof = record.get("pass") is True and record.get("tolerated") is not True
-        proven = proven_entries(record) if proof else set()
-        unknown = proven - known
+        proven, binding = proven_entries(record) if proof else (set(), set())
+        unknown = (proven | binding) - known
         if unknown:
             raise SystemExit(f"lab mapping names unknown matrix entries: {sorted(unknown)}")
-        for identifier, scenarios in lab.items():
-            if identifier in proven:
-                scenarios.add(scenario)
-            else:
-                scenarios.discard(scenario)
+        for identifier in known:
+            for scenarios, credited in ((lab, proven), (named, binding)):
+                if identifier in credited:
+                    scenarios[identifier].add(scenario)
+                else:
+                    scenarios[identifier].discard(scenario)
     existing = scenario_ids()
     for entry in entries:
         entry["lab"] = sorted(lab[str(entry["id"])] & existing)
+        binding = sorted(named[str(entry["id"])] & existing)
+        if binding:
+            entry["lab_binding"] = binding
+        else:
+            entry.pop("lab_binding", None)
 
 
 def load_results(path: Path) -> list[dict[str, object]]:
@@ -167,12 +213,20 @@ def manifest_text(document: dict[str, object]) -> str:
     )
 
 
+def count(items: list[str]) -> str:
+    return f"{len(items)} scenario{'' if len(items) == 1 else 's'}"
+
+
 def verification(entry: dict[str, object]) -> str:
     parts = []
     lab = entry["lab"]
     if lab:
         scope = f"; {entry['lab_scope']}" if "lab_scope" in entry else ""
-        parts.append(f"lab-verified ({len(lab)} scenario{'' if len(lab) == 1 else 's'}{scope})")
+        parts.append(f"lab-verified ({count(lab)}{scope})")
+    if "lab_binding" in entry:
+        parts.append(
+            f"named the grabbing binding in {count(entry['lab_binding'])} where the X11 grab probe decided"
+        )
     if "live" in entry:
         parts.append(f"live-verified on maintainer machine: {entry['live']}")
     return "; ".join(parts) or "unverified"
@@ -193,7 +247,11 @@ def markdown(entries: list[dict[str, object]]) -> str:
         "[Lab evidence](#lab-evidence)). A scenario counts only when a positive",
         "control observed the key (it fired, reached a probe, or reached the layer)",
         "and whykey's verdict matched exactly; a tolerated uncertain answer (PASS~)",
-        "never counts. *live-verified* entries were checked by hand on the",
+        "never counts. In an X11 session whykey's root-window grab probe",
+        "(`compositor.x11-grab`) decides most verdicts; an adapter is credited",
+        "there only for naming the binding that owns the grab, and its own",
+        "consume, release, and mode logic counts only in scenarios it decided.",
+        "*live-verified* entries were checked by hand on the",
         "maintainer's desktop; everything else is *unverified*, however well its",
         "fixtures pass.",
         "",
@@ -207,12 +265,16 @@ def markdown(entries: list[dict[str, object]]) -> str:
             f"| `{entry['id']}` | {entry['area']} | {status} | {verification(entry)} | {summary} |"
         )
     lines += ["", "## Lab evidence", ""]
-    verified = [entry for entry in entries if entry["lab"]]
+    verified = [entry for entry in entries if entry["lab"] or "lab_binding" in entry]
     if not verified:
         lines.append("No lab scenario has been recorded yet.")
     for entry in verified:
-        scenarios = ", ".join(f"`{scenario}`" for scenario in entry["lab"])
-        lines.append(f"- `{entry['id']}`: {scenarios}")
+        if entry["lab"]:
+            scenarios = ", ".join(f"`{scenario}`" for scenario in entry["lab"])
+            lines.append(f"- `{entry['id']}`: {scenarios}")
+        if "lab_binding" in entry:
+            scenarios = ", ".join(f"`{scenario}`" for scenario in entry["lab_binding"])
+            lines.append(f"- `{entry['id']}` (binding only, X11 grab probe decided): {scenarios}")
     lines.append("")
     return "\n".join(lines)
 
@@ -235,7 +297,12 @@ def main() -> int:
     if args.check:
         stale = []
         missing = sorted(
-            {scenario for entry in entries for scenario in entry["lab"]} - scenario_ids()
+            {
+                scenario
+                for entry in entries
+                for scenario in entry["lab"] + entry.get("lab_binding", [])
+            }
+            - scenario_ids()
         )
         if missing:
             stale.append(f"support-matrix.json names missing lab scenarios: {', '.join(missing)}")

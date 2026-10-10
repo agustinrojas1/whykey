@@ -1,0 +1,45 @@
+{
+  "id": "hyprland-submap-break",
+  "description": "a matched submap bind stops the later bind on the same key: escape resets the submap and the exec after it never runs",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, R, submap, lab",
+      "submap = lab",
+      "bind = , escape, submap, reset",
+      "bind = , escape, exec, touch /tmp/after",
+      "submap = reset"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": [
+        "super+r",
+        "escape"
+      ]
+    },
+    {
+      "sh": "hyprctl submap > /tmp/submap-after-escape"
+    },
+    {
+      "vkbd": [
+        "super+r"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test -s /tmp/submap-after-escape && ! grep -q lab /tmp/submap-after-escape && test ! -e /tmp/after"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "escape"
+    ],
+    "layer": "Hyprland",
+    "detail": "not reached: exec touch /tmp/after (lab); an earlier matching submap bind stops the binds after it"
+  }
+}

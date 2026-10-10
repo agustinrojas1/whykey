@@ -2,7 +2,9 @@ use super::terminal::InputReader;
 use super::*;
 
 pub(super) fn get_termios(fd: i32) -> io::Result<libc::termios> {
-    let mut termios = std::mem::MaybeUninit::uninit();
+    // Zeroed, not uninit: musl's termios is larger than the kernel's, and
+    // tcgetattr leaves the tail of c_cc and the speed fields unwritten.
+    let mut termios = std::mem::MaybeUninit::zeroed();
     // SAFETY: `termios` points to writable storage and `fd` comes from an open file.
     let result = unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) };
     if result == -1 {

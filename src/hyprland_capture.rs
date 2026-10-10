@@ -66,6 +66,15 @@ fn lua_eval_unavailable(error: &str) -> String {
     }
 }
 
+/// Whether this Hyprland accepts `hyprctl eval`, which the key hook needs:
+/// a no-op `return nil` that changes no compositor state.
+pub(crate) fn lua_hook_supported() -> Result<(), String> {
+    Hyprctl::Real
+        .eval("return nil")
+        .map(drop)
+        .map_err(|error| lua_eval_unavailable(&error.to_string()))
+}
+
 pub fn generate_token() -> String {
     format!(
         "wk_{}_{}",
@@ -469,7 +478,7 @@ pub enum CaptureState {
 }
 
 /// Narrow Hyprland IPC handle: the only way capture code reaches `hyprctl`.
-/// Unit tests inject [`FakeHyprctl`]; production uses [`Hyprctl::Real`].
+/// Unit tests inject `FakeHyprctl`; production uses [`Hyprctl::Real`].
 #[derive(Debug, Clone)]
 pub(crate) enum Hyprctl {
     Real,
@@ -804,9 +813,7 @@ impl HyprlandCaptureSession {
         // rejects every `hyprctl eval`, so check with a no-op before claiming
         // native capture; listen then falls back to the next backend instead
         // of failing to arm.
-        Hyprctl::Real
-            .eval("return nil")
-            .map_err(|error| lua_eval_unavailable(&error.to_string()))?;
+        lua_hook_supported()?;
 
         let saved_submap =
             query_active_submap().ok_or("could not determine the active Hyprland submap safely")?;

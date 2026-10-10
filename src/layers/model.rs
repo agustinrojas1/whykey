@@ -419,6 +419,13 @@ pub struct LayerResult {
     /// Where this answer came from; `None` when nothing answered for the
     /// layer (not running, no data read).
     pub tier: Option<EvidenceTier>,
+    /// The layer is the key's last consumer (a shell's line editor): even
+    /// an unbound key is read and dropped or inserted there, so nothing
+    /// downstream receives it.
+    pub endpoint: bool,
+    /// Other matching bindings that fire together with `binding` (Hyprland
+    /// runs every matching non-submap bind), in execution order.
+    pub also_fires: Vec<BindingEvidence>,
 }
 
 impl Serialize for LayerResult {
@@ -461,6 +468,8 @@ impl LayerResult {
             binding: None,
             dead_key: None,
             tier: None,
+            endpoint: false,
+            also_fires: Vec::new(),
         }
     }
 
@@ -476,9 +485,27 @@ impl LayerResult {
         self
     }
 
+    /// Mark this layer as the key's last consumer.
+    pub fn as_endpoint(mut self) -> Self {
+        self.endpoint = true;
+        self
+    }
+
+    /// True when nothing downstream of this layer receives the key.
+    pub fn is_endpoint(&self) -> bool {
+        self.endpoint
+    }
+
     /// Attach typed binding evidence to the result.
     pub fn with_binding(mut self, binding: BindingEvidence) -> Self {
         self.binding = Some(binding);
+        self
+    }
+
+    /// Attach the other matching bindings that fire together with
+    /// [`Self::binding`], in the order the program runs them.
+    pub fn with_also_fires(mut self, also_fires: Vec<BindingEvidence>) -> Self {
+        self.also_fires = also_fires;
         self
     }
 

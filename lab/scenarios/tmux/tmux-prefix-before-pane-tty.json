@@ -1,0 +1,63 @@
+{
+  "id": "tmux-prefix-before-pane-tty",
+  "description": "prefix then C-c runs tmux's prefix-table bind; the pane's TTY driver (VINTR) never sees the 0x03, so tmux, not the TTY, is the consuming layer",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": [
+      "set -g prefix C-Space",
+      "set -g prefix2 C-b",
+      "set -g status off",
+      "set -sg escape-time 10",
+      "bind C-c run-shell 'touch /tmp/fired'"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "trap 'touch /tmp/reached-shell' INT"
+    ]
+  },
+  "pty": {
+    "command": [
+      "tmux",
+      "-f",
+      "/root/.tmux.conf",
+      "new-session",
+      "-s",
+      "lab",
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x00"
+    },
+    {
+      "type": "\\x03"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "inspect",
+      "ctrl+space",
+      "ctrl+c"
+    ],
+    "layer": "tmux",
+    "run": "pty",
+    "detail": "touch /tmp/fired"
+  }
+}

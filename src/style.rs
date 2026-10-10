@@ -289,19 +289,99 @@ fn human_key_name(value: &str) -> String {
         "HOME" => "Home".into(),
         "END" => "End".into(),
         other if other.chars().count() == 1 => other.to_ascii_uppercase(),
+        other if other.starts_with("SWITCH:") => {
+            // Hyprland lid/tablet switches: `switch:[on:|off:]<device name>`.
+            // The device name's case is lost in storage; title-case its words.
+            let mut parts: Vec<&str> = other.splitn(3, ':').collect();
+            let name = parts.pop().unwrap_or_default();
+            let name = name
+                .split(' ')
+                .map(title_case)
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{}:{name}", parts.join(":").to_ascii_lowercase())
+        }
+        other if other.starts_with("CODE:") => other.to_ascii_lowercase(),
+        other if other.starts_with("XF86") => xf86_name(&other[4..]),
         other => other
             .split('_')
-            .map(|part| {
-                let mut chars = part.chars();
-                chars
-                    .next()
-                    .map_or_else(String::new, |first| first.to_uppercase().collect())
-                    + chars.as_str().to_ascii_lowercase().as_str()
-            })
+            .map(title_case)
             .collect::<Vec<_>>()
             .join(" "),
     }
 }
+
+fn title_case(word: &str) -> String {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .map_or_else(String::new, |first| first.to_uppercase().collect())
+        + chars.as_str().to_ascii_lowercase().as_str()
+}
+
+/// Key names are stored upper-cased, which loses the camel case of XF86
+/// keysym names (`XF86AUDIOMUTE`). Restore the libxkbcommon spelling
+/// (`XF86AudioMute`); an unlisted name keeps `XF86` and the stored letters.
+fn xf86_name(suffix: &str) -> String {
+    XF86_NAMES
+        .split_ascii_whitespace()
+        .find(|name| name.eq_ignore_ascii_case(suffix))
+        .map_or_else(|| format!("XF86{suffix}"), |name| format!("XF86{name}"))
+}
+
+/// Every `XKB_KEY_XF86*` name in libxkbcommon's `xkbcommon-keysyms.h`, without
+/// the `XF86` prefix, deduplicated case-insensitively.
+const XF86_NAMES: &str = "\
+    10ChannelsDown 10ChannelsUp 3DMode Accessibility ActionOnSelection AddFavorite Addressbook \
+    ALSToggle ApplicationLeft ApplicationRight AppSelect AspectRatio Assistant AttendantOff \
+    AttendantOn AttendantToggle Audio AudioBassBoost AudioChannelMode AudioCycleTrack \
+    AudioDesc AudioForward AudioLowerVolume AudioMedia AudioMicMute AudioMute AudioNext \
+    AudioPause AudioPlay AudioPreset AudioPrev AudioRaiseVolume AudioRandomPlay AudioRecord \
+    AudioRepeat AudioRewind AudioStop AutopilotEngageToggle Away Back BackForward Battery Blue \
+    Bluetooth Book Break BrightnessAdjust BrightnessAuto BrightnessMax BrightnessMin \
+    Buttonconfig Calculater Calculator Calendar CamelCaseKernelName CameraAccessDisable \
+    CameraAccessEnable CameraAccessToggle CameraDown CameraFocus CameraLeft CameraRight \
+    CameraUp CameraZoomIn CameraZoomOut CD ChannelDown ChannelUp Clear ClearGrab ClearvuSonar \
+    Close Community ContextMenu ContextualInsert ContextualQuery ContrastAdjust ControlPanel \
+    Copy Cut CycleAngle Data Database DeleteLine DeleteToEndOfLine DeleteToEndOfScreen Dictate \
+    Display DisplayOff DisplayToggle Documents DoNotDisturb DOS DualRangeRadar DVD Editor \
+    Eject ElectronicPrivacyScreenOff ElectronicPrivacyScreenOn EmojiPicker Excel Exit Explorer \
+    FastReverse Favorites Finance FishingChart Fn FnRightShift Fn_1 Fn_2 Fn_B Fn_D Fn_E Fn_Esc \
+    Fn_F Fn_F1 Fn_F10 Fn_F11 Fn_F12 Fn_F2 Fn_F3 Fn_F4 Fn_F5 Fn_F6 Fn_F7 Fn_F8 Fn_F9 Fn_S Foo \
+    Forward FrameBack FrameForward FullScreen Game Go GoTo GraphicsEditor Green HangupPhone \
+    Hibernate History HomePage HotLinks Images Info InsertLine iTouch Journal \
+    KbdBrightnessDown KbdBrightnessUp KbdInputAssistAccept KbdInputAssistCancel \
+    KbdInputAssistNext KbdInputAssistNextgroup KbdInputAssistPrev KbdInputAssistPrevgroup \
+    KbdLcdMenu1 KbdLcdMenu2 KbdLcdMenu3 KbdLcdMenu4 KbdLcdMenu5 KbdLightOnOff Keyboard Launch0 \
+    Launch1 Launch2 Launch3 Launch4 Launch5 Launch6 Launch7 Launch8 Launch9 LaunchA LaunchB \
+    LaunchC LaunchD LaunchE LaunchF LeftDown LeftUp LightBulb LightsToggle LinkPhone \
+    LogGrabInfo LogOff LogWindowTree Macro1 Macro10 Macro11 Macro12 Macro13 Macro14 Macro15 \
+    Macro16 Macro17 Macro18 Macro19 Macro2 Macro20 Macro21 Macro22 Macro23 Macro24 Macro25 \
+    Macro26 Macro27 Macro28 Macro29 Macro3 Macro30 Macro4 Macro5 Macro6 Macro7 Macro8 Macro9 \
+    MacroPreset1 MacroPreset2 MacroPreset3 MacroPresetCycle MacroRecordStart MacroRecordStop \
+    Mail MailForward Market MarkWaypoint MediaLanguageMenu MediaPlayer MediaPlayPause \
+    MediaPlaySlow MediaRepeat MediaSelectAuxiliary MediaSelectCable MediaSelectCD \
+    MediaSelectDVD MediaSelectHome MediaSelectPC MediaSelectProgramGuide MediaSelectRadio \
+    MediaSelectSatellite MediaSelectTape MediaSelectTeletext MediaSelectTuner MediaSelectTV \
+    MediaSelectVCR MediaSelectVCRPlus MediaTitleMenu MediaTopMenu Meeting Memo MenuKB MenuPB \
+    Messenger ModeLock MonBrightnessAuto MonBrightnessCycle MonBrightnessDown MonBrightnessUp \
+    Music MyComputer MySites NavChart NavInfo New News NextElement NextFavorite Next_VMode \
+    NotificationCenter NumberEntryMode Numeric0 Numeric1 Numeric11 Numeric12 Numeric2 Numeric3 \
+    Numeric4 Numeric5 Numeric6 Numeric7 Numeric8 Numeric9 NumericA NumericB NumericC NumericD \
+    NumericPound NumericStar OfficeHome OK OnScreenKeyboard Open OpenURL Option Paste \
+    PauseRecord PerformanceMode Phone PickupPhone Pictures PowerDown PowerOff Presentation \
+    PreviousElement Prev_VMode PrivacyScreenToggle Q RadarOverlay Red Refresh \
+    RefreshRateToggle Reload Reply RFKill RightDown RightUp RockerDown RockerEnter RockerUp \
+    RootMenu RotateWindows RotationKB RotationLockToggle RotationPB Save ScreenSaver \
+    ScrollClick ScrollDown ScrollUp Search Select SelectiveScreenshot Send Shop SidevuSonar \
+    SingleRangeRadar Sleep SlowReverse Sos Spell SpellCheck SplitScreen Sport Standby Start \
+    Stop StopRecord Subtitle Support Suspend Switch_VT_1 Switch_VT_10 Switch_VT_11 \
+    Switch_VT_12 Switch_VT_2 Switch_VT_3 Switch_VT_4 Switch_VT_5 Switch_VT_6 Switch_VT_7 \
+    Switch_VT_8 Switch_VT_9 Taskmanager TaskPane Terminal Time ToDoList Tools TopMenu \
+    TouchpadOff TouchpadOn TouchpadToggle TraditionalSonar Travel Ungrab Unmute User1KB \
+    User2KB UserPB UWB VendorHome VendorLogo Video VideoPhone View VOD VoiceCommand Voicemail \
+    WakeUp WebCam WheelButton WLAN Word WPSButton WWAN WWW Xfer Yellow ZoomIn ZoomOut \
+    ZoomReset";
 
 #[cfg(test)]
 mod tests {
@@ -324,6 +404,21 @@ mod tests {
             "Alt+Super+<key not reported>"
         );
         assert_eq!(human_key_text("CTRL+<"), "Ctrl+<");
+    }
+
+    #[test]
+    fn keeps_xf86_camel_case_and_lowercase_keycodes() {
+        assert_eq!(human_key_text("XF86AUDIOMUTE"), "XF86AudioMute");
+        assert_eq!(
+            human_key_text("SUPER+XF86TOUCHPADOFF"),
+            "Super+XF86TouchpadOff"
+        );
+        assert_eq!(
+            human_key_text("SHIFT+SUPER+CODE:201"),
+            "Shift+Super+code:201"
+        );
+        let lid = crate::key::KeyCombo::from_parts(0, "SWITCH:OFF:LID SWITCH");
+        assert_eq!(human_key(&lid), "switch:off:Lid Switch");
     }
 
     #[test]

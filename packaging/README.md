@@ -2,7 +2,13 @@
 
 The release includes a source archive with the exact Cargo dependencies needed
 for an offline build. It is the input for the Arch, Debian, and RPM recipes.
-Verify its accompanying `.sha256` file before building a package.
+The archive holds only files tracked by Git, plus `vendor/` and the
+`.cargo/config.toml` that points Cargo at it. Verify its accompanying `.sha256`
+file before building a package.
+
+Every recipe runs the test suite during the build. The suite does not depend
+on the build host's process tree, so it passes in containers and in the Nix
+sandbox. It needs `python3` to run the extension tests.
 
 ## Arch Linux
 
@@ -23,19 +29,28 @@ Fedora repository, and no COPR project has been published yet.
 
 For a local RPM build, place the source archive in the RPM source directory and
 run `rpmbuild -ba packaging/whykey.spec`. The spec records bundled Rust crates
-for vulnerability tracking.
+for vulnerability tracking. It drops the automatic `/usr/bin/python3`
+requirement that the extension shebangs would add, so `python3` stays a
+`Recommends`.
 
 ## Debian and Ubuntu
 
 Extract the source release, then run `dpkg-buildpackage -us -uc -b`. The
 native Debian package definition is in the source root, as Debian expects. It
-needs Cargo, Rust 1.85 or newer, and debhelper 13. The release source already
-has the vendor directory needed for an offline build.
+needs Cargo, Rust 1.85 or newer, debhelper 13, and `python3` for the tests
+(`python3 <!nocheck>`; skip it and the tests with the `nocheck` build profile).
+`apt-get build-dep ./` installs exactly these. The release source already has
+the vendor directory needed for an offline build. The upstream `CHANGELOG.md`
+is installed as `/usr/share/doc/whykey/CHANGELOG.md.gz`, next to the Debian
+`changelog.gz`.
 
 ## Nix and NixOS
 
-From a checkout, run `nix-build packaging/whykey.nix`. Nix fetches the exact
-crates from `Cargo.lock` through its fixed-output dependency builder.
+From a checkout, run `nix-build packaging` (it uses `packaging/default.nix`
+with `<nixpkgs>`), or call the recipe from your own Nix expression with
+`callPackage ./packaging/whykey.nix { }`. Nix fetches the exact crates from
+`Cargo.lock` through its fixed-output dependency builder. The build copies the
+checkout without `target/` and `result`.
 
 None of these recipes install a service, udev rule, input-group membership, or
 desktop autostart entry. Physical capture remains an explicit read-only action.
@@ -55,5 +70,6 @@ compiled on Linux.
 The `lab/` directory is excluded from the crate and is not needed to build.
 
 The PKGBUILD lists `x86_64` and `aarch64` because it compiles the vendored
-source archive. Prebuilt release binaries are only published for
-`x86_64-unknown-linux-gnu`.
+source archive. Prebuilt release binaries are published for
+`x86_64-unknown-linux-gnu` (glibc 2.28 or newer), and as fully static binaries
+for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.

@@ -62,7 +62,7 @@ pub(crate) fn inspect_json_with_keycode(
         .map(|(binding, _)| *binding)
         .collect();
 
-    let matches: Vec<_> = keyed_bindings
+    let candidates: Vec<_> = keyed_bindings
         .iter()
         .filter(|(binding, _)| binding_is_active(binding, active_submap))
         .filter_map(|(binding, binding_key)| {
@@ -101,6 +101,7 @@ pub(crate) fn inspect_json_with_keycode(
             })
         })
         .collect();
+    let (matches, unreached) = reachable_matches(candidates);
 
     if matches.is_empty() {
         if skipped_bindings > 0 {
@@ -201,6 +202,14 @@ pub(crate) fn inspect_json_with_keycode(
             inactive_bindings.len()
         ));
         verbose_details.extend(inactive_submap_details(&inactive_bindings));
+    }
+    for (binding, reason) in &unreached {
+        details.push(format!(
+            "not reached: {} ({}); {}",
+            binding_action(binding),
+            binding_scope(binding, active_submap),
+            reason.explain()
+        ));
     }
     if !has_exact_match {
         details.push(format!("no exact binding for {key}"));
@@ -414,33 +423,116 @@ pub(crate) fn inspect_json_with_keycode(
         summary.to_owned()
     };
 
+    // Every other certain match that runs on press fires on the same key
+    // press, in bind order; release and long-press binds do not.
+    let primary = primary_match(&matches).map(|matched| matched.binding);
+    let also_fires = matches
+        .iter()
+        .filter(|matched| {
+            is_certain(matched)
+                && runs_on_press(matched.binding)
+                && !primary.is_some_and(|primary| std::ptr::eq(primary, matched.binding))
+        })
+        .map(|matched| binding_evidence(matched.binding, lua_hints, has_universal_match))
+        .collect();
+
     Ok({
         let mut result =
             LayerResult::new("Hyprland", LayerId::Compositor, outcome, summary, details)
-                .with_verbose_details(verbose_details);
+                .with_verbose_details(verbose_details)
+                .with_also_fires(also_fires);
         result.binding = binding;
         result
     })
 }
 
-/// The match the conclusion describes: an exact binding when one exists,
-/// otherwise the first candidate whose key is known. Evidence never invents
-/// a stronger match, so an unresolved-key binding is never named alone.
+/// Why a matching bind does not run for this key press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unreached {
+    /// An earlier matching `submap` bind ended the walk.
+    AfterSubmap,
+    /// A catchall after a bind that already handled the key.
+    CatchAllAfterFound,
+}
+
+impl Unreached {
+    fn explain(self) -> &'static str {
+        match self {
+            Self::AfterSubmap => "an earlier matching submap bind stops the binds after it",
+            Self::CatchAllAfterFound => {
+                "a catchall bind is skipped once an earlier bind has handled the key"
+            }
+        }
+    }
+}
+
+/// Hyprland 0.56.2 `handleKeybinds` walks the binds in order and breaks at
+/// the first matching `submap` bind, so no bind after it runs. A catchall
+/// bind is skipped once an earlier bind marked the key handled during that
+/// walk (a consuming release bind on press). Only certain matches decide:
+/// after an uncertain one the later binds remain possible.
+fn reachable_matches(
+    candidates: Vec<BindingMatch<'_>>,
+) -> (Vec<BindingMatch<'_>>, Vec<(&Binding, Unreached)>) {
+    let mut reachable = Vec::with_capacity(candidates.len());
+    let mut unreached = Vec::new();
+    let mut stopped = false;
+    let mut found = false;
+    for matched in candidates {
+        let binding = matched.binding;
+        if stopped {
+            unreached.push((binding, Unreached::AfterSubmap));
+            continue;
+        }
+        if found && binding.catch_all {
+            unreached.push((binding, Unreached::CatchAllAfterFound));
+            continue;
+        }
+        if matches!(
+            matched.certainty,
+            MatchCertainty::Exact | MatchCertainty::ModifierInsensitive
+        ) {
+            // A release or long-press bind is not run on press, so it
+            // neither breaks the walk nor (unless consuming) marks the key.
+            if binding.dispatcher == "submap" && runs_on_press(binding) {
+                stopped = true;
+            }
+            if binding.release
+                && !binding.non_consuming
+                && !binding.auto_consuming
+                && !dispatcher_is_special(binding)
+            {
+                found = true;
+            }
+        }
+        reachable.push(matched);
+    }
+    (reachable, unreached)
+}
+
+/// The match the conclusion describes: the first certain bind that runs on
+/// press, then any certain bind (a release or long-press bind is still the
+/// key's binding when nothing runs on press), otherwise the first candidate
+/// whose key is known. Evidence never invents a stronger match, so an
+/// unresolved-key binding is never named alone.
 fn primary_match<'a>(matches: &'a [BindingMatch<'a>]) -> Option<BindingMatch<'a>> {
     matches
         .iter()
-        .find(|matched| {
-            matches!(
-                matched.certainty,
-                MatchCertainty::Exact | MatchCertainty::ModifierInsensitive
-            )
-        })
+        .find(|matched| is_certain(matched) && runs_on_press(matched.binding))
+        .or_else(|| matches.iter().find(|matched| is_certain(matched)))
         .or_else(|| {
             matches
                 .iter()
                 .find(|matched| matched.certainty != MatchCertainty::PossibleUnresolvedKey)
         })
         .copied()
+}
+
+fn is_certain(matched: &BindingMatch<'_>) -> bool {
+    matches!(
+        matched.certainty,
+        MatchCertainty::Exact | MatchCertainty::ModifierInsensitive
+    )
 }
 
 /// Typed binding evidence for the renderer and schema v2. The human-readable
@@ -684,16 +776,25 @@ fn binding_propagation(matches: &[BindingMatch<'_>]) -> Propagation {
                 continue;
             }
 
-            for outcome in dispatcher_outcomes(matched.binding) {
-                let found = if matched.binding.release
-                    && !matched.binding.non_consuming
-                    && !matched.binding.auto_consuming
-                    && !dispatcher_is_special(matched.binding)
-                {
-                    true
-                } else if matched.binding.long_press || matched.binding.non_consuming {
+            let binding = matched.binding;
+            // Hyprland does not run release (other than special dispatchers)
+            // and long-press binds on press: the last dispatcher result
+            // stays, and only a consuming release bind marks the key handled.
+            if !runs_on_press(binding) {
+                let next_state = FlowState {
+                    found: state.found
+                        || (binding.release && !binding.non_consuming && !binding.auto_consuming),
+                    ..state
+                };
+                if !next.contains(&next_state) {
+                    next.push(next_state);
+                }
+                continue;
+            }
+            for outcome in dispatcher_outcomes(binding) {
+                let found = if binding.non_consuming {
                     state.found
-                } else if matched.binding.auto_consuming {
+                } else if binding.auto_consuming {
                     state.found || outcome.success
                 } else {
                     true
@@ -702,7 +803,7 @@ fn binding_propagation(matches: &[BindingMatch<'_>]) -> Propagation {
                     found,
                     dispatcher_passes: outcome.passes,
                     dispatcher_redirects: outcome.redirects,
-                    processing: matched.binding.dispatcher != "submap",
+                    processing: binding.dispatcher != "submap",
                 };
                 if !next.contains(&next_state) {
                     next.push(next_state);
@@ -745,48 +846,18 @@ fn binding_propagation(matches: &[BindingMatch<'_>]) -> Propagation {
     }
 }
 
+/// Whether Hyprland runs this bind's dispatcher on key press.
+fn runs_on_press(binding: &Binding) -> bool {
+    !binding.long_press && (!binding.release || dispatcher_is_special(binding))
+}
+
+/// Results of a bind's dispatcher run on press.
 fn dispatcher_outcomes(binding: &Binding) -> Vec<DispatcherOutcome> {
     if binding.dispatcher == "pass" {
         return vec![DispatcherOutcome {
             success: true,
             passes: true,
             redirects: true,
-        }];
-    }
-
-    if binding.release
-        && !binding.non_consuming
-        && !binding.auto_consuming
-        && !dispatcher_is_special(binding)
-    {
-        return vec![DispatcherOutcome {
-            success: false,
-            passes: false,
-            redirects: false,
-        }];
-    }
-
-    if binding.release && binding.auto_consuming {
-        return vec![DispatcherOutcome {
-            success: false,
-            passes: true,
-            redirects: false,
-        }];
-    }
-
-    if binding.long_press {
-        return vec![DispatcherOutcome {
-            success: true,
-            passes: true,
-            redirects: false,
-        }];
-    }
-
-    if binding.non_consuming {
-        return vec![DispatcherOutcome {
-            success: true,
-            passes: true,
-            redirects: false,
         }];
     }
 
@@ -805,9 +876,10 @@ fn dispatcher_outcomes(binding: &Binding) -> Vec<DispatcherOutcome> {
         ];
     }
 
-    // Opaque Lua/plugin dispatchers included: Hyprland suppresses the key for
-    // every consuming bind; only a callback returning `pass_event` (never
-    // executed by whykey) would forward it.
+    // Opaque Lua/plugin dispatchers included: no dispatcher whykey models
+    // asks to pass the key (only a Lua callback returning `pass_event`,
+    // never executed by whykey, would). A consuming bind marks the key
+    // handled; a non-consuming one leaves that to the other binds.
     vec![DispatcherOutcome {
         success: true,
         passes: false,
@@ -1124,6 +1196,27 @@ mod tests {
     }
 
     #[test]
+    fn a_non_consuming_bind_does_not_release_a_key_another_bind_consumed() {
+        // handleKeybinds: `found` from the consuming bind stays set and the
+        // exec dispatcher does not ask to pass, so the key is suppressed.
+        let binds = r#"[
+            {"modmask": 64, "key": "t", "dispatcher": "exec", "arg": "consuming"},
+            {"modmask": 64, "key": "t", "dispatcher": "exec", "arg": "watching",
+             "non_consuming": true}
+        ]"#;
+        assert_eq!(
+            inspect("super+t", binds, &[], &[]).outcome,
+            Outcome::Consumed
+        );
+        let only_watching = r#"[{"modmask": 64, "key": "t", "dispatcher": "exec",
+            "arg": "watching", "non_consuming": true}]"#;
+        assert_eq!(
+            inspect("super+t", only_watching, &[], &[]).outcome,
+            Outcome::HandledAndPassed
+        );
+    }
+
+    #[test]
     fn keysym_named_binding_keys_match_normalized_queries() {
         let bindings = r#"[
             {"modmask": 64, "key": "comma", "dispatcher": "__lua", "arg": "1",
@@ -1150,6 +1243,165 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    #[test]
+    fn a_matched_submap_bind_stops_the_binds_after_it() {
+        let binds = r#"[
+            {"modmask": 0, "key": "escape", "dispatcher": "submap", "arg": "reset",
+             "submap": "resize"},
+            {"modmask": 0, "key": "escape", "dispatcher": "exec", "arg": "touch /tmp/after",
+             "submap": "resize"},
+            {"modmask": 0, "key": "", "catch_all": true, "dispatcher": "exec",
+             "arg": "touch /tmp/catchall", "submap": "resize"}
+        ]"#;
+        let key: KeyCombo = "escape".parse().unwrap();
+        let result = inspect_json(&key, binds, "resize").unwrap();
+        assert_eq!(result.outcome, Outcome::Consumed);
+        let fired: Vec<_> = result
+            .details
+            .iter()
+            .filter(|detail| detail.starts_with("binding:"))
+            .collect();
+        assert_eq!(fired, vec!["binding: submap reset (resize)"]);
+        for skipped in ["exec touch /tmp/after", "exec touch /tmp/catchall"] {
+            assert!(
+                result.details.iter().any(|detail| detail
+                    == &format!(
+                        "not reached: {skipped} (resize); an earlier matching submap bind stops the binds after it"
+                    )),
+                "{:?}",
+                result.details
+            );
+        }
+        assert!(result.also_fires.is_empty());
+
+        // A submap bind after another bind runs after it: both fire.
+        let binds = r#"[
+            {"modmask": 0, "key": "escape", "dispatcher": "exec", "arg": "touch /tmp/before",
+             "submap": "resize"},
+            {"modmask": 0, "key": "escape", "dispatcher": "submap", "arg": "reset",
+             "submap": "resize"}
+        ]"#;
+        let result = inspect_json(&key, binds, "resize").unwrap();
+        assert!(
+            !result
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("not reached"))
+        );
+        assert_eq!(
+            result.binding.and_then(|binding| binding.action),
+            Some("exec touch /tmp/before".into())
+        );
+        assert_eq!(
+            result
+                .also_fires
+                .iter()
+                .filter_map(|binding| binding.action.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["submap reset"]
+        );
+    }
+
+    #[test]
+    fn a_release_submap_bind_does_not_stop_binds_on_press() {
+        let binds = r#"[
+            {"modmask": 0, "key": "escape", "dispatcher": "submap", "arg": "reset",
+             "release": true, "submap": "resize"},
+            {"modmask": 0, "key": "escape", "dispatcher": "exec", "arg": "touch /tmp/after",
+             "non_consuming": true, "submap": "resize"}
+        ]"#;
+        let key: KeyCombo = "escape".parse().unwrap();
+        let result = inspect_json(&key, binds, "resize").unwrap();
+        assert!(
+            !result
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("not reached"))
+        );
+        // The consuming release bind still suppresses the press.
+        assert_eq!(result.outcome, Outcome::Consumed);
+    }
+
+    #[test]
+    fn a_catchall_is_skipped_after_a_consuming_release_bind_but_fires_after_exec() {
+        let key: KeyCombo = "t".parse().unwrap();
+        let release_first = r#"[
+            {"modmask": 0, "key": "t", "dispatcher": "exec", "arg": "touch /tmp/release",
+             "release": true, "submap": "lab"},
+            {"modmask": 0, "key": "", "catch_all": true, "dispatcher": "exec",
+             "arg": "touch /tmp/catchall", "submap": "lab"}
+        ]"#;
+        let result = inspect_json(&key, release_first, "lab").unwrap();
+        assert!(result.details.iter().any(|detail| detail
+            == "not reached: exec touch /tmp/catchall (lab); a catchall bind is skipped once an earlier bind has handled the key"));
+
+        let exec_first = release_first.replace(r#""release": true, "#, "");
+        let result = inspect_json(&key, &exec_first, "lab").unwrap();
+        assert!(
+            !result
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("not reached"))
+        );
+        assert_eq!(result.also_fires.len(), 1);
+    }
+
+    #[test]
+    fn release_and_long_press_binds_do_not_fire_on_press() {
+        let key: KeyCombo = "super+t".parse().unwrap();
+        let press = r#"{"modmask": 64, "key": "t", "dispatcher": "exec", "arg": "press"}"#;
+        let release = r#"{"modmask": 64, "key": "t", "dispatcher": "exec", "arg": "release", "release": true}"#;
+        let long = r#"{"modmask": 64, "key": "t", "dispatcher": "exec", "arg": "long", "longPress": true}"#;
+        for binds in [
+            format!("[{press}, {release}, {long}]"),
+            format!("[{release}, {long}, {press}]"),
+        ] {
+            let result = inspect_json(&key, &binds, "").unwrap();
+            assert_eq!(
+                result.binding.and_then(|binding| binding.action),
+                Some("exec press".to_owned()),
+                "{binds}"
+            );
+            assert!(result.also_fires.is_empty(), "{binds}");
+        }
+    }
+
+    #[test]
+    fn keypad_keys_do_not_match_main_key_binds() {
+        let binds = r#"[
+            {"modmask": 64, "key": "Return", "dispatcher": "exec", "arg": "main"},
+            {"modmask": 64, "key": "KP_Enter", "dispatcher": "exec", "arg": "keypad"},
+            {"modmask": 64, "key": "1", "dispatcher": "exec", "arg": "digit"},
+            {"modmask": 64, "key": "KP_1", "dispatcher": "exec", "arg": "keypad digit"}
+        ]"#;
+        for (query, action) in [
+            ("super+return", "exec main"),
+            ("super+enter", "exec main"),
+            ("super+kp_enter", "exec keypad"),
+            ("super+1", "exec digit"),
+            ("super+KP_1", "exec keypad digit"),
+        ] {
+            let result = inspect(query, binds, &[], &[]);
+            assert_eq!(
+                result.binding.and_then(|binding| binding.action),
+                Some(action.to_owned()),
+                "{query}"
+            );
+            assert!(result.also_fires.is_empty(), "{query}");
+        }
+        // A keycode bind only matches the keypad key when its code resolves.
+        let code_bind =
+            r#"[{"modmask": 64, "key": "code:36", "dispatcher": "exec", "arg": "main"}]"#;
+        assert_eq!(
+            inspect("super+kp_enter", code_bind, &[104], &[]).outcome,
+            Outcome::Pass
+        );
+        assert_eq!(
+            inspect("super+return", code_bind, &[36], &[]).outcome,
+            Outcome::Consumed
+        );
     }
 
     const WORKSPACE_BINDS: &str = r#"[

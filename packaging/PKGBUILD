@@ -1,9 +1,11 @@
+# Maintainer: Agustín Rojas <agustinrojas1@users.noreply.github.com>
+
 pkgname=whykey
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc='Explain where a Linux key combination is handled'
 # Built from the vendored source archive, so any architecture with a Rust
-# toolchain works; release binaries are published for x86_64 only.
+# toolchain works.
 arch=('x86_64' 'aarch64')
 url='https://github.com/agustinrojas1/whykey'
 license=('MIT')

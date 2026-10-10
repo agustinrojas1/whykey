@@ -116,11 +116,12 @@ impl FromStr for KeySequence {
             .map(|(index, token)| {
                 KeyCombo::parse_query(token).map_err(|error| {
                     ParseKeySequenceError(if steps == 1 {
-                        format!("invalid key combination '{token}': {error}")
+                        format!("invalid key combination '{}': {error}", abbreviate(token))
                     } else {
                         format!(
-                            "invalid key combination at step {} ('{token}'): {error}",
-                            index + 1
+                            "invalid key combination at step {} ('{}'): {error}",
+                            index + 1,
+                            abbreviate(token)
                         )
                     })
                 })
@@ -171,6 +172,21 @@ impl FromStr for KeyCombo {
     }
 }
 
+/// How many characters of user input an error message echoes.
+const ECHO_LIMIT: usize = 64;
+/// How many `+` segments an error describes before summarizing the rest.
+const MAX_DESCRIBED_SEGMENTS: usize = 4;
+
+/// Shorten user input echoed in an error: the first 64 characters, then
+/// `…`. A 120 000-character argument must not produce a
+/// 120 000-character message.
+pub fn abbreviate(text: &str) -> std::borrow::Cow<'_, str> {
+    match text.char_indices().nth(ECHO_LIMIT) {
+        Some((end, _)) => format!("{}…", &text[..end]).into(),
+        None => text.into(),
+    }
+}
+
 fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComboError> {
     let input = input.trim();
     if input.is_empty() {
@@ -187,7 +203,8 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
         if let Some(mask) = modifier_mask(part) {
             if modifiers & mask != 0 {
                 return Err(ParseKeyComboError(format!(
-                    "modifier '{part}' appears more than once"
+                    "modifier '{}' appears more than once",
+                    abbreviate(part)
                 )));
             }
             modifiers |= mask;
@@ -209,18 +226,34 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
         ));
     }
     if remainder.contains('+') && remainder != "+" {
-        let found = remainder
-            .split('+')
-            .map(|token| {
-                let token = token.trim();
-                if token.is_empty() {
-                    "an empty segment".to_owned()
-                } else {
-                    format!("'{token}'")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" and ");
+        let segments: Vec<&str> = remainder.split('+').map(str::trim).collect();
+        let describe = |token: &str| {
+            if token.is_empty() {
+                "an empty segment".to_owned()
+            } else {
+                format!("'{}'", abbreviate(token))
+            }
+        };
+        let found = if segments.len() <= MAX_DESCRIBED_SEGMENTS {
+            segments
+                .iter()
+                .map(|token| describe(token))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        } else {
+            let mut found = segments[..MAX_DESCRIBED_SEGMENTS - 1]
+                .iter()
+                .map(|token| describe(token))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rest = &segments[MAX_DESCRIBED_SEGMENTS - 1..];
+            let empty = rest.iter().filter(|token| token.is_empty()).count();
+            found.push_str(&format!(
+                " and {} more segments ({empty} empty)",
+                rest.len()
+            ));
+            found
+        };
         return Err(ParseKeyComboError(format!(
             "a combination must contain exactly one non-modifier key, but found {found} \
              (modifiers: ctrl, alt, shift, super, hyper, altgr, caps, num, mod2, mod3, mod5)"
@@ -288,16 +321,21 @@ pub(crate) fn normalize_key_str(value: &str) -> String {
         "arrowright" | "arrow_right" | "rightarrow" | "right_arrow" => "RIGHT".into(),
         "arrowup" | "arrow_up" | "uparrow" | "up_arrow" => "UP".into(),
         "arrowdown" | "arrow_down" | "downarrow" | "down_arrow" => "DOWN".into(),
-        "enter" | "return" | "kp_enter" | "kp_return" => "RETURN".into(),
+        "enter" | "return" => "RETURN".into(),
+        // Keypad keys are distinct keysyms (KP_Enter 0xff8d is not Return
+        // 0xff0d) with their own keycodes, so they keep their own names.
+        "kp_enter" | "kp_return" => "KP_ENTER".into(),
+        "kp_prior" | "kp_page_up" => "KP_PAGE_UP".into(),
+        "kp_next" | "kp_page_down" => "KP_PAGE_DOWN".into(),
         "esc" | "escape" => "ESCAPE".into(),
         "spacebar" | "space" => "SPACE".into(),
-        "pgup" | "pageup" | "page_up" | "prior" | "kp_prior" => "PAGE_UP".into(),
-        "pgdown" | "pagedown" | "page_down" | "next" | "kp_next" => "PAGE_DOWN".into(),
+        "pgup" | "pageup" | "page_up" | "prior" => "PAGE_UP".into(),
+        "pgdown" | "pagedown" | "page_down" | "next" => "PAGE_DOWN".into(),
         "backspace" => "BACKSPACE".into(),
         "delete" | "del" => "DELETE".into(),
         "insert" | "ins" => "INSERT".into(),
-        "home" | "kp_home" => "HOME".into(),
-        "end" | "kp_end" => "END".into(),
+        "home" => "HOME".into(),
+        "end" => "END".into(),
         "tab" | "iso_left_tab" => "TAB".into(),
         "exclam" => "!".into(),
         "at" => "@".into(),
@@ -306,13 +344,13 @@ pub(crate) fn normalize_key_str(value: &str) -> String {
         "percent" => "%".into(),
         "asciicircum" => "^".into(),
         "ampersand" => "&".into(),
-        "asterisk" | "kp_multiply" => "*".into(),
+        "asterisk" => "*".into(),
         "parenleft" => "(".into(),
         "parenright" => ")".into(),
-        "minus" | "kp_subtract" => "-".into(),
+        "minus" => "-".into(),
         "underscore" => "_".into(),
-        "equal" | "kp_equal" => "=".into(),
-        "plus" | "kp_add" => "+".into(),
+        "equal" => "=".into(),
+        "plus" => "+".into(),
         "bracketleft" => "[".into(),
         "bracketright" => "]".into(),
         "braceleft" => "{".into(),
@@ -329,18 +367,8 @@ pub(crate) fn normalize_key_str(value: &str) -> String {
         "less" => "<".into(),
         "period" => ".".into(),
         "greater" => ">".into(),
-        "slash" | "kp_divide" => "/".into(),
+        "slash" => "/".into(),
         "question" => "?".into(),
-        "kp_0" => "0".into(),
-        "kp_1" => "1".into(),
-        "kp_2" => "2".into(),
-        "kp_3" => "3".into(),
-        "kp_4" => "4".into(),
-        "kp_5" => "5".into(),
-        "kp_6" => "6".into(),
-        "kp_7" => "7".into(),
-        "kp_8" => "8".into(),
-        "kp_9" => "9".into(),
         value => value.to_ascii_uppercase(),
     }
 }
@@ -348,14 +376,18 @@ pub(crate) fn normalize_key_str(value: &str) -> String {
 fn normalize_key(value: &str) -> Result<String, ParseKeyComboError> {
     if value.chars().any(char::is_whitespace) {
         return Err(ParseKeyComboError(format!(
-            "key '{value}' contains whitespace"
+            "key '{}' contains whitespace",
+            abbreviate(value)
         )));
     }
 
     if value.to_ascii_lowercase().starts_with("code:") {
         let code = value.split_at(5).1;
         if code.is_empty() || !code.chars().all(|character| character.is_ascii_digit()) {
-            return Err(ParseKeyComboError(format!("invalid keycode '{value}'")));
+            return Err(ParseKeyComboError(format!(
+                "invalid keycode '{}'",
+                abbreviate(value)
+            )));
         }
         return Ok(format!("CODE:{code}"));
     }
@@ -414,6 +446,24 @@ const NAMED_KEYS: &[&str] = &[
     "META_R",
     "HYPER_L",
     "HYPER_R",
+    "KP_ENTER",
+    "KP_HOME",
+    "KP_END",
+    "KP_0",
+    "KP_1",
+    "KP_2",
+    "KP_3",
+    "KP_4",
+    "KP_5",
+    "KP_6",
+    "KP_7",
+    "KP_8",
+    "KP_9",
+    "KP_ADD",
+    "KP_SUBTRACT",
+    "KP_MULTIPLY",
+    "KP_DIVIDE",
+    "KP_EQUAL",
     "KP_DECIMAL",
     "KP_SEPARATOR",
     "KP_DELETE",
@@ -487,6 +537,11 @@ const SUGGESTED_ALIASES: &[&str] = &[
 ];
 
 fn unknown_key_error(raw: &str) -> ParseKeyComboError {
+    let shown = abbreviate(raw);
+    if raw.chars().nth(ECHO_LIMIT).is_some() {
+        // No real key name is this long; a suggestion would only cost time.
+        return ParseKeyComboError(format!("unknown key '{shown}'"));
+    }
     let lowered = raw.to_lowercase();
     let function_keys = (1..=35).map(|number| format!("f{number}"));
     let suggestion = NAMED_KEYS
@@ -500,9 +555,9 @@ fn unknown_key_error(raw: &str) -> ParseKeyComboError {
     let hint = "use a single character, a named key such as return, left, or f1, an XF86 media key, or code:N";
     match suggestion {
         Some((_, candidate)) => ParseKeyComboError(format!(
-            "unknown key '{raw}'; did you mean '{candidate}'? ({hint})"
+            "unknown key '{shown}'; did you mean '{candidate}'? ({hint})"
         )),
-        None => ParseKeyComboError(format!("unknown key '{raw}'; {hint}")),
+        None => ParseKeyComboError(format!("unknown key '{shown}'; {hint}")),
     }
 }
 
@@ -549,8 +604,31 @@ mod tests {
         assert_eq!("ctrl+LeftArrow".parse::<KeyCombo>().unwrap().key(), "LEFT");
         assert_eq!("Return".parse::<KeyCombo>().unwrap().key(), "RETURN");
         assert_eq!("Page_Down".parse::<KeyCombo>().unwrap().key(), "PAGE_DOWN");
-        assert_eq!("KP_Enter".parse::<KeyCombo>().unwrap().key(), "RETURN");
         assert_eq!("Escape".parse::<KeyCombo>().unwrap().key(), "ESCAPE");
+    }
+
+    #[test]
+    fn keypad_keys_stay_distinct_from_main_keys() {
+        for (keypad_name, main_name, normalized) in [
+            ("KP_Enter", "Return", "KP_ENTER"),
+            ("kp_return", "enter", "KP_ENTER"),
+            ("KP_1", "1", "KP_1"),
+            ("KP_Home", "Home", "KP_HOME"),
+            ("KP_End", "End", "KP_END"),
+            ("KP_Prior", "Prior", "KP_PAGE_UP"),
+            ("kp_page_up", "page_up", "KP_PAGE_UP"),
+            ("KP_Next", "Next", "KP_PAGE_DOWN"),
+            ("KP_Add", "plus", "KP_ADD"),
+            ("KP_Subtract", "minus", "KP_SUBTRACT"),
+            ("KP_Multiply", "asterisk", "KP_MULTIPLY"),
+            ("KP_Divide", "slash", "KP_DIVIDE"),
+            ("KP_Equal", "equal", "KP_EQUAL"),
+        ] {
+            let keypad = KeyCombo::parse_query(&format!("super+{keypad_name}")).unwrap();
+            let main = KeyCombo::parse_query(&format!("super+{main_name}")).unwrap();
+            assert_eq!(keypad.key(), normalized, "{keypad_name}");
+            assert_ne!(keypad, main, "{keypad_name} must not match {main_name}");
+        }
     }
 
     #[test]

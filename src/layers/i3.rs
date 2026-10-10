@@ -25,6 +25,7 @@ pub(super) const FAMILY: Family = Family {
     msg_args: &[],
     config_raw_args: &["-r"],
     release_press_forwarded: Some(false),
+    keysym_in_binding_state: true,
     config_candidates,
 };
 

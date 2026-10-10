@@ -472,12 +472,18 @@ class Lab:
         return app_id == PROBE_TITLE and title != WHYKEY_WINDOW_TITLE
 
     def _probe_receives_input(self) -> bool:
-        """A Shift tap typed like the scenario's input reaches the foot probe.
+        """A Shift tap typed like the scenario's input reaches the foot probe:
+        the log holds a Shift *press* (a lone release can arrive when the press
+        was swallowed by a keyboard switch, which proves nothing).
         Mutter has no window-query IPC, so on "gnome" this is the focus check."""
         injector = "rdkbd" if self.scenario["environment"] == "gnome" else "vkbd"
         self.run(["python3", f"/lab/{injector}.py", "shift"])
         with open("/tmp/probe.log", "rb") as handle:
-            return b"\x1b[57441" in handle.read()
+            data = handle.read()
+        return any(
+            code == b"57441" and event in (b"", b"1") and final == b"u"
+            for code, _mods, event, final in KITTY_SEQUENCE.findall(data)
+        )
 
     def _whykey_window_focused(self) -> bool:
         """whykey's own probe window (`listen --window`) has focus."""

@@ -1083,6 +1083,158 @@ fn snapshot_writes_a_replayable_static_envelope() {
 }
 
 #[test]
+fn snapshot_uses_the_inspect_exit_rule_and_explains_a_failure() {
+    let base = temp_dir("snapshot-exit");
+    fs::create_dir_all(&base).unwrap();
+    let path = base.join("diagnostic.json");
+    let inspect = binary().arg("ctrl+z").output().unwrap();
+    let snapshot = binary()
+        .args(["snapshot", "ctrl+z", "--output", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        snapshot.status.code(),
+        inspect.status.code(),
+        "snapshot: {snapshot:?}; inspect: {inspect:?}"
+    );
+    if snapshot.status.code() == Some(1) {
+        assert!(String::from_utf8_lossy(&snapshot.stderr).contains("exit 1 because"));
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_arguments_are_paths_or_usage_errors_never_panics() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let base = temp_dir("non-utf8");
+    fs::create_dir_all(&base).unwrap();
+    let path = base.join(OsStr::from_bytes(b"snap-\xff.json"));
+    let snapshot = binary()
+        .args(["snapshot", "ctrl+z", "--output"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        matches!(snapshot.status.code(), Some(0 | 1)),
+        "{snapshot:?}"
+    );
+    assert!(path.is_file(), "the non-UTF-8 output path must be written");
+
+    let replay = binary().arg("replay").arg(&path).output().unwrap();
+    assert!(replay.status.success(), "{replay:?}");
+    let diff = binary().arg("diff").arg(&path).arg(&path).output().unwrap();
+    assert!(diff.status.success(), "{diff:?}");
+
+    let missing = base.join(OsStr::from_bytes(b"no-\xfe"));
+    let extension = binary()
+        .arg("extension")
+        .arg(&missing)
+        .arg("ctrl+x")
+        .output()
+        .unwrap();
+    assert_eq!(extension.status.code(), Some(1), "{extension:?}");
+
+    let cases: [&[&[u8]]; 4] = [
+        &[b"ctrl+\xff"],
+        &[b"inspect", b"ctrl+\xff"],
+        &[b"--color", b"\xff"],
+        &[b"bindings", b"--key", b"\xff"],
+    ];
+    for arguments in cases {
+        let output = binary()
+            .args(arguments.iter().map(|argument| OsStr::from_bytes(argument)))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+            "{output:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+/// A reader that already closed its end (`whykey --help | true`) ends
+/// whykey quietly with the shell's SIGPIPE status, never by a panic.
+#[cfg(unix)]
+#[test]
+fn a_closed_stdout_pipe_ends_quietly_with_sigpipe_status() {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    for arguments in [
+        &["--help"][..],
+        &["completions", "bash"],
+        &["--json", "ctrl+z"],
+        &["capabilities"],
+    ] {
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // SAFETY: both descriptors were just created by pipe(2) and are owned here.
+        let (reader, writer) =
+            unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        drop(reader);
+        let output = binary()
+            .args(arguments)
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.stderr.is_empty(), "{arguments:?}: {output:?}");
+        assert_eq!(output.status.code(), Some(141), "{arguments:?}: {output:?}");
+    }
+}
+
+/// An extension that exits without reading its stdin request makes whykey's
+/// write fail with EPIPE; that is reported as an extension error, not a
+/// SIGPIPE death.
+#[cfg(unix)]
+#[test]
+fn an_extension_that_ignores_stdin_is_reported_not_fatal() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::ExitStatusExt;
+
+    let directory =
+        std::env::temp_dir().join(format!("whykey-extension-no-stdin-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let program = directory.join("extension");
+    fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    // Whether the request write hits EPIPE or lands in the pipe buffer first
+    // is a race, so repeat it: neither ordering may kill whykey.
+    for _ in 0..20 {
+        let output = binary()
+            .arg("extension")
+            .arg(&program)
+            .arg("ctrl+z")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.signal(), None, "{output:?}");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("extension"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn oversized_key_input_gets_a_short_usage_error() {
+    for input in ["+".repeat(120_000), "a".repeat(120_000)] {
+        let output = binary().arg(&input).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            output.stderr.len() < 1_000,
+            "error is {} bytes: {}",
+            output.stderr.len(),
+            String::from_utf8_lossy(&output.stderr[..300])
+        );
+    }
+}
+
+#[test]
 fn diff_compares_saved_reports_without_querying_the_desktop() {
     let base = temp_dir("diff");
     fs::create_dir_all(&base).unwrap();
@@ -1894,194 +2046,6 @@ fn listen_repeat_restores_between_reports() {
         "each report must start a fresh, restored capture cycle: {transcript:?}"
     );
     assert_eq!(transcript.matches("\x1b[<u").count(), 2);
-}
-
-#[cfg(unix)]
-fn high_rate_capture_records(event_count: usize) -> Result<String, String> {
-    let base = temp_dir("listen-high-rate");
-    fs::create_dir_all(&base).unwrap();
-    let stream = base.join("events.ndjson");
-    let executable = env!("CARGO_BIN_EXE_whykey");
-    let command_line = format!(
-        "'{}' listen --ndjson --repeat --count {event_count} --timeout 90 > '{}'",
-        executable.replace('\'', "'\\''"),
-        stream.display()
-    );
-    let mut child = script_command(&command_line)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the high-rate listener test");
-    // Give `script` and whykey time to create the PTY and enter raw capture
-    // mode before injecting a burst. Without this, the shell can echo the
-    // first bytes instead of delivering them to the listener.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    let mut stdin = child.stdin.take().expect("script stdin");
-    let writer = std::thread::spawn(move || {
-        let event = b"\x1b[122;5u";
-        let chunk_size = 100;
-        let mut remaining = event_count;
-        let mut error = None;
-        while remaining > 0 {
-            let count = remaining.min(chunk_size);
-            let mut chunk = Vec::with_capacity(count * event.len());
-            for _ in 0..count {
-                chunk.extend_from_slice(event);
-            }
-            if let Err(write_error) = stdin.write_all(&chunk) {
-                error = Some(write_error.to_string());
-                break;
-            }
-            remaining -= count;
-        }
-        error
-    });
-    let output = child.wait_with_output().unwrap();
-    let writer_error = writer.join().expect("high-rate writer thread");
-
-    let records = fs::read_to_string(&stream).unwrap();
-    let _ = fs::remove_dir_all(base);
-    if output.status.success() {
-        Ok(records)
-    } else {
-        Err(format!(
-            "script output: {output:?}; writer: {writer_error:?}; records: {}",
-            records.lines().count()
-        ))
-    }
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "interactive capture restores after every report; bulk streaming is not a release capability"]
-fn listen_sustains_a_bounded_high_rate_stream() {
-    let event_count = 1_000;
-    let records = high_rate_capture_records(event_count).unwrap();
-    let lines: Vec<_> = records.lines().collect();
-    assert_eq!(
-        lines.len(),
-        event_count,
-        "captured records: {}",
-        lines.len()
-    );
-    for line in lines {
-        let record: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(record["operation"], "listen");
-        assert_eq!(record["input"]["key_display"], "CTRL + Z");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "sustained capture gate; run explicitly when validating throughput"]
-fn listen_sustains_60000_events() {
-    let event_count = 60_000;
-    let records = high_rate_capture_records(event_count).unwrap();
-    assert_eq!(records.lines().count(), event_count);
-}
-
-#[cfg(unix)]
-fn paced_capture_latencies(event_count: usize) -> Vec<std::time::Duration> {
-    let base = temp_dir("listen-latency");
-    fs::create_dir_all(&base).unwrap();
-    let stream = base.join("events.ndjson");
-    let executable = env!("CARGO_BIN_EXE_whykey");
-    let command_line = format!(
-        "'{}' listen --ndjson --repeat --count {event_count} --timeout 10 > '{}'",
-        executable.replace('\'', "'\\''"),
-        stream.display()
-    );
-    let mut child = script_command(&command_line)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("util-linux script must provide a PTY for the latency gate");
-
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(event_count)));
-    let reader_stream = stream.clone();
-    let reader_sent = std::sync::Arc::clone(&sent);
-    let reader = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut offset = 0;
-        let mut latencies = Vec::with_capacity(event_count);
-        while latencies.len() < event_count && std::time::Instant::now() < deadline {
-            if let Ok(bytes) = fs::read(&reader_stream) {
-                if bytes.len() > offset {
-                    let new_bytes = &bytes[offset..];
-                    if let Some(last_newline) = new_bytes.iter().rposition(|byte| *byte == b'\n') {
-                        let complete_end = offset + last_newline + 1;
-                        let records = new_bytes[..=last_newline]
-                            .iter()
-                            .filter(|byte| **byte == b'\n')
-                            .count();
-                        let now = std::time::Instant::now();
-                        let sent = reader_sent.lock().unwrap();
-                        let first = latencies.len();
-                        let last = (first + records).min(sent.len());
-                        latencies
-                            .extend(sent[first..last].iter().map(|timestamp| now - *timestamp));
-                        offset = complete_end;
-                    }
-                }
-            }
-            if latencies.len() < event_count {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-        }
-        latencies
-    });
-
-    let mut stdin = child.stdin.take().expect("script stdin");
-    let writer_sent = std::sync::Arc::clone(&sent);
-    let writer = std::thread::spawn(move || {
-        let event = b"\x1b[122;5u";
-        let chunk_size = 10;
-        let mut remaining = event_count;
-        while remaining > 0 {
-            let count = remaining.min(chunk_size);
-            let mut chunk = Vec::with_capacity(count * event.len());
-            for _ in 0..count {
-                chunk.extend_from_slice(event);
-            }
-            let timestamp = std::time::Instant::now();
-            writer_sent
-                .lock()
-                .unwrap()
-                .extend(std::iter::repeat_n(timestamp, count));
-            stdin
-                .write_all(&chunk)
-                .expect("latency writer must reach the listener");
-            remaining -= count;
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-    });
-
-    let output = child.wait_with_output().unwrap();
-    writer.join().expect("latency writer thread");
-    let latencies = reader.join().expect("latency reader thread");
-    assert!(output.status.success(), "script output: {output:?}");
-    let _ = fs::remove_dir_all(base);
-    latencies
-}
-
-#[cfg(unix)]
-#[test]
-#[ignore = "capture latency measurement; run explicitly when validating scheduling"]
-fn listen_capture_p95_latency_is_measured() {
-    let mut latencies = paced_capture_latencies(1_000);
-    assert_eq!(latencies.len(), 1_000);
-    latencies.sort_unstable();
-    let p95_index = (latencies.len() * 95).div_ceil(100) - 1;
-    let p95 = latencies[p95_index];
-    let p50 = latencies[latencies.len() / 2];
-    assert!(
-        p95 < std::time::Duration::from_secs(1),
-        "capture p95 latency measurement exceeded the sanity bound: {p95:?}"
-    );
-    println!("capture p50 latency: {p50:?}; p95 latency: {p95:?}");
 }
 
 #[cfg(unix)]

@@ -22,6 +22,7 @@ const FAMILY: Family = Family {
     msg_args: &["-r"],
     config_raw_args: &[],
     release_press_forwarded: Some(true),
+    keysym_in_binding_state: false,
     config_candidates,
 };
 
