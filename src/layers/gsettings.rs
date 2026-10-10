@@ -162,35 +162,18 @@ pub(crate) fn quoted_values(value: &str) -> Vec<String> {
 }
 
 pub(crate) fn parse_accelerator(value: &str) -> Option<KeyCombo> {
-    parse_accelerator_impl(value, false)
-}
-
-/// GNOME's exact historical modifier table: it never accepted `ctl`, `meta`,
-/// or `numlock`, and folded `mod3` into `hyper`. Kept byte-faithful so exotic
-/// GNOME triggers keep their old skip-or-match behavior.
-pub(crate) fn parse_gnome_accelerator(value: &str) -> Option<KeyCombo> {
-    parse_accelerator_impl(value, true)
-}
-
-fn parse_accelerator_impl(value: &str, gnome: bool) -> Option<KeyCombo> {
     let mut remainder = value.trim();
     let mut modifiers = Vec::new();
     while remainder.starts_with('<') {
         let end = remainder.find('>')?;
         let modifier = &remainder[1..end];
         let normalized = match modifier.to_ascii_lowercase().as_str() {
-            "control" | "ctrl" | "primary" => "ctrl",
-            "ctl" if !gnome => "ctrl",
+            "control" | "ctrl" | "primary" | "ctl" => "ctrl",
             "alt" | "mod1" => "alt",
             "shift" => "shift",
-            "super" | "win" | "mod4" => "super",
-            "meta" if !gnome => "super",
-            "hyper" if gnome => "hyper",
-            "hyper" => "mod3",
-            "mod3" if gnome => "hyper",
-            "mod3" => "mod3",
-            "mod2" | "num" => "mod2",
-            "numlock" if !gnome => "mod2",
+            "super" | "win" | "mod4" | "meta" => "super",
+            "hyper" | "mod3" => "mod3",
+            "mod2" | "num" | "numlock" => "mod2",
             "mod5" => "mod5",
             _ => return None,
         };

@@ -1,0 +1,14 @@
+{
+  "id": "xbindkeys-bind",
+  "description": "an .xbindkeysrc binding Mod4+t fires (no window manager)",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.xbindkeysrc": ["\"touch /tmp/fired\"", "  Mod4 + t"]},
+  "x11": {
+    "daemons": [{"argv": ["xbindkeys", "-n", "-f", "/root/.xbindkeysrc"], "ready_grab": [64, 28]}]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {"args": ["super+t"], "layer": "X11 xbindkeys", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

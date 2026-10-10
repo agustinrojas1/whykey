@@ -1,0 +1,54 @@
+{
+  "id": "tmux-zsh-user-bind",
+  "description": "inside tmux, a zle widget on ctrl+t still fires (tmux root table forwards it to the zsh pane)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": [
+      ""
+    ],
+    "/root/.zshrc": [
+      "PS1='%% '",
+      "lab-fire() { touch /tmp/fired }",
+      "zle -N lab-fire",
+      "bindkey '^T' lab-fire",
+      "eval \"$(whykey shell-init zsh)\""
+    ]
+  },
+  "pty": {
+    "command": [
+      "tmux",
+      "-f",
+      "/root/.tmux.conf",
+      "new-session",
+      "-s",
+      "lab",
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Zsh / ZLE",
+    "run": "pty",
+    "summary": "bound to lab-fire"
+  }
+}

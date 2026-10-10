@@ -28,6 +28,7 @@ const HOST_ENV_VARS: &[&str] = &[
     "XDG_SESSION_TYPE",
     "WAYLAND_DISPLAY",
     "DISPLAY",
+    "XAUTHORITY",
     "DBUS_SESSION_BUS_ADDRESS",
     "GTK_IM_MODULE",
     "QT_IM_MODULE",
@@ -2687,8 +2688,8 @@ fn gnome_adapter_reads_media_key_bindings() {
 
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("GNOME"));
-    assert!(text.contains("global shortcut consumes the key"));
-    assert!(text.contains("screensaver"));
+    assert!(text.contains("GNOME — Configured to stop: screensaver"));
+    assert!(text.contains("org.gnome.settings-daemon.plugins.media-keys"));
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2850,7 +2851,9 @@ fn x11_adapter_reads_literal_xbindkeys_configuration() {
         .env("XDG_CURRENT_DESKTOP", "generic")
         .env("XDG_SESSION_DESKTOP", "generic")
         .env("XDG_SESSION_TYPE", "x11")
-        .env("DISPLAY", ":0")
+        // A display no server listens on: the static adapter is under test,
+        // not the live X11 grab probe.
+        .env("DISPLAY", ":4242")
         .output()
         .unwrap();
 
@@ -2900,7 +2903,7 @@ fn programmable_x11_adapters_read_literal_bindings() {
             .env("XDG_CURRENT_DESKTOP", desktop)
             .env("XDG_SESSION_DESKTOP", desktop)
             .env("XDG_SESSION_TYPE", "x11")
-            .env("DISPLAY", ":0")
+            .env("DISPLAY", ":4242")
             .env(config_var, &config)
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("HYPRLAND_INSTANCE_SIGNATURE")

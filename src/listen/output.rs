@@ -18,9 +18,14 @@ pub(super) fn print_capture_dry_run(
         }
     };
     let forced = if options.evdev || options.device.is_some() {
-        Some("Evdev")
+        Some("Evdev".to_owned())
     } else if options.terminal {
-        Some("Terminal")
+        Some("Terminal".to_owned())
+    } else if options.window {
+        Some(match crate::probe::available_display() {
+            Some(display) => format!("Probe window via {display}"),
+            None => "Probe window (no Wayland or X11 display found)".to_owned(),
+        })
     } else {
         None
     };
@@ -41,6 +46,14 @@ pub(super) fn print_capture_dry_run(
             "capture backend: terminal fallback (dry-run; native unavailable: {error})"
         )),
     }
+    match crate::probe::available_display() {
+        Some(display) => write_line(format!(
+            "window capture: available via --window ({display} probe window)"
+        )),
+        None => {
+            write_line("window capture: unavailable (no Wayland or X11 display found)".to_owned())
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -50,6 +63,8 @@ pub(super) fn print_capture_dry_run(
 ) {
     let backend = if options.evdev || options.device.is_some() {
         "Evdev"
+    } else if options.window {
+        "Probe window"
     } else {
         "Terminal"
     };
@@ -111,6 +126,8 @@ fn print_waiting_message(
 ) {
     let mode = if physical_observation {
         "read-only physical observation; normal shortcut actions can still run"
+    } else if backend == CaptureBackendId::Window.display() {
+        "probe window observation; press the shortcut while the whykey probe window has focus; keys the desktop consumes never reach it"
     } else if backend == CaptureBackendId::Terminal.display() {
         "terminal observation; whykey reads the captured key, so its normal action does not run"
     } else if policy == CapturePolicy::Suppress {
@@ -530,7 +547,12 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
             return Ok(());
         }
         backend.close().map_err(ListenError::Io)?;
-        let results = snapshot.inspect(&observed, terminal_termios.as_ref());
+        // A key that never arrived has nothing to route through the layers.
+        let results = if observed.disposition == CaptureDisposition::NotDelivered {
+            Vec::new()
+        } else {
+            snapshot.inspect(&observed, terminal_termios.as_ref())
+        };
         let rendered = if options.json {
             if options.ndjson {
                 report::render_ndjson(&observed.combo, &results, Some(&observed))
@@ -640,6 +662,11 @@ pub(super) fn inspect_with_session(
         }
     };
 
+    if observed.source.proves_compositor_delivery() {
+        confirm_window_delivery(&mut results);
+        return results;
+    }
+
     // Capture proves that the event reached the terminal. It does not prove
     // that the normal TTY, multiplexer, editor, or shell path would forward
     // it: capture temporarily bypasses some of those consumers.
@@ -686,6 +713,31 @@ pub(super) fn inspect_with_session(
     }
 
     results
+}
+
+/// The key reached whykey's focused probe window, so every layer that sits
+/// above a focused client forwarded it, whatever its configuration says.
+/// Layers below the focused client (terminal, shell, editor) describe the
+/// usual focused application, not the probe, and keep their static result.
+pub(super) fn confirm_window_delivery(results: &mut [LayerResult]) {
+    for result in results {
+        if !matches!(result.id, LayerId::Remapper | LayerId::Compositor) {
+            continue;
+        }
+        if matches!(result.outcome, Outcome::Consumed | Outcome::Redirected) {
+            result.outcome = Outcome::HandledAndPassed;
+            result
+                .summary
+                .push_str("; observed key reached the probe window");
+        } else if matches!(
+            result.outcome,
+            Outcome::Unknown | Outcome::Unavailable | Outcome::HandledUncertain
+        ) {
+            result
+                .summary
+                .push_str("; live capture reached the probe window");
+        }
+    }
 }
 
 fn open_export(path: Option<&Path>) -> Result<Option<File>, ListenError> {

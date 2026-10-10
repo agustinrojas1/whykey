@@ -1,0 +1,32 @@
+{
+  "id": "kde-launch-bind",
+  "description": "a kglobalaccel launch shortcut (Meta+T) fires and kglobalacceld grabs the key",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired"],
+    "/root/.config/kglobalshortcutsrc": ["[services][lab-fire.desktop]", "_launch=Meta+T"]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["/usr/libexec/kglobalacceld"],
+        "env": {"QT_QPA_PLATFORM": "xcb"},
+        "ready_grab": [64, 28]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "KDE Plasma",
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "KDE",
+      "KDE_FULL_SESSION": "true",
+      "KDE_SESSION_VERSION": "6"
+    }
+  }
+}

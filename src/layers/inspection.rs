@@ -526,7 +526,10 @@ fn inspect_default_chain_inner_without_remapper(
     }
 
     // 1. Compositor
-    let compositor_result = inspect_compositor(key, request.physical_input.as_ref(), session);
+    let compositor_result = x11_grab::refine(
+        key,
+        inspect_compositor(key, request.physical_input.as_ref(), session),
+    );
     if !acc.append(
         compositor_result,
         ContinuationPolicy::StopOnTerminalInterception,

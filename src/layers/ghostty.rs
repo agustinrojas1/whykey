@@ -761,8 +761,9 @@ fn modifier_encoding(key: &KeyCombo, protocol_flags: Option<u32>) -> Option<Vec<
 }
 
 fn kitty_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
+    // Kitty reports the unshifted key: letters are lowercase codepoints.
     let codepoint = if key.key().chars().count() == 1 {
-        key.key().chars().next()? as u32
+        key.key().chars().next()?.to_ascii_lowercase() as u32
     } else {
         match key.key() {
             "TAB" => 9,
@@ -787,12 +788,24 @@ fn default_non_arrow_encoding(key: &str, mask: u32) -> Option<Vec<u8>> {
             });
         }
     }
-    if mask == 0 && key.chars().count() == 1 {
-        return Some(key.as_bytes().to_vec());
-    }
-    if mask == 8 && key.chars().count() == 1 {
-        let mut bytes = vec![0x1b];
-        bytes.extend_from_slice(key.as_bytes());
+    // `KeyCombo` names letters in uppercase; a letter types lowercase unless
+    // Shift is held.
+    if key.chars().count() == 1 && mask & !(1 | 8) == 0 {
+        let shifted = mask & 1 != 0;
+        if shifted && !key.chars().all(|character| character.is_ascii_alphabetic()) {
+            return None;
+        }
+        let text = if shifted {
+            key.to_ascii_uppercase()
+        } else {
+            key.to_ascii_lowercase()
+        };
+        let mut bytes = if mask & 8 != 0 {
+            vec![0x1b]
+        } else {
+            Vec::new()
+        };
+        bytes.extend_from_slice(text.as_bytes());
         return Some(bytes);
     }
     if mask != 0 {
@@ -1081,7 +1094,7 @@ mod tests {
 
         assert_eq!(
             input.as_ref().map(|input| input.bytes.as_slice()),
-            Some(&b"\x1b[70;5u"[..])
+            Some(&b"\x1b[102;5u"[..])
         );
     }
 

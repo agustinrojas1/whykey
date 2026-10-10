@@ -69,6 +69,8 @@ pub enum CaptureBackendId {
     Native(NativeBackendId),
     Terminal,
     Evdev,
+    /// whykey's own focused probe window (Wayland or X11 client).
+    Window,
 }
 
 impl CaptureBackendId {
@@ -77,6 +79,7 @@ impl CaptureBackendId {
             Self::Native(backend) => backend.display(),
             Self::Terminal => "Terminal",
             Self::Evdev => "Evdev",
+            Self::Window => "Probe window",
         }
     }
 }

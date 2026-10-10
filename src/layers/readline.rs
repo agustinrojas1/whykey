@@ -292,7 +292,12 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
 /// source: an INPUTRC file, or none for a built-in default.
 fn unverified_evidence(action: String, entry: Option<&Entry>) -> BindingEvidence {
     let source = entry
-        .and_then(|entry| entry.source.strip_prefix("INPUTRC "))
+        .and_then(|entry| {
+            entry
+                .source
+                .strip_prefix("INPUTRC ")
+                .or_else(|| entry.source.strip_prefix("bind in "))
+        })
         .map(|path| SourceLocation::new(path, None));
     BindingEvidence::action(action, BindingScope::Unknown, source)
         .with_uncertainty(UncertaintyReason::UnverifiedDefault)
@@ -314,7 +319,8 @@ fn format_continuations(continuations: &[&Entry], total: usize) -> String {
 enum Origin {
     /// `whykey shell-init bash` captured the live `bind -P/-S/-X` output.
     Snapshot,
-    /// Only INPUTRC files and, in emacs mode, the built-in defaults.
+    /// INPUTRC files, startup-file `bind` commands and, in emacs mode, the
+    /// built-in defaults.
     Files { emacs: bool },
 }
 
@@ -393,7 +399,14 @@ impl Keymap {
                 var("WHYKEY_READLINE_SHELL_BINDINGS").as_deref(),
                 active_keymap().as_deref(),
             ),
-            None => Self::from_files(&inputrc_entries(), readline_mode_is_emacs()),
+            None => {
+                let bashrc = Bashrc::read(!readline_mode_is_emacs());
+                Self::from_files(
+                    &bashrc.effective(bashrc.vi_mode()),
+                    &inputrc_entries(),
+                    !bashrc.vi_mode(),
+                )
+            }
         }
     }
 
@@ -458,9 +471,12 @@ impl Keymap {
         }
     }
 
-    fn from_files(inputrc: &[Entry], emacs: bool) -> Self {
+    /// `bashrc` holds startup-file `bind` commands, last first; they run
+    /// after INPUTRC is read, so they take precedence over it.
+    fn from_files(bashrc: &[Entry], inputrc: &[Entry], emacs: bool) -> Self {
+        let mut entries = bashrc.to_vec();
         // Later inputrc declarations override earlier ones.
-        let mut entries: Vec<Entry> = inputrc.iter().rev().cloned().collect();
+        entries.extend(inputrc.iter().rev().cloned());
         if emacs {
             entries.extend(EMACS_DEFAULTS.iter().map(|(notation, function)| {
                 Entry::new(notation, Action::Function, function, "Readline default")
@@ -476,8 +492,10 @@ impl Keymap {
     fn source_label(&self) -> &'static str {
         match self.origin {
             Origin::Snapshot => "current Bash bind snapshot",
-            Origin::Files { emacs: true } => "Readline defaults and INPUTRC",
-            Origin::Files { emacs: false } => "INPUTRC",
+            Origin::Files { emacs: true } => {
+                "Readline defaults, INPUTRC and startup-file bind commands"
+            }
+            Origin::Files { emacs: false } => "INPUTRC and startup-file bind commands",
         }
     }
 
@@ -716,24 +734,165 @@ fn inputrc_entries_in_path(path: &Path, depth: usize, entries: &mut Vec<Entry>) 
         if !active {
             continue;
         }
-        let Some((notation, rest)) = leading_quoted(line) else {
-            continue;
-        };
-        let Some(value) = rest.trim_start().strip_prefix(':') else {
-            continue;
-        };
-        let value = value.trim();
-        let entry = match value.strip_prefix('"') {
-            Some(text) => Entry::new(
-                notation,
-                Action::Macro,
-                text.strip_suffix('"').unwrap_or(text),
-                source.clone(),
-            ),
-            None => Entry::new(notation, Action::Function, value, source.clone()),
-        };
-        entries.push(entry);
+        if let Some(entry) = binding_line(line, false, &source) {
+            entries.push(entry);
+        }
     }
+}
+
+/// One Readline binding line, `"\C-t": transpose-chars` or
+/// `"\C-t": "macro text"`; with `bind -x` the value is a shell command.
+fn binding_line(line: &str, shell_command: bool, source: &str) -> Option<Entry> {
+    let (notation, rest) = leading_quoted(line)?;
+    let value = rest.trim_start().strip_prefix(':')?.trim();
+    let quoted = value
+        .strip_prefix('"')
+        .map(|text| text.strip_suffix('"').unwrap_or(text));
+    Some(match (shell_command, quoted) {
+        (true, text) => Entry::new(
+            notation,
+            Action::ShellCommand,
+            text.unwrap_or(value),
+            source,
+        ),
+        (false, Some(text)) => Entry::new(notation, Action::Macro, text, source),
+        (false, None) => Entry::new(notation, Action::Function, value, source),
+    })
+}
+
+/// `bind` commands and `set -o vi|emacs` read statically from the startup
+/// files an interactive Bash runs, in execution order.
+#[derive(Debug, Default)]
+struct Bashrc {
+    /// Bindings with the prompt keymap they landed in (see `prompt_keymap`).
+    entries: Vec<(Entry, Option<bool>)>,
+    /// The editing mode INPUTRC selects, before any startup file runs.
+    inputrc_vi: bool,
+    /// The editing mode the files leave, when they set one.
+    vi: Option<bool>,
+}
+
+impl Bashrc {
+    fn read(inputrc_vi: bool) -> Self {
+        let mut bashrc = Self {
+            inputrc_vi,
+            ..Self::default()
+        };
+        for path in bashrc_paths() {
+            if let Ok(text) = fs::read_to_string(&path) {
+                bashrc.apply_script(&text, &path);
+            }
+        }
+        bashrc
+    }
+
+    /// The editing mode every prompt starts in.
+    fn vi_mode(&self) -> bool {
+        self.vi.unwrap_or(self.inputrc_vi)
+    }
+
+    fn apply_script(&mut self, script: &str, path: &Path) {
+        for words in crate::layers::shell::posix_commands(script) {
+            match crate::layers::shell::command_words(&words) {
+                [command, arguments @ ..] if command.text == "set" => {
+                    for pair in arguments.windows(2) {
+                        if pair[0].text == "-o" {
+                            match pair[1].text.as_str() {
+                                "vi" => self.vi = Some(true),
+                                "emacs" => self.vi = Some(false),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                [command, arguments @ ..] if command.text == "bind" => {
+                    self.apply_bind(arguments, path);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn apply_bind(&mut self, words: &[crate::layers::shell::Word], path: &Path) {
+        let source = format!("bind in {}", path.display());
+        let mut keymap: Option<String> = None;
+        let mut shell_command = false;
+        let mut index = 0;
+        while let Some(word) = words.get(index) {
+            match word.text.as_str() {
+                "-m" => {
+                    index += 1;
+                    keymap = words.get(index).map(|word| word.text.clone());
+                }
+                "-x" => shell_command = true,
+                "-f" => {
+                    index += 1;
+                    if let Some(file) = words.get(index).filter(|word| !word.expands) {
+                        let mut entries = Vec::new();
+                        inputrc_entries_in_path(Path::new(&file.text), 0, &mut entries);
+                        let target = self.prompt_keymap(keymap.as_deref());
+                        self.entries
+                            .extend(entries.into_iter().map(|entry| (entry, target)));
+                    }
+                }
+                // Queries and listings (-p, -P, -l, -q, -r, -s, -u, -v, ...)
+                // bind nothing that can be resolved statically.
+                text if text.starts_with('-') => return,
+                _ => break,
+            }
+            index += 1;
+        }
+        let target = self.prompt_keymap(keymap.as_deref());
+        for word in words[index.min(words.len())..]
+            .iter()
+            .filter(|word| !word.expands)
+        {
+            let line = word.text.trim();
+            if let Some(mode) = line.strip_prefix("set editing-mode") {
+                match mode.trim() {
+                    "vi" => self.vi = Some(true),
+                    "emacs" => self.vi = Some(false),
+                    _ => {}
+                }
+                continue;
+            }
+            if let Some(entry) = binding_line(line, shell_command, &source) {
+                self.entries.push((entry, target));
+            }
+        }
+    }
+
+    /// Whether a binding lands in the vi insertion keymap (`Some(true)`), the
+    /// emacs keymap (`Some(false)`) or another keymap no prompt starts in.
+    /// `bind` without `-m` binds in the keymap of the current editing mode.
+    fn prompt_keymap(&self, keymap: Option<&str>) -> Option<bool> {
+        match keymap {
+            None => Some(self.vi.unwrap_or(self.inputrc_vi)),
+            Some("emacs" | "emacs-standard") => Some(false),
+            Some("vi-insert") => Some(true),
+            Some(_) => None,
+        }
+    }
+
+    /// Bindings of the keymap a prompt starts in, last definition first.
+    fn effective(&self, vi: bool) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .rev()
+            .filter(|(_, target)| *target == Some(vi))
+            .map(|(entry, _)| entry.clone())
+            .collect()
+    }
+}
+
+/// Startup files of an interactive non-login Bash: the system bashrc
+/// (Debian builds read /etc/bash.bashrc) and ~/.bashrc.
+fn bashrc_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/etc/bash.bashrc")];
+    if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
+        paths.push(PathBuf::from(home).join(".bashrc"));
+    }
+    paths
 }
 
 fn resolve_inputrc_include(raw: &str, base: &Path) -> PathBuf {
@@ -910,7 +1069,7 @@ mod tests {
     }
 
     fn defaults() -> Keymap {
-        Keymap::from_files(&[], true)
+        Keymap::from_files(&[], &[], true)
     }
 
     fn key(bytes: &[u8]) -> TerminalInput {
@@ -920,6 +1079,38 @@ mod tests {
     fn inspect(keymap: &Keymap, keys: &[&[u8]]) -> LayerResult {
         let inputs: Vec<_> = keys.iter().map(|bytes| key(bytes)).collect();
         evaluate(keymap, &inputs)
+    }
+
+    #[test]
+    fn startup_file_bind_commands_override_defaults() {
+        let mut bashrc = Bashrc::default();
+        bashrc.apply_script(
+            r#"
+bind -x '"\C-t": touch /tmp/fired'
+bind '"\C-g": "macro text"'
+if [[ $- == *i* ]]; then bind -m vi-command '"\C-a": vi-thing'; fi
+bind "$var"
+"#,
+            Path::new("/home/user/.bashrc"),
+        );
+        let keymap = Keymap::from_files(&bashrc.effective(bashrc.vi_mode()), &[], true);
+        let result = inspect(&keymap, &[&[0x14]]);
+        assert_eq!(result.summary, "shell command (bind -x): touch /tmp/fired");
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+        assert_eq!(
+            inspect(&keymap, &[&[0x07]]).summary,
+            "bound to macro macro text"
+        );
+        assert_eq!(
+            inspect(&keymap, &[&[0x01]]).summary,
+            "bound to beginning-of-line"
+        );
+
+        let mut vi = Bashrc::default();
+        vi.apply_script("set -o vi\nbind '\"\\C-t\": x'", Path::new("/r/.bashrc"));
+        assert!(vi.vi_mode());
+        assert_eq!(vi.effective(true).len(), 1);
+        assert!(vi.effective(false).is_empty());
     }
 
     #[test]
@@ -1187,7 +1378,7 @@ mod tests {
 
         let mut entries = Vec::new();
         inputrc_entries_in_path(&root, 0, &mut entries);
-        let keymap = Keymap::from_files(&entries, true);
+        let keymap = Keymap::from_files(&[], &entries, true);
         let result = inspect(&keymap, &[&[0x06]]);
         assert_eq!(result.summary, "bound to local");
         assert_eq!(result.outcome, Outcome::HandledUncertain);

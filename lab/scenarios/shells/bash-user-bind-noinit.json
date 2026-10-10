@@ -1,0 +1,45 @@
+{
+  "id": "bash-user-bind-noinit",
+  "description": "a `bind -x` on ctrl+t in ~/.bashrc fires",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "bind -x '\"\\C-t\": touch /tmp/fired'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Bash / Readline",
+    "run": "pty",
+    "summary": "touch /tmp/fired",
+    "accept": [
+      "handled-uncertain"
+    ]
+  }
+}

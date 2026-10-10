@@ -1,0 +1,46 @@
+{
+  "id": "bash-default-transpose-init",
+  "description": "readline's ctrl+t (transpose-chars) edits the line",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "eval \"$(whykey shell-init bash)\""
+    ]
+  },
+  "pty": {
+    "command": [
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo ab"
+    },
+    {
+      "type": "\\x14"
+    },
+    {
+      "type": " > /tmp/effect\\r"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/effect",
+      "equals": "ba"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Bash / Readline",
+    "run": "pty",
+    "summary": "bound to transpose-chars"
+  }
+}

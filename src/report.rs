@@ -111,19 +111,23 @@ fn render_json_for_operation(
         return render_json_v2(key, layers, observed, operation);
     }
     let observed_v1 = observed.and_then(observation_value_v1).map(|mut val| {
+        // A key that never arrived postdates schema v1's disposition-free
+        // shape; without its disposition the record would read as a press.
+        let not_delivered = observed.is_some_and(|observation| {
+            observation.disposition == crate::listen::CaptureDisposition::NotDelivered
+        });
         if let serde_json::Value::Object(map) = &mut val {
-            map.remove("disposition");
+            if !not_delivered {
+                map.remove("disposition");
+            }
         }
         val
     });
     serde_json::to_string_pretty(&JsonReport {
         schema_version: 1,
         key,
-        key_display: key.to_string(),
-        confidence: confidence_label(
-            layers,
-            observed.is_some_and(|observation| observation.source.confirms_terminal()),
-        ),
+        key_display: observed_key_display(key),
+        confidence: confidence_label(layers, observation_confirmed(observed)),
         observed: observed_v1,
         layers,
     })
@@ -148,13 +152,10 @@ pub fn render_ndjson(
         input: NdjsonInput {
             kind: "key",
             key,
-            key_display: key.to_string(),
+            key_display: observed_key_display(key),
         },
         assessment: NdjsonAssessment {
-            confidence: confidence_label(
-                layers,
-                observed.is_some_and(|observation| observation.source.confirms_terminal()),
-            ),
+            confidence: confidence_label(layers, observation_confirmed(observed)),
             terminal_reached: observed
                 .is_some_and(|observation| observation.source.confirms_terminal()),
         },
@@ -195,12 +196,12 @@ fn render_json_v2(
         "input": {
             "kind": "key",
             "key": key,
-            "key_display": key.to_string(),
+            "key_display": observed_key_display(key),
         },
         "assessment": {
             "confidence": confidence_label(
                 layers,
-                observed.is_some_and(|observation| observation.source.confirms_terminal()),
+                observation_confirmed(observed),
             ),
             "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
         },
@@ -261,7 +262,58 @@ pub fn render_observed_with_options(
     layers: &[LayerResult],
     options: RenderOptions,
 ) -> String {
+    if observed.disposition == crate::listen::CaptureDisposition::NotDelivered {
+        return render_not_delivered(observed, options);
+    }
     render_inner(&observed.combo, layers, Some(observed), options, true)
+}
+
+/// Modifiers reached the observation point but the key pressed with them
+/// did not. There is no key to route through the layers, so the report is
+/// the observation itself.
+fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> String {
+    let modifiers = style::human_modifiers(observed.combo.modmask()).join("+");
+    let mut output = String::new();
+    output.push_str(&options.bold(format!("{modifiers}+<key not delivered>")));
+    output.push_str(&options.accent(" · Listen"));
+    output.push_str("\n\n");
+    let diagnosis = format!(
+        "A key pressed with {modifiers} did not reach the window: the compositor/desktop or an input method consumed it."
+    );
+    for line in style::wrap_hanging(&diagnosis, options.width, "", "  ") {
+        output.push_str(&options.bold(line));
+        output.push('\n');
+    }
+    let observed_line = format!(
+        "Observed via {} (key not delivered).",
+        observed.source.label()
+    );
+    for line in style::wrap_hanging(&observed_line, options.width, "", "  ") {
+        output.push_str(&options.muted(line));
+        output.push('\n');
+    }
+    output.push('\n');
+    output.push_str(&options.accent("Effect"));
+    output.push('\n');
+    let effect = format!(
+        "Only modifier changes reached the focused probe window; the key pressed with {modifiers} never arrived. Pressing and releasing {modifiers} alone, without another key, looks the same."
+    );
+    for line in style::wrap_hanging(&effect, options.width, "  ", "  ") {
+        output.push_str(&line);
+        output.push('\n');
+    }
+    output.push('\n');
+    output.push_str(&options.accent("Next"));
+    output.push('\n');
+    let next = format!(
+        "Run `whykey inspect {}+<key>` to see which layer is configured to take it.",
+        modifiers.to_ascii_lowercase()
+    );
+    for line in style::wrap_hanging(&next, options.width, "  ", "  ") {
+        output.push_str(&line);
+        output.push('\n');
+    }
+    output
 }
 
 /// Render an inspection where each step is analyzed independently.
@@ -392,6 +444,7 @@ fn render_inner(
             crate::listen::CaptureDisposition::Suppressed => "suppressed",
             crate::listen::CaptureDisposition::PassedThrough => "pass-through",
             crate::listen::CaptureDisposition::ObservedOnly => "observe-only",
+            crate::listen::CaptureDisposition::NotDelivered => "key not delivered",
         };
         let observed_line = format!(
             "Observed via {} ({}).",
@@ -487,6 +540,12 @@ fn diagnosis_text(
     conclusion: &Conclusion,
 ) -> String {
     if let Some(observation) = observation {
+        if observation.source.proves_compositor_delivery() {
+            return format!(
+                "{} reached the focused probe window: the compositor/desktop and any input method delivered it.",
+                style::human_key(key)
+            );
+        }
         if matches!(
             observation.disposition,
             crate::listen::CaptureDisposition::Suppressed
@@ -594,10 +653,17 @@ fn diagnosis_text(
         Conclusion::PossibleUnresolvedMatch { layer, summary, .. } => {
             format!("{layer} may handle this: {summary}.")
         }
-        Conclusion::HandledAndForwarded { layers, uncertain, .. } => {
+        Conclusion::HandledAndForwarded {
+            layers,
+            uncertain,
+            forwarding_unknown,
+            ..
+        } => {
             let names = layers.join(", ");
-            if *uncertain {
+            if *forwarding_unknown {
                 format!("{names} has a matching binding; forwarding is unknown.")
+            } else if *uncertain {
+                format!("{names} handles the shortcut and passes it on; other layers are uncertain.")
             } else {
                 format!("{names} has a matching binding and is configured to forward it.")
             }
@@ -686,10 +752,16 @@ fn effect_text(
                     );
                 }
             }
+            crate::listen::CaptureDisposition::NotDelivered => {
+                return "Only modifier changes reached the focused probe window; the key pressed with them never arrived.".into();
+            }
             crate::listen::CaptureDisposition::ObservedOnly => {
                 if observation.source.confirms_terminal() {
                     return "The event reached the terminal, so earlier forwarding is confirmed."
                         .into();
+                }
+                if observation.source.proves_compositor_delivery() {
+                    return "The key reached whykey's focused probe window, so every layer above a focused client (remappers, compositor/desktop, input method) passed it on. Layers below are shown for your usual focused application.".into();
                 }
                 if observation.source.proves_compositor_receipt() {
                     let backend = observation
@@ -755,9 +827,18 @@ fn effect_text(
         Conclusion::HandledAndForwarded {
             layers,
             uncertain: true,
+            forwarding_unknown: true,
             ..
         } => format!(
             "The shortcut matches a binding in {}; whether it is passed on and handled later depends on uncertain layers.",
+            human_list(layers, "and")
+        ),
+        Conclusion::HandledAndForwarded {
+            layers,
+            uncertain: true,
+            ..
+        } => format!(
+            "{} handles the shortcut and passes it to the next layer; what other layers do with it is uncertain.",
             human_list(layers, "and")
         ),
         Conclusion::HandledAndForwarded { .. } => {
@@ -1488,6 +1569,9 @@ pub enum Conclusion {
     HandledAndForwarded {
         layers: Vec<&'static str>,
         uncertain: bool,
+        /// A handled layer itself could not establish whether it forwards;
+        /// otherwise the uncertainty lies downstream.
+        forwarding_unknown: bool,
         uninspected_layer: Option<&'static str>,
     },
     CouldNotInspect {
@@ -1542,6 +1626,8 @@ pub enum CapturePreamble {
     TerminalObserved,
     CompositorObserved { backend: String },
     EvdevObserved,
+    WindowObserved,
+    NotDelivered,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1611,9 +1697,14 @@ pub fn evaluate_conclusion(
                         .to_owned(),
                 });
             }
+            crate::listen::CaptureDisposition::NotDelivered => {
+                preamble = Some(CapturePreamble::NotDelivered);
+            }
             crate::listen::CaptureDisposition::ObservedOnly => {
                 preamble = if observation.source.confirms_terminal() {
                     Some(CapturePreamble::TerminalObserved)
+                } else if observation.source.proves_compositor_delivery() {
+                    Some(CapturePreamble::WindowObserved)
                 } else if observation.source.proves_compositor_receipt() {
                     Some(CapturePreamble::CompositorObserved {
                         backend: observation
@@ -1787,6 +1878,10 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
     if !handled_layers.is_empty() {
         let names = handled_layers.iter().map(|l| l.layer).collect();
         let uncertain = !terminal_observed && has_uncertain_layer(layers);
+        let forwarding_unknown = uncertain
+            && handled_layers
+                .iter()
+                .any(|layer| layer.propagation() != Propagation::Continues);
         let uninspected_layer = layers
             .iter()
             .find(|l| l.status() == LayerStatus::Unavailable)
@@ -1794,6 +1889,7 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
         return Conclusion::HandledAndForwarded {
             layers: names,
             uncertain,
+            forwarding_unknown,
             uninspected_layer,
         };
     }
@@ -1866,6 +1962,25 @@ fn prior_uncertainty(layers: &[LayerResult]) -> bool {
 
 fn has_uncertain_layer(layers: &[LayerResult]) -> bool {
     layers.iter().any(is_uncertain)
+}
+
+/// A combination whose key never arrived displays its modifiers with the
+/// `<key not delivered>` placeholder instead of a dangling `+`.
+fn observed_key_display(key: &KeyCombo) -> String {
+    if key.key().is_empty() {
+        format!("{key}<key not delivered>")
+    } else {
+        key.to_string()
+    }
+}
+
+/// Whether the observation itself settles the outcome: the key reached the
+/// terminal, or it demonstrably never reached the probe window.
+fn observation_confirmed(observed: Option<&ObservedKey>) -> bool {
+    observed.is_some_and(|observation| {
+        observation.source.confirms_terminal()
+            || observation.disposition == crate::listen::CaptureDisposition::NotDelivered
+    })
 }
 
 fn confidence_label(layers: &[LayerResult], observed: bool) -> &'static str {
@@ -2123,7 +2238,9 @@ mod tests {
 
         let output = render(&key, &layers, false);
 
-        assert!(output.contains("Ghostty has a matching binding; forwarding is unknown."));
+        assert!(output.contains(
+            "Ghostty handles the shortcut and passes it on; other layers are uncertain."
+        ));
         assert!(output.contains("What remains uncertain"));
     }
 

@@ -9,14 +9,18 @@ use super::tiling::Family;
 /// Read-only Sway compositor adapter.
 pub struct Sway;
 
-/// Sway forwards the press of a `--release` binding to the focused client
-/// (`handle_key_event` in sway/input/keyboard.c only marks the event handled
-/// when the held binding runs on release).
+/// Sway delivers both the press and the release of a `--release` binding to
+/// the focused client and runs the command on release (`handle_key_event` in
+/// sway/input/keyboard.c only marks the event handled when the held binding
+/// runs on release). Lab-verified with sway 1.11 headless, wtype and a
+/// focused wev window: wev logged `p` pressed and released while
+/// `bindsym --release Mod4+p` fired.
 const FAMILY: Family = Family {
     layer: "Sway",
     source: "Sway",
     msg: "swaymsg",
     msg_args: &["-r"],
+    config_raw_args: &[],
     release_press_forwarded: Some(true),
     config_candidates,
 };

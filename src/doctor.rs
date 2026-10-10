@@ -102,11 +102,12 @@ impl EvdevScan {
     }
 
     /// The step that would make `--evdev` work, or `None` when it already can.
+    /// For unreadable keyboards, [`evdev_acl_command`] names the exact nodes.
     pub const fn next_step(self) -> Option<&'static str> {
         match self {
             Self::KeyboardDevices { readable: true } => None,
             Self::KeyboardDevices { readable: false } => Some(
-                "grant read access to /dev/input/event* (usually the input group) before using --evdev",
+                "grant your user temporary read access to the keyboard event devices with `sudo setfacl -m u:$USER:r /dev/input/eventN`; joining the input group instead grants permanent access to every input device",
             ),
             Self::InputDirectoryDenied => {
                 Some("grant read access to /dev/input and its event devices before using --evdev")
@@ -116,6 +117,25 @@ impl EvdevScan {
             ),
         }
     }
+}
+
+/// A least-privilege, temporary grant for the keyboards whykey found but
+/// cannot open: a read ACL for the current user on exactly those nodes.
+/// Device nodes live on devtmpfs, so the ACL disappears when the device is
+/// replugged or the system reboots. `None` when no keyboard is unreadable.
+pub fn evdev_acl_command(devices: &[crate::listen::EvdevDeviceInfo]) -> Option<String> {
+    let nodes = devices
+        .iter()
+        .filter(|device| device.keyboard == Some(true) && !device.readable)
+        .map(|device| format!("'{}'", device.path.replace('\'', r"'\''")))
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
+        return None;
+    }
+    let nodes = nodes.join(" ");
+    Some(format!(
+        "for temporary read access to the detected keyboards run `sudo setfacl -m u:\"$USER\":r {nodes}`; the grant is lost when the device is replugged or the system reboots (undo it sooner with `sudo setfacl -x u:\"$USER\" {nodes}`)"
+    ))
 }
 
 pub const fn api_unavailable() -> Cause {
@@ -180,5 +200,34 @@ mod tests {
             Cause::PermissionMissing
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn acl_command_names_only_unreadable_keyboards_and_is_temporary() {
+        let device = |path: &str, keyboard, readable| crate::listen::EvdevDeviceInfo {
+            path: path.into(),
+            name: "kbd".into(),
+            keyboard,
+            readable,
+            error: None,
+        };
+        assert_eq!(
+            evdev_acl_command(&[device("/dev/input/event3", Some(true), true)]),
+            None
+        );
+        let command = evdev_acl_command(&[
+            device("/dev/input/event3", Some(true), false),
+            device("/dev/input/event4", None, false),
+            device("/dev/input/event5", Some(true), true),
+            device("/dev/input/it's", Some(true), false),
+        ])
+        .unwrap();
+        assert!(
+            command.contains(
+                "`sudo setfacl -m u:\"$USER\":r '/dev/input/event3' '/dev/input/it'\\''s'`"
+            )
+        );
+        assert!(!command.contains("event4") && !command.contains("event5"));
+        assert!(command.contains("replugged") && command.contains("reboots"));
     }
 }

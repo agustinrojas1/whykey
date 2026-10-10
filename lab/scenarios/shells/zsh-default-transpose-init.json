@@ -1,0 +1,46 @@
+{
+  "id": "zsh-default-transpose-init",
+  "description": "zsh's own ctrl+t (transpose-chars) edits the line; $SHELL is bash",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.zshrc": [
+      "PS1='%% '",
+      "eval \"$(whykey shell-init zsh)\""
+    ]
+  },
+  "pty": {
+    "command": [
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo ab"
+    },
+    {
+      "type": "\\x14"
+    },
+    {
+      "type": " > /tmp/effect\\r"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/effect",
+      "equals": "ba"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Zsh / ZLE",
+    "run": "pty",
+    "summary": "bound to transpose-chars"
+  }
+}

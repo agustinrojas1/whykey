@@ -1,0 +1,22 @@
+{
+  "id": "sway-variable-mod",
+  "description": "bindings written with $mod and other variables fire",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "set $mod Mod4",
+      "set $key t",
+      "set $marker /tmp/fired",
+      "bindsym $mod+$key exec touch $marker"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Sway",
+    "env": {"XDG_CURRENT_DESKTOP": "sway", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "id": "screen-prefix-fish",
+  "description": "GNU Screen's escape C-a is consumed before a fish binding on ctrl-a (C-a t runs the screen bind)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.screenrc": [
+      "startup_message off",
+      "bind t exec touch /tmp/fired"
+    ],
+    "/root/.config/fish/config.fish": [
+      "function fish_prompt; echo -n '> '; end",
+      "bind ctrl-a 'touch /tmp/reached-shell'",
+      "whykey shell-init fish | source"
+    ]
+  },
+  "pty": {
+    "command": [
+      "screen",
+      "-S",
+      "lab",
+      "fish",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x01"
+    },
+    {
+      "type": "t"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+a"
+    ],
+    "layer": "GNU Screen",
+    "run": "pty"
+  }
+}

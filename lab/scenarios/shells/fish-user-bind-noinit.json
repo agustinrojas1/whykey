@@ -1,0 +1,45 @@
+{
+  "id": "fish-user-bind-noinit",
+  "description": "a fish `bind \\ct` in config.fish fires and shadows the preset",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/fish/config.fish": [
+      "function fish_prompt; echo -n '> '; end",
+      "bind \\ct 'touch /tmp/fired'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "fish",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Fish",
+    "run": "pty",
+    "summary": "bound to touch /tmp/fired",
+    "accept": [
+      "handled-uncertain"
+    ]
+  }
+}

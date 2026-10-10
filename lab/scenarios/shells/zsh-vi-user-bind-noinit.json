@@ -1,0 +1,48 @@
+{
+  "id": "zsh-vi-user-bind-noinit",
+  "description": "after `bindkey -v`, a ctrl+t binding lands in viins and fires at the prompt",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.zshrc": [
+      "PS1='%% '",
+      "bindkey -v",
+      "lab-fire() { touch /tmp/fired }",
+      "zle -N lab-fire",
+      "bindkey '^T' lab-fire"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Zsh / ZLE",
+    "run": "pty",
+    "summary": "bound to lab-fire",
+    "accept": [
+      "handled-uncertain"
+    ]
+  }
+}

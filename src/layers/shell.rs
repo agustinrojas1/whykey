@@ -1,76 +1,54 @@
+//! Shell line editors: Bash/Readline, Zsh/ZLE and Fish.
+//!
+//! The shell that receives a key at its prompt is the interactive shell that
+//! runs whykey, so it is found from the process tree rather than `$SHELL`
+//! (the login shell, which is often a different program). Bindings come from
+//! that shell's own dump when `whykey shell-init` supplied one; otherwise
+//! from the installed shell's built-in defaults plus a static read of its
+//! startup files, reported as unverified.
+
+mod fish;
+mod zle;
+
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::layers::{InputConfidence, LayerId, LayerResult, Outcome, TerminalInput, readline};
+use crate::layers::{
+    BindingEvidence, BindingScope, LayerId, LayerResult, Outcome, TerminalInput, UncertaintyReason,
+    readline,
+};
 
 pub fn inspect_input(input: &TerminalInput) -> LayerResult {
     inspect_sequence(std::slice::from_ref(input), None)
 }
 
 /// Inspect the shell associated with a caller-selected process. This avoids
-/// using whykey's own `SHELL` environment when `inspect --pid` or
-/// `inspect --focused` targets a different terminal session.
+/// using whykey's own shell when `inspect --pid` or `inspect --focused`
+/// targets a different terminal session.
 pub fn inspect_input_for_pid(input: &TerminalInput, target_pid: u32) -> LayerResult {
     inspect_sequence(std::slice::from_ref(input), Some(target_pid))
 }
 
 /// Evaluate the terminal inputs of consecutive key presses that reached the
-/// shell, in order, and describe what the last one does. Bash replays them
-/// through Readline's keymap (prefix keys such as `\C-x` stay pending), so
-/// `[\x18], [\x05]` resolves to `edit-and-execute-command`. `target_pid`
-/// selects that process's ancestor shell instead of whykey's own `SHELL`.
+/// shell, in order, and describe what the last one does. Each line editor
+/// replays them through its keymap (prefix keys such as `\C-x` stay
+/// pending), so `[\x18], [\x05]` resolves to `edit-and-execute-command` in
+/// Bash. `target_pid` selects that process's ancestor shell instead of the
+/// shell running whykey.
 pub fn inspect_sequence(inputs: &[TerminalInput], target_pid: Option<u32>) -> LayerResult {
-    let shell = target_pid.and_then(ancestor_shell).or_else(shell_name);
-    match shell.as_deref() {
-        Some("bash") => readline::Readline.inspect_sequence(inputs),
-        Some("zsh") => inspect_steps(inputs, inspect_zsh_bytes),
-        Some("fish") => inspect_steps(inputs, inspect_fish_bytes),
-        Some(shell) => unsupported(shell),
-        None => unsupported("unknown shell"),
-    }
-}
-
-/// ZLE and Fish bindings are matched against the whole byte sequence first
-/// (`^X^E`), then against the last key alone.
-fn inspect_steps(
-    inputs: &[TerminalInput],
-    inspect: fn(&TerminalInput) -> LayerResult,
-) -> LayerResult {
-    match inputs {
-        [] => inspect_unknown(),
-        [input] => inspect(input),
-        [.., last] => {
-            let combined = inspect(&concatenate(inputs));
-            if combined.outcome == Outcome::Pass {
-                inspect(last)
-            } else {
-                combined
-            }
-        }
-    }
-}
-
-fn concatenate(inputs: &[TerminalInput]) -> TerminalInput {
-    let confidence = if inputs
-        .iter()
-        .any(|input| input.confidence == InputConfidence::Predicted)
-    {
-        InputConfidence::Predicted
-    } else {
-        inputs[0].confidence
+    let shell = match target_pid {
+        Some(pid) => ancestor_shell(pid).or_else(running_shell),
+        None => running_shell(),
     };
-    TerminalInput {
-        bytes: inputs
-            .iter()
-            .flat_map(|input| input.bytes.iter().copied())
-            .collect(),
-        description: inputs
-            .iter()
-            .map(|input| input.description.as_str())
-            .collect::<Vec<_>>()
-            .join(" + "),
-        confidence,
+    let Some(shell) = shell else {
+        return unsupported("unknown shell");
+    };
+    match shell.name.as_str() {
+        "bash" => readline::Readline.inspect_sequence(inputs),
+        "zsh" => zle::inspect(inputs, shell.exe.as_deref()),
+        "fish" => fish::inspect(inputs, shell.exe.as_deref()),
+        other => unsupported(other),
     }
 }
 
@@ -96,727 +74,587 @@ fn unsupported(shell: &str) -> LayerResult {
     )
 }
 
-fn shell_name() -> Option<String> {
-    if env::var_os("WHYKEY_READLINE_BINDINGS").is_some()
+/// A shell process whose line editor receives keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellProcess {
+    /// `bash`, `zsh`, `fish`, or the basename of `$SHELL` for other shells.
+    pub name: String,
+    /// The running executable, so defaults are read from the same build.
+    pub exe: Option<PathBuf>,
+}
+
+/// The shell whose prompt receives keys typed in this terminal: the shell
+/// that supplied a shell-init snapshot, else the nearest interactive shell
+/// among whykey's ancestors (reached only through other shells, e.g. an
+/// `sh -c` wrapper), else `$SHELL`.
+pub fn running_shell() -> Option<ShellProcess> {
+    let snapshot = if env::var_os("WHYKEY_READLINE_BINDINGS").is_some()
         || env::var_os("WHYKEY_READLINE_MACROS").is_some()
         || env::var_os("WHYKEY_READLINE_SHELL_BINDINGS").is_some()
     {
-        return Some("bash".into());
+        Some("bash")
+    } else if env::var_os("WHYKEY_ZLE_BINDINGS").is_some() {
+        Some("zsh")
+    } else if env::var_os("WHYKEY_FISH_BINDINGS").is_some() {
+        Some("fish")
+    } else {
+        None
+    };
+    let parent = parent_shell();
+    if let Some(name) = snapshot {
+        let exe = parent
+            .filter(|shell| shell.name == name)
+            .and_then(|shell| shell.exe);
+        return Some(ShellProcess {
+            name: name.into(),
+            exe,
+        });
     }
-    if env::var_os("WHYKEY_ZLE_BINDINGS").is_some() {
-        return Some("zsh".into());
-    }
-    if env::var_os("WHYKEY_FISH_BINDINGS").is_some() {
-        return Some("fish".into());
-    }
-    env::var_os("SHELL")
-        .and_then(|shell| PathBuf::from(shell).file_name().map(|name| name.to_owned()))
-        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+    parent.or_else(login_shell)
 }
 
-fn ancestor_shell(start_pid: u32) -> Option<String> {
-    let mut pid = start_pid;
+fn login_shell() -> Option<ShellProcess> {
+    let shell = env::var_os("SHELL")?;
+    let name = Path::new(&shell)
+        .file_name()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    Some(ShellProcess { name, exe: None })
+}
+
+/// Walk up from whykey's parent while the processes are shells; the first
+/// interactive one is the line editor. A non-shell ancestor (a test runner,
+/// an editor, a launcher) ends the walk: keys typed there do not reach a
+/// shell prompt that this process can identify.
+fn parent_shell() -> Option<ShellProcess> {
+    let mut pid = std::os::unix::process::parent_id();
     for _ in 0..16 {
-        let command = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-        let name = command
-            .split(|byte| *byte == 0)
-            .find(|part| !part.is_empty())
-            .and_then(|part| std::str::from_utf8(part).ok())
-            .and_then(|part| PathBuf::from(part).file_name().map(|name| name.to_owned()))
-            .map(|name| name.to_string_lossy().to_ascii_lowercase());
-        if let Some(name) = name.filter(|name| matches!(name.as_str(), "bash" | "zsh" | "fish")) {
-            return Some(name);
+        let process = ProcessInfo::read(pid)?;
+        let name = process.shell_name()?;
+        if process.interactive() {
+            return Some(ShellProcess {
+                name: name.into(),
+                exe: process.exe(),
+            });
         }
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        let close = stat.rfind(") ")?;
-        let fields: Vec<_> = stat[close + 2..].split_whitespace().collect();
-        let parent = fields.get(1)?.parse::<u32>().ok()?;
-        if parent == 0 || parent == pid {
-            break;
-        }
-        pid = parent;
+        pid = process.parent?;
     }
     None
 }
 
-fn inspect_zsh_bytes(input: &TerminalInput) -> LayerResult {
-    if let Some((sequence, default_binding)) = zsh_known_binding(&input.bytes) {
-        return inspect_configured_shell_binding("Zsh / ZLE", sequence, default_binding, input);
-    }
-    let sequence = shell_sequence_literal(&input.bytes);
-    if let Some(binding) = zsh_binding(&sequence) {
-        return inspect_dynamic_shell_binding("Zsh / ZLE", &sequence, &binding, input);
-    }
-    no_shell_binding("Zsh / ZLE", input)
-}
-
-fn inspect_fish_bytes(input: &TerminalInput) -> LayerResult {
-    if let Some((sequence, default_binding)) = fish_known_binding(&input.bytes) {
-        return inspect_configured_shell_binding("Fish", sequence, default_binding, input);
-    }
-    let sequence = shell_sequence_literal(&input.bytes);
-    if let Some(binding) = fish_binding(&sequence) {
-        return inspect_dynamic_shell_binding("Fish", &sequence, &binding, input);
-    }
-    let mut result = no_shell_binding("Fish", input);
-    append_fish_mode_detail(&mut result.details);
-    result
-}
-
-fn inspect_configured_shell_binding(
-    layer: &'static str,
-    sequence: &str,
-    default_binding: &'static str,
-    input: &TerminalInput,
-) -> LayerResult {
-    let binding = match layer {
-        "Zsh / ZLE" => zsh_binding(sequence),
-        "Fish" => fish_binding(sequence),
-        _ => None,
-    };
-    let configured = binding.is_some();
-    let binding = binding.unwrap_or_else(|| default_binding.to_owned());
-    let source = if runtime_shell_snapshot(layer) {
-        "binding source: live shell snapshot"
-    } else if configured {
-        "binding source: shell configuration"
-    } else {
-        "binding source: common shell default (inferred)"
-    };
-    let inferred_default = !configured && !runtime_shell_snapshot(layer);
-    let result = LayerResult::new(
-        layer,
-        LayerId::Shell,
-        if configured {
-            Outcome::Consumed
-        } else {
-            Outcome::Unknown
-        },
-        if configured {
-            format!("bound to {binding}")
-        } else {
-            format!("common default likely binds to {binding}")
-        },
-        {
-            let mut details = vec![
-                format!(
-                    "sequence: {}",
-                    crate::layers::format_bytes(sequence.as_bytes())
-                ),
-                format!("input: {}", input.display_bytes()),
-                source.into(),
-            ];
-            if layer == "Fish" {
-                append_fish_mode_detail(&mut details);
+/// The nearest interactive shell at or above `start_pid`, skipping any
+/// non-shell processes in between (`inspect --pid`).
+fn ancestor_shell(start_pid: u32) -> Option<ShellProcess> {
+    let mut pid = start_pid;
+    for _ in 0..16 {
+        let process = ProcessInfo::read(pid)?;
+        if let Some(name) = process.shell_name() {
+            if process.interactive() {
+                return Some(ShellProcess {
+                    name: name.into(),
+                    exe: process.exe(),
+                });
             }
-            details
-        },
-    );
-    if inferred_default {
-        result.with_binding(
-            crate::layers::BindingEvidence::action(
-                default_binding,
-                crate::layers::BindingScope::Unknown,
-                None,
-            )
-            .with_uncertainty(crate::layers::UncertaintyReason::UnverifiedDefault),
-        )
-    } else {
-        result
+        }
+        pid = process.parent?;
+    }
+    None
+}
+
+struct ProcessInfo {
+    pid: u32,
+    argv: Vec<String>,
+    parent: Option<u32>,
+}
+
+impl ProcessInfo {
+    fn read(pid: u32) -> Option<Self> {
+        let command = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let argv = command
+            .split(|byte| *byte == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| String::from_utf8_lossy(part).into_owned())
+            .collect();
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let close = stat.rfind(") ")?;
+        let parent = stat[close + 2..]
+            .split_whitespace()
+            .nth(1)
+            .and_then(|field| field.parse::<u32>().ok())
+            .filter(|parent| *parent != 0 && *parent != pid);
+        Some(Self { pid, argv, parent })
+    }
+
+    /// Login shells run as `-zsh`; the basename names the program.
+    fn shell_name(&self) -> Option<&'static str> {
+        let program = self.argv.first()?;
+        let name = Path::new(program.trim_start_matches('-'))
+            .file_name()?
+            .to_str()?;
+        ["bash", "zsh", "fish"]
+            .into_iter()
+            .find(|shell| *shell == name)
+    }
+
+    /// A shell running `-c COMMAND` or a script file never shows a prompt.
+    fn interactive(&self) -> bool {
+        shell_reads_terminal(&self.argv[1..])
+    }
+
+    fn exe(&self) -> Option<PathBuf> {
+        fs::read_link(format!("/proc/{}/exe", self.pid)).ok()
     }
 }
 
-fn runtime_shell_snapshot(layer: &str) -> bool {
-    match layer {
-        "Zsh / ZLE" => env::var_os("WHYKEY_ZLE_BINDINGS").is_some(),
-        "Fish" => env::var_os("WHYKEY_FISH_BINDINGS").is_some(),
-        _ => false,
+/// Options of bash, zsh and fish that consume the following argument.
+const OPTIONS_WITH_VALUE: &[&str] = &[
+    "-o",
+    "+o",
+    "-O",
+    "+O",
+    "--rcfile",
+    "--init-file",
+    "-C",
+    "--init-command",
+    "-d",
+    "--debug",
+    "--debug-output",
+    "-p",
+    "--profile",
+    "--profile-startup",
+    "--features",
+];
+
+fn shell_reads_terminal(arguments: &[String]) -> bool {
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let argument = argument.as_str();
+        if argument == "--command" || argument.starts_with("--command=") {
+            return false;
+        }
+        if OPTIONS_WITH_VALUE.contains(&argument) {
+            arguments.next();
+            continue;
+        }
+        if argument == "-" || argument == "--" {
+            // Options end; anything after is a script operand.
+            return arguments.next().is_none();
+        }
+        if let Some(cluster) = argument.strip_prefix('-') {
+            if !cluster.starts_with('-') && cluster.contains('c') {
+                return false;
+            }
+            continue;
+        }
+        if argument.starts_with('+') {
+            continue;
+        }
+        return false;
     }
+    true
 }
 
-fn append_fish_mode_detail(details: &mut Vec<String>) {
-    if let Some(mode) = env::var_os("WHYKEY_FISH_MODE") {
-        details.push(format!("active Fish bind mode: {}", mode.to_string_lossy()));
-    } else if env::var_os("WHYKEY_FISH_BINDINGS").is_some() {
-        details.push("active Fish bind mode is unknown".into());
-    }
+/// Whether a line-editor keymap is the running shell's own dump or a
+/// reconstruction from defaults and startup files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Origin {
+    Live,
+    Static,
 }
 
-fn inspect_dynamic_shell_binding(
-    layer: &'static str,
-    sequence: &str,
-    binding: &str,
-    input: &TerminalInput,
-) -> LayerResult {
-    let source = if runtime_shell_snapshot(layer) {
-        "binding source: live shell snapshot"
-    } else {
-        "binding source: shell configuration"
+/// A line editor's verdict before origin-specific confidence is applied.
+struct Verdict {
+    outcome: Outcome,
+    summary: String,
+    /// The binding the verdict rests on, for unverified binding evidence.
+    action: Option<String>,
+    details: Vec<String>,
+}
+
+/// Live dumps are definitive. A static reconstruction cannot see plugins,
+/// sourced files or conditionals, so a binding it finds is unverified and an
+/// absent binding only means "probably unbound".
+fn finish(layer: &'static str, origin: &Origin, init_hint: &str, verdict: Verdict) -> LayerResult {
+    let Verdict {
+        outcome,
+        summary,
+        action,
+        mut details,
+    } = verdict;
+    if *origin == Origin::Live {
+        return LayerResult::new(layer, LayerId::Shell, outcome, summary, details);
+    }
+    details.push(init_hint.into());
+    let outcome = match outcome {
+        Outcome::Consumed => Outcome::HandledUncertain,
+        Outcome::Pass => Outcome::UncertainContinues,
+        other => other,
     };
-    let mut details = vec![
-        format!(
-            "sequence: {}",
-            crate::layers::format_bytes(sequence.as_bytes())
+    let result = LayerResult::new(layer, LayerId::Shell, outcome, summary, details);
+    match action {
+        Some(action) => result.with_binding(
+            BindingEvidence::action(action, BindingScope::Unknown, None)
+                .with_uncertainty(UncertaintyReason::UnverifiedDefault),
         ),
-        format!("input: {}", input.display_bytes()),
-        source.into(),
-    ];
-    if layer == "Fish" {
-        append_fish_mode_detail(&mut details);
+        None => result,
     }
-    LayerResult::new(
-        layer,
-        LayerId::Shell,
-        Outcome::Consumed,
-        format!("bound to {binding}"),
-        details,
-    )
 }
 
-fn no_shell_binding(layer: &'static str, input: &TerminalInput) -> LayerResult {
-    LayerResult::new(
-        layer,
-        LayerId::Shell,
-        Outcome::Pass,
-        "no known shell binding",
-        vec![format!("input: {}", input.display_bytes())],
-    )
+/// A shell word from a startup file or binding dump, quotes removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Word {
+    pub(crate) text: String,
+    /// Contains an expansion (`$var`, command substitution, glob) that a
+    /// static reading cannot resolve.
+    pub(crate) expands: bool,
 }
 
-fn shell_sequence_literal(bytes: &[u8]) -> String {
-    let mut sequence = String::new();
-    for byte in bytes {
-        match byte {
-            0x1b => sequence.push_str("\\e"),
-            0x20..=0x7e if *byte != b'\\' && *byte != b'\'' && *byte != b'"' => {
-                sequence.push(*byte as char)
-            }
-            byte => sequence.push_str(&format!("\\x{byte:02x}")),
+/// Collects words into simple commands while a tokenizer scans source.
+#[derive(Default)]
+struct Splitter {
+    commands: Vec<Vec<Word>>,
+    words: Vec<Word>,
+    word: String,
+    expands: bool,
+    started: bool,
+}
+
+impl Splitter {
+    fn push(&mut self, character: char) {
+        self.started = true;
+        self.word.push(character);
+    }
+
+    fn end_word(&mut self) {
+        if self.started {
+            self.words.push(Word {
+                text: std::mem::take(&mut self.word),
+                expands: self.expands,
+            });
+        }
+        self.started = false;
+        self.expands = false;
+    }
+
+    fn end_command(&mut self) {
+        self.end_word();
+        if !self.words.is_empty() {
+            self.commands.push(std::mem::take(&mut self.words));
         }
     }
-    sequence
-}
 
-fn zsh_known_binding(sequence: &[u8]) -> Option<(&'static str, &'static str)> {
-    match sequence {
-        [0x01] => Some(("\x01", "beginning-of-line")),
-        [0x02] => Some(("\x02", "backward-char")),
-        [0x04] => Some(("\x04", "delete-char")),
-        [0x05] => Some(("\x05", "end-of-line")),
-        [0x06] => Some(("\x06", "forward-char")),
-        [0x0e] => Some(("\x0e", "down-line-or-history")),
-        [0x10] => Some(("\x10", "up-line-or-history")),
-        [0x17] => Some(("\x17", "backward-kill-word")),
-        _ => None,
+    fn finish(mut self) -> Vec<Vec<Word>> {
+        self.end_command();
+        self.commands
     }
 }
 
-fn fish_known_binding(sequence: &[u8]) -> Option<(&'static str, &'static str)> {
-    zsh_known_binding(sequence)
+/// Words that may precede a command without being it.
+const RESERVED: &[&str] = &[
+    "then", "else", "do", "{", "}", "!", "(", "builtin", "command",
+];
+
+/// The command words of a simple command, past reserved words such as
+/// `then` or `builtin`.
+pub(crate) fn command_words(words: &[Word]) -> &[Word] {
+    let start = words
+        .iter()
+        .position(|word| !RESERVED.contains(&word.text.as_str()))
+        .unwrap_or(words.len());
+    &words[start..]
 }
 
-fn zsh_binding(sequence: &str) -> Option<String> {
-    if let Some(runtime) = env::var_os("WHYKEY_ZLE_BINDINGS") {
-        return find_zsh_binding(&runtime.to_string_lossy(), sequence);
-    }
-    config_binding(zsh_paths(), sequence, |line| line.contains("bindkey"))
-}
-
-fn fish_binding(sequence: &str) -> Option<String> {
-    if let Some(runtime) = env::var_os("WHYKEY_FISH_BINDINGS") {
-        let mode = env::var("WHYKEY_FISH_MODE").ok();
-        return find_fish_binding(&runtime.to_string_lossy(), sequence, mode.as_deref());
-    }
-    let mode = env::var("WHYKEY_FISH_MODE").ok();
-    fish_paths().into_iter().find_map(|path| {
-        let content = fs::read_to_string(path).ok()?;
-        // A static config has no live mode, so Fish's documented default mode
-        // is the only mode-specific binding we can safely select.
-        find_fish_binding(&content, sequence, mode.as_deref().or(Some("default")))
-    })
-}
-
-fn find_zsh_binding(content: &str, sequence: &str) -> Option<String> {
-    let active_map = zsh_active_keymap(content);
-    let mut active_binding = None;
-    let mut unqualified_binding = None;
-    for line in content.lines() {
-        let Some(line) = line.split('#').next() else {
-            continue;
-        };
-        let line = line.trim();
-        if !line.starts_with("bindkey") || line.starts_with("bindkey -A") {
-            continue;
-        }
-        let tokens = quoted_or_bare_tokens(line);
-        let (map, offset) = if tokens.get(1).is_some_and(|token| token == "-M") {
-            (tokens.get(2).cloned(), 3)
-        } else {
-            (None, 1)
-        };
-        if let Some(active_map) = active_map.as_deref() {
-            if let Some(map) = map.as_deref() {
-                if map != active_map {
-                    continue;
+/// Split zsh or Bash source into simple commands of shell words, honouring
+/// quotes (`'…'`, `"…"`, `$'…'`), backslashes, comments and the separators
+/// `;`, `&`, `|` and newlines.
+pub(crate) fn posix_commands(script: &str) -> Vec<Vec<Word>> {
+    let mut out = Splitter::default();
+    let mut chars = script.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\'' => {
+                out.started = true;
+                for quoted in chars.by_ref() {
+                    if quoted == '\'' {
+                        break;
+                    }
+                    out.push(quoted);
                 }
             }
-        }
-        let Some(raw) = tokens.get(offset) else {
-            continue;
-        };
-        if decode_shell_sequence(raw) != sequence {
-            continue;
-        }
-        let Some(action) = tokens.get(offset + 1).cloned() else {
-            continue;
-        };
-        if map.is_some() {
-            active_binding = Some(action);
-        } else {
-            unqualified_binding = Some(action);
-        }
-    }
-    active_binding.or(unqualified_binding)
-}
-
-fn find_fish_binding(content: &str, sequence: &str, active_mode: Option<&str>) -> Option<String> {
-    let mut active_binding = None;
-    let mut unqualified_binding = None;
-
-    for line in content.lines() {
-        let Some(line) = line.split('#').next() else {
-            continue;
-        };
-        let line = line.trim();
-        if line.is_empty() || !line.starts_with("bind ") {
-            continue;
-        }
-        let tokens = quoted_or_bare_tokens(line);
-        if tokens.first().map(String::as_str) != Some("bind") {
-            continue;
-        }
-        let mut mode = None;
-        for index in 1..tokens.len() {
-            let Some(token) = tokens.get(index) else {
-                continue;
-            };
-            if token == "-M" || token == "--mode" {
-                mode = tokens.get(index + 1).map(String::as_str);
+            '"' => {
+                out.started = true;
+                while let Some(quoted) = chars.next() {
+                    match quoted {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(next @ ('$' | '`' | '"' | '\\')) => out.push(next),
+                            Some('\n') => {}
+                            Some(next) => {
+                                out.push('\\');
+                                out.push(next);
+                            }
+                            None => out.push('\\'),
+                        },
+                        '$' | '`' => {
+                            out.expands = true;
+                            out.push(quoted);
+                        }
+                        other => out.push(other),
+                    }
+                }
             }
-        }
-        let Some(index) = tokens
-            .iter()
-            .position(|token| decode_fish_sequence(token) == sequence)
-        else {
-            continue;
-        };
-        let Some(action) = tokens.get(index + 1) else {
-            continue;
-        };
-
-        match (active_mode, mode) {
-            (Some(active), Some(candidate)) if candidate == active => {
-                active_binding = Some(action.clone());
+            '$' if chars.peek() == Some(&'\'') => {
+                chars.next();
+                out.started = true;
+                ansi_c_quoted(&mut chars, &mut out.word);
             }
-            (_, None) => {
-                unqualified_binding = Some(action.clone());
+            '\\' => match chars.next() {
+                Some('\n') | None => {}
+                Some(next) => out.push(next),
+            },
+            '#' if !out.started => {
+                for skipped in chars.by_ref() {
+                    if skipped == '\n' {
+                        break;
+                    }
+                }
+                out.end_command();
             }
-            _ => {}
-        }
-    }
-
-    active_binding.or(unqualified_binding)
-}
-
-fn zsh_active_keymap(content: &str) -> Option<String> {
-    let mut active_map = None;
-    for line in content.lines() {
-        let tokens = quoted_or_bare_tokens(line.trim());
-        if tokens.first().is_some_and(|token| token == "bindkey") {
-            if tokens.get(1).is_some_and(|token| token == "-A")
-                && tokens.get(3).is_some_and(|token| token == "main")
-            {
-                active_map = tokens.get(2).cloned();
-            }
-            if tokens.get(1).is_some_and(|token| token == "-e") {
-                active_map = Some("emacs".into());
-            }
-            if tokens.get(1).is_some_and(|token| token == "-v") {
-                active_map = Some("viins".into());
+            ';' | '&' | '|' | '\n' => out.end_command(),
+            ' ' | '\t' => out.end_word(),
+            other => {
+                if matches!(other, '$' | '`' | '*' | '?' | '~') {
+                    out.expands = true;
+                }
+                out.push(other);
             }
         }
     }
-    active_map
+    out.finish()
 }
 
-fn config_binding<F>(paths: Vec<PathBuf>, sequence: &str, predicate: F) -> Option<String>
-where
-    F: Fn(&str) -> bool,
-{
-    let mut binding = None;
-    for path in paths {
-        let Ok(content) = fs::read_to_string(path) else {
-            continue;
-        };
-        if let Some(value) = find_config_binding(&content, sequence, &predicate) {
-            binding = Some(value);
+/// The body of `$'…'` after the opening quote, with escapes decoded.
+fn ansi_c_quoted(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, word: &mut String) {
+    while let Some(character) = chars.next() {
+        match character {
+            '\'' => return,
+            '\\' => {
+                let Some(escape) = chars.next() else {
+                    return;
+                };
+                match escape {
+                    'e' | 'E' => word.push('\x1b'),
+                    'n' => word.push('\n'),
+                    'r' => word.push('\r'),
+                    't' => word.push('\t'),
+                    'a' => word.push('\x07'),
+                    'b' => word.push('\x08'),
+                    'f' => word.push('\x0c'),
+                    'v' => word.push('\x0b'),
+                    'x' => {
+                        let mut value = 0u32;
+                        for _ in 0..2 {
+                            match chars.peek().and_then(|digit| digit.to_digit(16)) {
+                                Some(digit) => {
+                                    value = value * 16 + digit;
+                                    chars.next();
+                                }
+                                None => break,
+                            }
+                        }
+                        word.push(char::from_u32(value).unwrap_or('\u{fffd}'));
+                    }
+                    'c' => {
+                        if let Some(next) = chars.next() {
+                            word.push(char::from(next.to_ascii_uppercase() as u8 & 0x1f));
+                        }
+                    }
+                    '0'..='7' => {
+                        let mut value = escape.to_digit(8).unwrap_or(0);
+                        for _ in 0..2 {
+                            match chars.peek().and_then(|digit| digit.to_digit(8)) {
+                                Some(digit) => {
+                                    value = value * 8 + digit;
+                                    chars.next();
+                                }
+                                None => break,
+                            }
+                        }
+                        word.push(char::from_u32(value).unwrap_or('\u{fffd}'));
+                    }
+                    other => word.push(other),
+                }
+            }
+            other => word.push(other),
         }
     }
-    binding
 }
 
-fn find_config_binding<F>(content: &str, sequence: &str, predicate: F) -> Option<String>
-where
-    F: Fn(&str) -> bool,
-{
-    content
-        .lines()
-        .filter_map(|line| {
-            let line = line.split('#').next()?.trim();
-            if !predicate(line) {
-                return None;
-            }
-            let tokens = quoted_or_bare_tokens(line);
-            let raw = tokens
-                .iter()
-                .find(|token| decode_shell_sequence(token) == sequence)?;
-            let index = tokens.iter().position(|token| token == raw)?;
-            tokens.get(index + 1).cloned()
-        })
-        .last()
-}
-
-fn zsh_paths() -> Vec<PathBuf> {
-    let Some(base) = env::var_os("ZDOTDIR")
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .filter(|home| !home.is_empty())
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(PathBuf::from))
-    else {
-        return Vec::new();
-    };
-    // zsh reads .zshenv before .zshrc; later definitions override earlier
-    // ones, so preserve that execution order when resolving a static bind.
-    vec![base.join(".zshenv"), base.join(".zshrc")]
 }
 
-fn fish_paths() -> Vec<PathBuf> {
-    crate::util::config_base()
-        .map(|base| vec![base.join("fish/config.fish")])
-        .unwrap_or_default()
+/// `~/…` for paths under `$HOME`, for compact details.
+fn display_path(path: &Path) -> String {
+    if let Some(home) = home_dir() {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
 }
 
-fn quoted_or_bare_tokens(line: &str) -> Vec<String> {
-    line.split_whitespace()
-        .map(|token| token.trim_matches(['"', '\'']).to_owned())
-        .collect()
-}
-
-fn decode_fish_sequence(value: &str) -> String {
-    let decoded = decode_shell_sequence(value);
-    if decoded != value {
-        return decoded;
-    }
-    if value.contains(',') {
-        return value
-            .split(',')
-            .map(decode_fish_sequence)
-            .collect::<String>();
-    }
-
-    let mut rest = value.to_ascii_lowercase();
-    let mut ctrl = false;
-    let mut alt = false;
-    let mut shift = false;
-    let mut super_key = false;
-    loop {
-        let (flag, prefix) = if let Some(rest) = rest.strip_prefix("ctrl-") {
-            ("ctrl", rest)
-        } else if let Some(rest) = rest.strip_prefix("alt-") {
-            ("alt", rest)
-        } else if let Some(rest) = rest.strip_prefix("shift-") {
-            ("shift", rest)
-        } else if let Some(rest) = rest.strip_prefix("super-") {
-            ("super", rest)
+/// Legacy (xterm) bytes a key press produces, the encoding zsh and Fish
+/// bindings are written against. `None` when the combination has no legacy
+/// encoding (e.g. `super-x`).
+fn legacy_key_bytes(ctrl: bool, alt: bool, shift: bool, base: &str) -> Option<Vec<u8>> {
+    let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
+    let csi = |final_byte: char| {
+        Some(if modifier == 1 {
+            format!("\x1b[{final_byte}").into_bytes()
         } else {
-            break;
-        };
-        rest = prefix.to_owned();
-        match flag {
-            "ctrl" => ctrl = true,
-            "alt" => alt = true,
-            "shift" => shift = true,
-            "super" => super_key = true,
-            _ => unreachable!(),
-        }
+            format!("\x1b[1;{modifier}{final_byte}").into_bytes()
+        })
+    };
+    let tilde = |number: u8| {
+        Some(if modifier == 1 {
+            format!("\x1b[{number}~").into_bytes()
+        } else {
+            format!("\x1b[{number};{modifier}~").into_bytes()
+        })
+    };
+    let ss3 = |final_byte: char| {
+        Some(if modifier == 1 {
+            format!("\x1bO{final_byte}").into_bytes()
+        } else {
+            format!("\x1b[1;{modifier}{final_byte}").into_bytes()
+        })
+    };
+    match base {
+        "up" => return csi('A'),
+        "down" => return csi('B'),
+        "right" => return csi('C'),
+        "left" => return csi('D'),
+        "home" => return csi('H'),
+        "end" => return csi('F'),
+        "insert" => return tilde(2),
+        "delete" => return tilde(3),
+        "pageup" => return tilde(5),
+        "pagedown" => return tilde(6),
+        "f1" => return ss3('P'),
+        "f2" => return ss3('Q'),
+        "f3" => return ss3('R'),
+        "f4" => return ss3('S'),
+        _ => {}
     }
-
-    let arrow = match rest.as_str() {
-        "up" => Some('A'),
-        "down" => Some('B'),
-        "right" => Some('C'),
-        "left" => Some('D'),
+    if let Some(number) = base.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+        let code = match number {
+            5 => 15,
+            6..=10 => number + 11,
+            11 | 12 => number + 12,
+            _ => return None,
+        };
+        return tilde(code);
+    }
+    let alt_prefixed = |bytes: Vec<u8>| {
+        if alt {
+            let mut prefixed = vec![0x1b];
+            prefixed.extend(bytes);
+            prefixed
+        } else {
+            bytes
+        }
+    };
+    let named = match base {
+        "enter" | "return" => Some(b'\r'),
+        "tab" => Some(b'\t'),
+        "escape" | "esc" => Some(0x1b),
+        "backspace" => Some(if ctrl { 0x08 } else { 0x7f }),
+        "space" => Some(if ctrl { 0x00 } else { b' ' }),
         _ => None,
     };
-    if let Some(final_byte) = arrow {
-        if super_key {
-            return value.to_owned();
+    if let Some(byte) = named {
+        if base == "tab" && shift && !ctrl {
+            return Some(alt_prefixed(b"\x1b[Z".to_vec()));
         }
-        let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
-        return if modifier == 1 {
-            format!("\x1b[{final_byte}")
-        } else {
-            format!("\x1b[1;{modifier}{final_byte}")
-        };
-    }
-
-    let named = match rest.as_str() {
-        "home" => Some("H"),
-        "end" => Some("F"),
-        _ => None,
-    };
-    if let Some(final_byte) = named {
-        if super_key {
-            return value.to_owned();
+        if shift || (ctrl && !matches!(base, "backspace" | "space")) {
+            return None;
         }
-        let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
-        return if modifier == 1 {
-            format!("\x1b[{final_byte}")
-        } else {
-            format!("\x1b[1;{modifier}{final_byte}")
-        };
+        return Some(alt_prefixed(vec![byte]));
     }
-
-    let standalone = match rest.as_str() {
-        "tab" => Some('\t'.to_string()),
-        "enter" => Some('\r'.to_string()),
-        "escape" => Some('\x1b'.to_string()),
-        "backspace" => Some('\x7f'.to_string()),
-        "delete" => Some("\x1b[3~".into()),
-        "pageup" => Some("\x1b[5~".into()),
-        "pagedown" => Some("\x1b[6~".into()),
-        _ => None,
-    };
-    if let Some(sequence) = standalone {
-        if ctrl || alt || shift || super_key {
-            return value.to_owned();
-        }
-        return sequence;
-    }
-
-    let character = match rest.as_str() {
-        "space" => ' ',
-        value if value.chars().count() == 1 => value.chars().next().unwrap_or_default(),
-        _ => return value.to_owned(),
-    };
-    if super_key {
-        return value.to_owned();
+    let mut characters = base.chars();
+    let character = characters.next()?;
+    if characters.next().is_some() || !character.is_ascii() {
+        return None;
     }
     if ctrl {
-        let byte = character.to_ascii_uppercase() as u8;
-        return char::from(byte & 0x1f).to_string();
+        let byte = match character.to_ascii_lowercase() {
+            letter @ 'a'..='z' => letter as u8 & 0x1f,
+            '@' | ' ' | '2' => 0x00,
+            '[' | '3' => 0x1b,
+            '\\' | '4' => 0x1c,
+            ']' | '5' => 0x1d,
+            '^' | '6' => 0x1e,
+            '_' | '/' | '7' => 0x1f,
+            '?' | '8' => 0x7f,
+            _ => return None,
+        };
+        return Some(alt_prefixed(vec![byte]));
     }
     let character = if shift {
         character.to_ascii_uppercase()
     } else {
         character
     };
-    if alt {
-        format!("\x1b{character}")
-    } else {
-        character.to_string()
-    }
-}
-
-fn decode_shell_sequence(value: &str) -> String {
-    let mut output = String::new();
-    let mut chars = value.chars();
-    while let Some(character) = chars.next() {
-        if character == '^' {
-            if let Some(next) = chars.next() {
-                output.push(char::from((next.to_ascii_uppercase() as u8) & 0x1f));
-            }
-        } else if character == '\\' {
-            match chars.next() {
-                Some('e') | Some('E') => output.push('\x1b'),
-                Some('c') | Some('C') => {
-                    let next = chars.next();
-                    let next = if next == Some('-') {
-                        chars.next()
-                    } else {
-                        next
-                    };
-                    if let Some(next) = next {
-                        output.push(char::from((next.to_ascii_uppercase() as u8) & 0x1f));
-                    }
-                }
-                Some('x') => {
-                    let hex: String = chars.by_ref().take(2).collect();
-                    if let Ok(value) = u8::from_str_radix(&hex, 16) {
-                        output.push(char::from(value));
-                    }
-                }
-                Some('n') => output.push('\n'),
-                Some('r') => output.push('\r'),
-                Some('t') => output.push('\t'),
-                Some('\\') => output.push('\\'),
-                Some('\'') => output.push('\''),
-                Some('"') => output.push('"'),
-                Some(other) => output.push(other),
-                None => output.push('\\'),
-            }
-        } else {
-            output.push(character);
-        }
-    }
-    output
+    Some(alt_prefixed(vec![character as u8]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn decodes_zsh_and_fish_control_notation() {
-        assert_eq!(decode_shell_sequence("^F"), "\x06");
-        assert_eq!(decode_shell_sequence("\\cf"), "\x06");
-        assert_eq!(decode_shell_sequence("\\c-f"), "\x06");
-    }
-
-    fn ctrl_x_ctrl_e_editor(input: &TerminalInput) -> LayerResult {
-        let outcome = match input.bytes.as_slice() {
-            [0x18, 0x05] | [0x05] => Outcome::Consumed,
-            _ => Outcome::Pass,
-        };
-        LayerResult::new(
-            "Zsh / ZLE",
-            LayerId::Shell,
-            outcome,
-            input.display_bytes(),
-            vec![],
-        )
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|argument| (*argument).to_owned()).collect()
     }
 
     #[test]
-    fn line_editor_steps_try_the_concatenated_sequence_first() {
-        let ctrl_x = TerminalInput::predicted(vec![0x18], "Kitty default encoding");
-        let ctrl_e = TerminalInput::configured(vec![0x05], "explicit output");
-
-        let result = inspect_steps(&[ctrl_x.clone(), ctrl_e.clone()], ctrl_x_ctrl_e_editor);
-        assert_eq!(result.outcome, Outcome::Consumed);
-        assert_eq!(result.summary, "0x18 0x05");
-
-        let ctrl_a = TerminalInput::predicted(vec![0x01], "Kitty default encoding");
-        let result = inspect_steps(&[ctrl_a, ctrl_e], ctrl_x_ctrl_e_editor);
-        assert_eq!(result.summary, "0x05");
-
-        let combined = concatenate(&[ctrl_x, TerminalInput::configured(vec![0x05], "x")]);
-        assert_eq!(combined.bytes, [0x18, 0x05]);
-        assert_eq!(combined.confidence, InputConfidence::Predicted);
+    fn interactive_shells_are_told_apart_from_commands_and_scripts() {
+        assert!(shell_reads_terminal(&args(&[])));
+        assert!(shell_reads_terminal(&args(&["-i"])));
+        assert!(shell_reads_terminal(&args(&["-f"])));
+        assert!(shell_reads_terminal(&args(&["--rcfile", "/tmp/rc", "-i"])));
+        assert!(shell_reads_terminal(&args(&["-C", "set x 1"])));
+        assert!(!shell_reads_terminal(&args(&["-c", "whykey ctrl+t"])));
+        assert!(!shell_reads_terminal(&args(&["-ic", "whykey ctrl+t"])));
+        assert!(!shell_reads_terminal(&args(&["--command=whykey"])));
+        assert!(!shell_reads_terminal(&args(&["./script.sh"])));
+        assert!(!shell_reads_terminal(&args(&["-e", "script.zsh"])));
     }
 
     #[test]
-    fn formats_arbitrary_terminal_bytes_for_shell_lookup() {
-        assert_eq!(shell_sequence_literal(b"\x1b[1;5D"), "\\e[1;5D");
-        assert_eq!(shell_sequence_literal(&[0x06]), "\\x06");
-    }
-
-    #[test]
-    fn finds_a_runtime_zle_binding() {
-        let content = "bindkey '^F' forward-char\n";
+    fn encodes_legacy_key_bytes() {
+        assert_eq!(legacy_key_bytes(true, false, false, "t"), Some(vec![0x14]));
         assert_eq!(
-            find_config_binding(content, "\x06", |line| line.starts_with("bindkey")),
-            Some("forward-char".into())
-        );
-    }
-
-    #[test]
-    fn finds_a_non_letter_zle_binding() {
-        let content = "bindkey -M emacs '\\e[1;5D' backward-word\n";
-        assert_eq!(
-            find_config_binding(content, "\x1b[1;5D", |line| line.starts_with("bindkey")),
-            Some("backward-word".into())
-        );
-    }
-
-    #[test]
-    fn selects_the_active_zle_keymap_from_runtime_bindings() {
-        let content = r#"bindkey -A viins main
-bindkey -M emacs '^F' forward-char
-bindkey -M viins '^F' vi-forward-word"#;
-        assert_eq!(zsh_active_keymap(content).as_deref(), Some("viins"));
-        assert_eq!(
-            find_zsh_binding(content, "\x06").as_deref(),
-            Some("vi-forward-word")
-        );
-    }
-
-    #[test]
-    fn last_effective_zle_binding_wins() {
-        let content = r#"bindkey -A emacs main
-bindkey -M emacs '^F' old-widget
-bindkey -M emacs '^F' forward-char"#;
-        assert_eq!(
-            find_zsh_binding(content, "\x06").as_deref(),
-            Some("forward-char")
-        );
-    }
-
-    #[test]
-    fn last_zle_main_keymap_alias_wins() {
-        let content = "bindkey -A emacs main\nbindkey -A viins main\n";
-        assert_eq!(zsh_active_keymap(content).as_deref(), Some("viins"));
-    }
-
-    #[test]
-    fn selects_the_active_fish_bind_mode() {
-        let content = r#"bind -M insert \cF backward-char
-	bind -M default \cF forward-char"#;
-        assert_eq!(
-            find_fish_binding(content, "\x06", Some("default")).as_deref(),
-            Some("forward-char")
+            legacy_key_bytes(false, true, false, "f"),
+            Some(b"\x1bf".to_vec())
         );
         assert_eq!(
-            find_fish_binding(content, "\x06", Some("insert")).as_deref(),
-            Some("backward-char")
+            legacy_key_bytes(true, false, false, "left"),
+            Some(b"\x1b[1;5D".to_vec())
         );
-    }
-
-    #[test]
-    fn decodes_common_shell_escapes() {
-        assert_eq!(decode_shell_sequence(r#"\n\r\t\\\"'"#), "\n\r\t\\\"'");
-    }
-
-    #[test]
-    fn decodes_fish_named_key_sequences() {
-        assert_eq!(decode_fish_sequence("ctrl-f"), "\x06");
-        assert_eq!(decode_fish_sequence("ctrl-left"), "\x1b[1;5D");
-        assert_eq!(decode_fish_sequence("alt-x"), "\x1bx");
-        assert_eq!(decode_fish_sequence("left"), "\x1b[D");
-        assert_eq!(decode_fish_sequence("ctrl-x,ctrl-e"), "\x18\x05");
-        assert_eq!(decode_fish_sequence("pageup"), "\x1b[5~");
-    }
-
-    #[test]
-    fn matches_fish_named_keys_in_runtime_output() {
-        let content = r#"bind -M default ctrl-left backward-word"#;
         assert_eq!(
-            find_fish_binding(content, "\x1b[1;5D", Some("default")).as_deref(),
-            Some("backward-word")
+            legacy_key_bytes(false, false, false, "delete"),
+            Some(b"\x1b[3~".to_vec())
         );
-    }
-
-    #[test]
-    fn does_not_claim_a_mode_specific_fish_binding_without_active_mode() {
-        let content = r#"bind -M insert \cF backward-char"#;
-        assert_eq!(find_fish_binding(content, "\x06", None), None);
-    }
-
-    #[test]
-    fn last_effective_fish_binding_wins() {
-        let content = r#"bind -M default \cF backward-char
-	bind -M default \cF forward-char"#;
         assert_eq!(
-            find_fish_binding(content, "\x06", Some("default")).as_deref(),
-            Some("forward-char")
+            legacy_key_bytes(false, false, true, "tab"),
+            Some(b"\x1b[Z".to_vec())
         );
+        assert_eq!(legacy_key_bytes(true, false, false, "enter"), None);
     }
 }

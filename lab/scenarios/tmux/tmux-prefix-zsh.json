@@ -1,0 +1,59 @@
+{
+  "id": "tmux-prefix-zsh",
+  "description": "tmux's prefix C-b never reaches a zsh widget bound to ^B (C-b t runs the prefix-table bind)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": [
+      "bind t run-shell 'touch /tmp/fired'"
+    ],
+    "/root/.zshrc": [
+      "PS1='%% '",
+      "lab-shell() { touch /tmp/reached-shell }",
+      "zle -N lab-shell",
+      "bindkey '^B' lab-shell",
+      "eval \"$(whykey shell-init zsh)\""
+    ]
+  },
+  "pty": {
+    "command": [
+      "tmux",
+      "-f",
+      "/root/.tmux.conf",
+      "new-session",
+      "-s",
+      "lab",
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x02"
+    },
+    {
+      "type": "t"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+b"
+    ],
+    "layer": "tmux",
+    "run": "pty"
+  }
+}

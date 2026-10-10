@@ -214,7 +214,7 @@ pub(crate) enum Parsed<T> {
     Run(T),
 }
 
-const LISTEN_HELP: &str = "Capture one key and explain its path. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression. Without native capture it falls back to terminal capture, except that --suppress fails instead; --suppress cannot be combined with --terminal, --evdev, or --device. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor or evdev capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file.";
+const LISTEN_HELP: &str = "Capture one key and explain its path. Native capture observes without suppression by default; use --suppress for explicit temporary compositor suppression. Without native capture it falls back to terminal capture, except that --suppress fails instead; --suppress cannot be combined with --terminal, --evdev, --device, or --window. --no-suppress captures without suppressing normal actions and --pass-through is its compatibility alias. --window opens a focused probe window and reports whether the desktop delivered the key or consumed it. --dry-run selects a backend without arming it; --explain-capture prints detection evidence.\nEsc or Ctrl+C exits; --repeat captures another deliberate key after each report. --timeout is a wall-clock deadline; --count stops after N reports.\nUse --events all with native compositor, evdev, or window capture to include modifier-only and release events. --verbose shows every route layer and technical evidence. --color=auto respects NO_COLOR, non-TTY output, and TERM=dumb. --json emits full analysis; --ndjson streams one compact record per event; --output writes reports to a file.";
 
 pub(crate) fn parse_listen_arguments(
     arguments: Vec<String>,
@@ -228,6 +228,7 @@ pub(crate) fn parse_listen_arguments(
     let mut repeat = false;
     let mut terminal = false;
     let mut evdev = false;
+    let mut window = false;
     let mut device = None;
     let mut timeout = None;
     let mut count = None;
@@ -260,6 +261,7 @@ pub(crate) fn parse_listen_arguments(
             }
             "--terminal" | "-t" => terminal = true,
             "--evdev" | "-e" => evdev = true,
+            "--window" | "-w" => window = true,
             "--dry-run" => dry_run = true,
             "--explain-capture" => explain_capture = true,
             "-h" | "--help" => return Ok(Parsed::Help),
@@ -326,9 +328,16 @@ pub(crate) fn parse_listen_arguments(
         eprintln!("error: --terminal and --evdev cannot be used together");
         return Err(ExitCode::from(2));
     }
-    if let Some(conflict) =
-        whykey::listen::suppress_conflict(capture_policy, terminal, evdev || device.is_some())
-    {
+    if window && (terminal || evdev || device.is_some()) {
+        eprintln!("error: --window cannot be combined with --terminal, --evdev, or --device");
+        return Err(ExitCode::from(2));
+    }
+    if let Some(conflict) = whykey::listen::suppress_conflict(
+        capture_policy,
+        terminal,
+        evdev || device.is_some(),
+        window,
+    ) {
         eprintln!("error: {conflict}");
         return Err(ExitCode::from(2));
     }
@@ -342,6 +351,7 @@ pub(crate) fn parse_listen_arguments(
         ndjson,
         terminal,
         evdev,
+        window,
         device,
         timeout,
         count,
@@ -612,40 +622,48 @@ pub(crate) mod doctor_support {
         pub(crate) generic_terminal: bool,
         pub(crate) xkb: bool,
         pub(crate) evdev: whykey::doctor::EvdevScan,
+        /// `whykey::doctor::evdev_acl_command` for the detected keyboards.
+        pub(crate) evdev_acl: Option<String>,
         pub(crate) shell_snapshot: bool,
         pub(crate) ssh: bool,
         pub(crate) remapper: bool,
         pub(crate) ime: bool,
     }
 
-    pub(crate) fn doctor_next_steps(state: &DoctorState) -> Vec<&'static str> {
-        let mut steps = Vec::new();
+    pub(crate) fn doctor_next_steps(state: &DoctorState) -> Vec<String> {
+        let mut steps: Vec<String> = Vec::new();
         if !state.tty {
-            steps.push("run whykey from a controlling terminal");
+            steps.push("run whykey from a controlling terminal".into());
         }
         if !state.compositor_context && !state.ssh {
-            steps.push("run whykey inside the desktop session to identify the compositor");
+            steps.push("run whykey inside the desktop session to identify the compositor".into());
         }
         if !state.ghostty && !state.generic_terminal {
-            steps.push("install or configure a supported terminal adapter");
+            steps.push("install or configure a supported terminal adapter".into());
         }
         if !state.xkb {
-            steps.push("install xkbcommon-tools for layout-aware keycode translation");
+            steps.push("install xkbcommon-tools for layout-aware keycode translation".into());
         }
-        if let Some(step) = state.evdev.next_step() {
+        if let Some(step) = state
+            .evdev_acl
+            .clone()
+            .or_else(|| state.evdev.next_step().map(str::to_owned))
+        {
             steps.push(step);
         }
         if !state.shell_snapshot {
-            steps.push("load shell-init in the current shell for live shell bindings");
+            steps.push("load shell-init in the current shell for live shell bindings".into());
         }
         if state.remapper {
             steps.push(
-                "compare remapper evidence with the physical capture; timing and routing remain conditional",
+                "compare remapper evidence with the physical capture; timing and routing remain conditional"
+                    .into(),
             );
         }
         if state.ime {
-            steps
-                .push("check application-side Compose/dead-key or preedit state when text differs");
+            steps.push(
+                "check application-side Compose/dead-key or preedit state when text differs".into(),
+            );
         }
         steps
     }
@@ -929,6 +947,11 @@ pub(crate) mod help {
             "capture Linux input events before the compositor",
         )
         .short("-e"),
+        OptionSpec::switch(
+            "--window",
+            "capture through a focused probe window (what the desktop delivers)",
+        )
+        .short("-w"),
         OptionSpec::valued(
             "--device",
             OptionValue::Path,
@@ -1154,10 +1177,10 @@ pub(crate) mod help {
                 "whykey() {{\n  local whykey_readline_bindings whykey_readline_macros whykey_readline_shell_bindings whykey_readline_variables whykey_readline_map\n  whykey_readline_bindings=\"$(builtin bind -p 2>/dev/null)\"\n  for whykey_readline_map in emacs emacs-standard emacs-meta vi vi-move vi-command vi-insertion; do\n    whykey_readline_bindings=\"$whykey_readline_bindings\n# WHYKEY_KEYMAP $whykey_readline_map\n$(builtin bind -m \"$whykey_readline_map\" -p 2>/dev/null)\"\ndone\n  whykey_readline_macros=\"$(builtin bind -S 2>/dev/null)\"\n  whykey_readline_shell_bindings=\"$(builtin bind -X 2>/dev/null)\"\n  whykey_readline_variables=\"$(builtin bind -V 2>/dev/null)\"\n  WHYKEY_READLINE_BINDINGS=\"$whykey_readline_bindings\" WHYKEY_READLINE_MACROS=\"$whykey_readline_macros\" WHYKEY_READLINE_SHELL_BINDINGS=\"$whykey_readline_shell_bindings\" WHYKEY_READLINE_VARIABLES=\"$whykey_readline_variables\" command {binary} \"$@\"\n}}"
             ),
             "zsh" => format!(
-                "whykey() {{\n  local whykey_zle_bindings\n  whykey_zle_bindings=\"$(bindkey -L 2>/dev/null)\"\n  WHYKEY_ZLE_BINDINGS=\"$whykey_zle_bindings\" command {binary} \"$@\"\n}}"
+                "whykey() {{\n  local whykey_zle_bindings\n  whykey_zle_bindings=\"$(bindkey -lL main 2>/dev/null; bindkey -L 2>/dev/null; bindkey -LM vicmd 2>/dev/null)\"\n  WHYKEY_ZLE_BINDINGS=\"$whykey_zle_bindings\" command {binary} \"$@\"\n}}"
             ),
             "fish" => format!(
-                "function whykey\n  set -lx WHYKEY_FISH_BINDINGS (string join \\n -- (bind --all 2>/dev/null))\n  set -lx WHYKEY_FISH_MODE $fish_bind_mode\n  command {binary} $argv\nend"
+                "function whykey\n  set -lx WHYKEY_FISH_BINDINGS (bind --all 2>/dev/null | string collect)\n  set -lx WHYKEY_FISH_MODE $fish_bind_mode\n  command {binary} $argv\nend"
             ),
             _ => unreachable!("shell-init only accepts supported shells"),
         }

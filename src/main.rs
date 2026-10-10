@@ -448,6 +448,14 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         evdev,
     );
     let evdev_cause = evdev_scan.cause();
+    let evdev_acl = if evdev {
+        None
+    } else {
+        whykey::doctor::evdev_acl_command(&evdev_devices)
+    };
+    let evdev_next = evdev_acl
+        .clone()
+        .or_else(|| evdev_scan.next_step().map(str::to_owned));
     let remappers = environment.remappers.clone();
     let ime = environment.ime.clone();
     let mut multiplexer_names = Vec::new();
@@ -481,6 +489,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         generic_terminal: generic_terminal_fallback,
         xkb,
         evdev: evdev_scan,
+        evdev_acl,
         shell_snapshot,
         ssh,
         remapper: !remappers.is_empty(),
@@ -554,7 +563,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
                 "devices": evdev_devices,
                 "cause": evdev_cause,
                 "detail": evdev_scan.detail(),
-                "next_check": evdev_scan.next_step().unwrap_or(evdev_cause.next_check()),
+                "next_check": evdev_next.as_deref().unwrap_or(evdev_cause.next_check()),
             },
             "native-compositor": {
                 "available": native_available,
@@ -747,7 +756,7 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         print_check(
             "evdev keyboard capture",
             evdev,
-            evdev_scan.next_step().unwrap_or_default(),
+            evdev_next.as_deref().unwrap_or_default(),
         );
         if evdev_devices.is_empty() {
             println!(
@@ -938,6 +947,7 @@ mod tests {
             generic_terminal: false,
             xkb: false,
             evdev: whykey::doctor::EvdevScan::KeyboardDevices { readable: false },
+            evdev_acl: None,
             shell_snapshot: false,
             ssh: false,
             remapper: true,

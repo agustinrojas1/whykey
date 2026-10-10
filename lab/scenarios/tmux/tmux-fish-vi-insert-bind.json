@@ -1,0 +1,53 @@
+{
+  "id": "tmux-fish-vi-insert-bind",
+  "description": "inside tmux, fish vi insert-mode ctrl+t binding fires",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": [
+      ""
+    ],
+    "/root/.config/fish/config.fish": [
+      "function fish_prompt; echo -n '> '; end",
+      "fish_vi_key_bindings",
+      "bind -M insert ctrl-t 'touch /tmp/fired'",
+      "whykey shell-init fish | source"
+    ]
+  },
+  "pty": {
+    "command": [
+      "tmux",
+      "-f",
+      "/root/.tmux.conf",
+      "new-session",
+      "-s",
+      "lab",
+      "fish",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Fish",
+    "run": "pty",
+    "summary": "bound to touch /tmp/fired"
+  }
+}
