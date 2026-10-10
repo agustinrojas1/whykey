@@ -1,4 +1,6 @@
-fn summarize_keyboards(devices_json: &str) -> Option<String> {
+use super::*;
+
+pub(super) fn summarize_keyboards(devices_json: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(devices_json).ok()?;
     let keyboards = value.get("keyboards")?.as_array()?;
     if keyboards.is_empty() {
@@ -52,7 +54,10 @@ fn summarize_keyboards(devices_json: &str) -> Option<String> {
     }
 }
 
-fn xkb_keycodes_for_key(key: &KeyCombo, devices_json: &str) -> Vec<crate::xkb::XkbKeycode> {
+pub(super) fn xkb_keycodes_for_key(
+    key: &KeyCombo,
+    devices_json: &str,
+) -> Vec<crate::xkb::XkbKeycode> {
     if key.key().starts_with("CODE:") {
         return Vec::new();
     }
@@ -74,7 +79,7 @@ fn xkb_keycodes_for_key(key: &KeyCombo, devices_json: &str) -> Vec<crate::xkb::X
         .unwrap_or_default()
 }
 
-fn xkb_symbols_for_physical_key(
+pub(super) fn xkb_symbols_for_physical_key(
     evdev_keycode: crate::xkb::EvdevKeycode,
     devices_json: &str,
 ) -> Option<Vec<String>> {
@@ -227,11 +232,11 @@ fn xkb_symbol_name(key: &KeyCombo) -> Option<String> {
 }
 
 #[cfg(test)]
-fn parse_xkb_symbol_keycodes(keymap: &str) -> HashMap<String, Vec<u32>> {
+pub(super) fn parse_xkb_symbol_keycodes(keymap: &str) -> HashMap<String, Vec<u32>> {
     xkb::parse_symbol_keycodes(keymap)
 }
 
-fn parse_xkb_symbol_keycodes_for_group(
+pub(super) fn parse_xkb_symbol_keycodes_for_group(
     keymap: &str,
     group_index: usize,
 ) -> HashMap<String, Vec<u32>> {
@@ -239,14 +244,14 @@ fn parse_xkb_symbol_keycodes_for_group(
 }
 
 #[cfg(test)]
-fn parse_xkb_symbol_key_name(line: &str) -> Option<String> {
+pub(super) fn parse_xkb_symbol_key_name(line: &str) -> Option<String> {
     let rest = line.strip_prefix("key <")?;
     let (name, _) = rest.split_once('>')?;
     Some(name.to_owned())
 }
 
 #[cfg(test)]
-fn parse_xkb_symbol_fragment(line: &str) -> Option<Vec<String>> {
+pub(super) fn parse_xkb_symbol_fragment(line: &str) -> Option<Vec<String>> {
     let symbols = line.rsplit_once('[')?.1.split_once(']')?.0;
     let symbols = symbols
         .split(',')
@@ -256,4 +261,3 @@ fn parse_xkb_symbol_fragment(line: &str) -> Option<Vec<String>> {
         .collect::<Vec<_>>();
     (!symbols.is_empty()).then_some(symbols)
 }
-

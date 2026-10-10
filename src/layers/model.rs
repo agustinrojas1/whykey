@@ -384,6 +384,10 @@ pub struct LayerResult {
     /// JSON always combines both lists so machine output stays complete.
     pub verbose_details: Vec<String>,
     pub binding: Option<BindingEvidence>,
+    /// Dead keysym (e.g. `dead_acute`) whose composition this layer starts:
+    /// the key is held for composition, not bound, and no bytes are sent
+    /// until the next key completes it.
+    pub dead_key: Option<String>,
 }
 
 impl Serialize for LayerResult {
@@ -424,6 +428,7 @@ impl LayerResult {
             details,
             verbose_details: Vec::new(),
             binding: None,
+            dead_key: None,
         }
     }
 
@@ -453,6 +458,7 @@ impl LayerResult {
             details,
             verbose_details: Vec::new(),
             binding: None,
+            dead_key: None,
         }
     }
 
@@ -498,6 +504,7 @@ impl LayerResult {
             details,
             verbose_details: Vec::new(),
             binding: None,
+            dead_key: None,
         }
     }
 

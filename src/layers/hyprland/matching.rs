@@ -1,3 +1,9 @@
+use super::config::{
+    ConfigBindHint, LuaBindHint, config_ignore_mods_for_binding, lua_hint_key,
+    lua_ignore_mods_for_binding,
+};
+use super::*;
+
 pub(crate) fn analyze(
     key: &KeyCombo,
     bindings_json: &str,
@@ -19,7 +25,7 @@ pub(crate) fn analyze(
 }
 
 #[cfg(test)]
-fn inspect_json(
+pub(super) fn inspect_json(
     key: &KeyCombo,
     bindings_json: &str,
     active_submap: &str,
@@ -559,7 +565,7 @@ fn inactive_submap_details(bindings: &[&Binding]) -> Vec<String> {
 
 /// The key a runtime binding listens for, normalized like a parsed query.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum BindingKey {
+pub(super) enum BindingKey {
     Code(crate::xkb::XkbKeycode),
     /// Normalized key name: hyprctl reports XKB keysym names such as
     /// `comma` or `SLASH`, which must compare equal to `,` and `/`.
@@ -584,7 +590,7 @@ impl BindingKey {
         }
     }
 
-    fn from_name(name: &str) -> Self {
+    pub(super) fn from_name(name: &str) -> Self {
         let normalized = crate::key::normalize_key_str(name);
         match normalized
             .strip_prefix("CODE:")
@@ -861,7 +867,7 @@ fn binding_action(binding: &Binding) -> String {
     action
 }
 
-fn boolish_value(value: &serde_json::Value) -> Option<bool> {
+pub(super) fn boolish_value(value: &serde_json::Value) -> Option<bool> {
     match value {
         serde_json::Value::Bool(value) => Some(*value),
         serde_json::Value::String(value) if value.eq_ignore_ascii_case("true") => Some(true),
@@ -870,7 +876,7 @@ fn boolish_value(value: &serde_json::Value) -> Option<bool> {
     }
 }
 
-fn filter_whykey_capture_bindings(bindings_json: &str) -> String {
+pub(super) fn filter_whykey_capture_bindings(bindings_json: &str) -> String {
     if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(bindings_json) {
         if let Some(arr) = val.as_array_mut() {
             arr.retain(|b| b.get("submap").and_then(|s| s.as_str()) != Some("__whykey_capture"));
@@ -1017,9 +1023,44 @@ fn device_name_match(configured: &str, actual: &str) -> DeviceMatch {
     }
 }
 
+fn normalize_device_name(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub(super) fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Boolish {
+        Bool(bool),
+        String(String),
+    }
+
+    match Boolish::deserialize(deserializer)? {
+        Boolish::Bool(value) => Ok(value),
+        Boolish::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Boolish::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Boolish::String(value) => Err(serde::de::Error::custom(format!(
+            "expected true or false, got '{value}'"
+        ))),
+    }
+}
+
 #[cfg(test)]
-mod matching_tests {
+mod tests {
     use super::*;
+    use crate::layers::hyprland::config::parse_lua_bind_hints;
 
     #[test]
     fn analyzes_a_snapshot_without_ipc_or_config_access() {
@@ -1197,39 +1238,5 @@ mod matching_tests {
         assert!(!source.contains(&ipc_call));
         let command_constructor = ["Command", "::new"].concat();
         assert!(!source.contains(&command_constructor));
-    }
-}
-
-fn normalize_device_name(value: &str) -> String {
-    value
-        .chars()
-        .filter_map(|character| {
-            if character.is_ascii_alphanumeric() {
-                Some(character.to_ascii_lowercase())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Boolish {
-        Bool(bool),
-        String(String),
-    }
-
-    match Boolish::deserialize(deserializer)? {
-        Boolish::Bool(value) => Ok(value),
-        Boolish::String(value) if value.eq_ignore_ascii_case("true") => Ok(true),
-        Boolish::String(value) if value.eq_ignore_ascii_case("false") => Ok(false),
-        Boolish::String(value) => Err(serde::de::Error::custom(format!(
-            "expected true or false, got '{value}'"
-        ))),
     }
 }

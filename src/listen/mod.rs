@@ -506,13 +506,42 @@ pub fn run(options: Options) -> Result<(), ListenError> {
     }
 }
 
+mod evdev;
+mod output;
+mod protocol;
+mod terminal;
+use evdev::run_evdev;
 #[cfg(target_os = "linux")]
-include!("output.rs");
-include!("evdev.rs");
-include!("terminal.rs");
-include!("protocol.rs");
+use evdev::{EvdevSession, evdev_device_name, evdev_keyboard_capability};
+#[cfg(target_os = "linux")]
+pub(crate) use evdev::{evdev_key_name, evdev_modifier};
+#[cfg(target_os = "linux")]
+use output::select_native_backend;
+use output::{
+    inspect_with_session, print_capture_dry_run, print_capture_explanation, run_native,
+    run_terminal,
+};
+#[cfg(target_os = "linux")]
+pub use terminal::EvdevBackend;
+use terminal::SignalGuard;
+pub use terminal::TerminalBackend;
+
 #[cfg(test)]
 mod tests {
+    use super::evdev::parse_evdev_keyboard_capability;
+    #[cfg(target_os = "linux")]
+    use super::evdev::{
+        EV_KEY, EV_SYN, EvdevDevice, EvdevSession, LinuxInputEvent, SYN_DROPPED, SYN_REPORT,
+        set_nonblocking,
+    };
+    use super::output::{is_cancel_key, is_terminal_modifier_key, suspend_for_job_control};
+    use super::protocol::{
+        decode_bytes, kitty_event_type, parse_protocol_response, query_keyboard_protocol,
+        utf8_width, xterm_modifiers,
+    };
+    #[cfg(target_os = "linux")]
+    use super::terminal::EvdevBackend;
+    use super::terminal::{InputReader, TerminalBackend};
     use super::*;
     use crate::layers::format_bytes;
 

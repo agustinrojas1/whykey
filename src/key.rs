@@ -276,9 +276,8 @@ pub(crate) fn modifier_mask(value: &str) -> Option<u32> {
         "mod2" | "num" | "numlock" => Some(MOD2_MASK),
         "mod3" | "hyper" => Some(MOD3_MASK),
         // AltGr is ISO_Level3_Shift, which XKB maps to Mod5 (Hyprland
-        // modmask 128). `meta-key` names the same bit for the Kitty keyboard
-        // protocol's Meta modifier.
-        "mod5" | "altgr" | "iso_level3_shift" | "meta-key" => Some(MOD5_MASK),
+        // modmask 128).
+        "mod5" | "altgr" | "iso_level3_shift" => Some(MOD5_MASK),
         _ => None,
     }
 }
@@ -652,6 +651,23 @@ mod tests {
             assert_eq!(combo.modmask(), MOD5_MASK, "{input}");
             assert_eq!(combo.key(), "Q");
         }
+    }
+
+    #[test]
+    fn rejects_meta_key_instead_of_aliasing_altgr() {
+        // Mod5 means AltGr, so `meta-key` must not silently query AltGr.
+        let error = KeyCombo::parse_query("meta-key+k").unwrap_err();
+        assert!(
+            error.to_string().starts_with(
+                "a combination must contain exactly one non-modifier key, but found 'meta-key' and 'k'"
+            ),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("modifiers: ctrl, alt"),
+            "{error}"
+        );
+        assert!(KeyCombo::parse_query("meta-key").is_err());
     }
 
     #[test]

@@ -1,4 +1,7 @@
-fn get_termios(fd: i32) -> io::Result<libc::termios> {
+use super::terminal::InputReader;
+use super::*;
+
+pub(super) fn get_termios(fd: i32) -> io::Result<libc::termios> {
     let mut termios = std::mem::MaybeUninit::uninit();
     // SAFETY: `termios` points to writable storage and `fd` comes from an open file.
     let result = unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) };
@@ -9,7 +12,7 @@ fn get_termios(fd: i32) -> io::Result<libc::termios> {
     Ok(unsafe { termios.assume_init() })
 }
 
-fn set_termios(fd: i32, termios: &libc::termios) -> io::Result<()> {
+pub(super) fn set_termios(fd: i32, termios: &libc::termios) -> io::Result<()> {
     // SAFETY: `termios` points to a valid structure and `fd` comes from an open file.
     let result = unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) };
     if result == -1 {
@@ -19,7 +22,7 @@ fn set_termios(fd: i32, termios: &libc::termios) -> io::Result<()> {
     }
 }
 
-fn flush_input(fd: i32) -> io::Result<()> {
+pub(super) fn flush_input(fd: i32) -> io::Result<()> {
     // SAFETY: `fd` is the controlling terminal owned by this session.
     if unsafe { libc::tcflush(fd, libc::TCIFLUSH) } == -1 {
         Err(io::Error::last_os_error())
@@ -28,7 +31,7 @@ fn flush_input(fd: i32) -> io::Result<()> {
     }
 }
 
-fn query_keyboard_protocol(tty: &mut File) -> io::Result<(Option<u32>, Vec<u8>)> {
+pub(super) fn query_keyboard_protocol(tty: &mut File) -> io::Result<(Option<u32>, Vec<u8>)> {
     tty.write_all(b"\x1b[?u")?;
     tty.flush()?;
     if !wait_for_input(tty.as_raw_fd(), 30)? {
@@ -74,24 +77,25 @@ pub(crate) fn parse_protocol_response(response: &[u8]) -> Option<u32> {
         .ok()
 }
 
-fn read_event(reader: &mut InputReader<'_>, deadline: Option<Instant>) -> io::Result<ReadEvent> {
+pub(super) fn read_event(
+    reader: &mut InputReader<'_>,
+    deadline: Option<Instant>,
+) -> io::Result<ReadEvent> {
     let bytes = reader.read_raw_event(deadline)?;
     if bytes.is_empty() {
         return Ok(ReadEvent::Idle);
     }
-    Ok(ReadEvent::Key(Box::new(decode_bytes(
-        bytes,
-    )?)))
+    Ok(ReadEvent::Key(Box::new(decode_bytes(bytes)?)))
 }
 
-fn remaining_millis(deadline: Instant) -> i32 {
+pub(super) fn remaining_millis(deadline: Instant) -> i32 {
     deadline
         .checked_duration_since(Instant::now())
         .map(|remaining| remaining.as_millis().min(i32::MAX as u128) as i32)
         .unwrap_or(0)
 }
 
-fn wait_for_input(fd: i32, timeout_ms: i32) -> io::Result<bool> {
+pub(super) fn wait_for_input(fd: i32, timeout_ms: i32) -> io::Result<bool> {
     let mut pollfd = libc::pollfd {
         fd,
         events: libc::POLLIN,
@@ -123,7 +127,7 @@ fn wait_for_input(fd: i32, timeout_ms: i32) -> io::Result<bool> {
     }
 }
 
-fn is_complete_escape_sequence(bytes: &[u8]) -> bool {
+pub(super) fn is_complete_escape_sequence(bytes: &[u8]) -> bool {
     let Some(last) = bytes.last().copied() else {
         return false;
     };
@@ -176,7 +180,7 @@ pub(crate) fn decode_bytes(bytes: Vec<u8>) -> Result<ObservedKey, io::Error> {
     })
 }
 
-fn kitty_event_type(bytes: &[u8]) -> Option<KeyEventType> {
+pub(super) fn kitty_event_type(bytes: &[u8]) -> Option<KeyEventType> {
     if bytes.last() != Some(&b'u') || !bytes.starts_with(b"\x1b[") {
         return None;
     }
@@ -275,7 +279,7 @@ fn decode_utf8_text(bytes: &[u8]) -> Option<(KeyCombo, String, KeyEventType)> {
     ))
 }
 
-fn utf8_width(first: u8) -> usize {
+pub(super) fn utf8_width(first: u8) -> usize {
     match first {
         0xC2..=0xDF => 2,
         0xE0..=0xEF => 3,
@@ -534,7 +538,7 @@ fn decode_simple_byte(byte: u8) -> Option<(u32, String)> {
     }
 }
 
-fn xterm_modifiers(value: u32) -> u32 {
+pub(super) fn xterm_modifiers(value: u32) -> u32 {
     let value = value.saturating_sub(1);
     let mut modifiers = 0;
     if value & 1 != 0 {
@@ -563,4 +567,3 @@ fn xterm_modifiers(value: u32) -> u32 {
     }
     modifiers
 }
-

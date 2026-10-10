@@ -26,11 +26,16 @@ NAMED = {
     "<": "lt", "\\": "Bslash", "|": "Bar",
 }
 
+# Ctrl keys Neovim simplifies to a named key when the ctrl form has no
+# mapping of its own: an unmapped <C-i> runs the <Tab> mapping
+# (:help CTRL-I, :help tui-input).
+SIMPLIFIED = {"<C-i>": "<Tab>", "<C-m>": "<CR>", "<C-[>": "<Esc>", "<C-j>": "<NL>"}
+
 # Evaluated by the server. Kept on one line (joined below) because it is
 # embedded in a single-quoted Vimscript string; it must not contain `--`
 # comments or single quotes.
 LUA_QUERY = [
-    "(function(lhs)",
+    "(function(lhs, alt)",
     "local api, fn = vim.api, vim.fn",
     "local full = api.nvim_get_mode().mode",
     "local c = full:sub(1, 1)",
@@ -49,6 +54,9 @@ LUA_QUERY = [
     "callback = d.callback ~= nil, desc = d.desc or \"\", expr = d.expr == 1,",
     "noremap = d.noremap == 1, buffer = d.buffer == 1, nowait = d.nowait == 1} end",
     "local d = fn.maparg(lhs, mm, false, true)",
+    "if next(d) ~= nil then alt = \"\" end",
+    "if alt ~= \"\" then d = fn.maparg(alt, mm, false, true)",
+    "if next(d) ~= nil then out.simplified = alt end end",
     "if next(d) ~= nil then out.map = info(d) local cur = d",
     "for _ = 1, 5 do local r = cur.rhs or \"\"",
     "if cur.noremap == 1 or not r:match(\"^<Plug>\") then break end",
@@ -56,16 +64,18 @@ LUA_QUERY = [
     "if next(nxt) == nil then table.insert(out.chain, {lhs = r, missing = true}) break end",
     "table.insert(out.chain, info(nxt)) cur = nxt end end",
     "local key = api.nvim_replace_termcodes(lhs, true, true, true)",
+    "local altkey = alt ~= \"\" and api.nvim_replace_termcodes(alt, true, true, true) or nil",
+    "local function prefixes(raw, k) return #raw > #k and raw:sub(1, #k) == k end",
     "local function scan(maps) for _, mp in ipairs(maps) do",
     "local raw = api.nvim_replace_termcodes(mp.lhs, true, true, true)",
-    "if #raw > #key and raw:sub(1, #key) == key then",
+    "if prefixes(raw, key) or (altkey and prefixes(raw, altkey)) then",
     "out.longer_count = out.longer_count + 1",
     "if #out.longer < 3 then table.insert(out.longer,",
     "fn.exists(\"*keytrans\") == 1 and fn.keytrans(raw) or mp.lhs) end end end end",
     "scan(api.nvim_buf_get_keymap(0, mm))",
     "scan(api.nvim_get_keymap(mm))",
     "return vim.json.encode(out)",
-    "end)(_A)",
+    "end)(_A, @ALT@)",
 ]
 
 
@@ -150,9 +160,16 @@ def find_servers():
     return unique, False
 
 
+def vim_string(value):
+    return "'" + value.replace("'", "''") + "'"
+
+
 def build_expr(notation):
-    lua = " ".join(LUA_QUERY).replace("'", "''")
-    return f"luaeval('{lua}', '{notation.replace(chr(39), chr(39) * 2)}')"
+    # The simplified form is a fixed key name (no quotes or backslashes), so
+    # it is embedded as a Lua string literal; `_A` stays the queried lhs.
+    alt = SIMPLIFIED.get(notation, "")
+    lua = " ".join(LUA_QUERY).replace("@ALT@", f"\"{alt}\"")
+    return f"luaeval({vim_string(lua)}, {vim_string(notation)})"
 
 
 def query_nvim(server, notation):
@@ -199,6 +216,12 @@ def interpret(notation, data, server):
         details.append(f"action: {action}")
         details.append(f"scope: {'buffer-local' if m.get('buffer') else 'global'}")
         details.append(f"noremap: {int(bool(m.get('noremap')))}")
+        simplified = data.get("simplified")
+        if simplified:
+            details.append(
+                f"simplified: {notation} has no mapping of its own, so Neovim applies the "
+                f"{simplified} mapping (:help CTRL-I)"
+            )
         if m.get("expr"):
             details.append("expr: the mapping's keys come from evaluating the expression at runtime")
         for link in data.get("chain") or []:
@@ -212,9 +235,10 @@ def interpret(notation, data, server):
                 f"Neovim waits {wait} for another key before running this mapping"
             )
         scope = "buffer-local " if m.get("buffer") else ""
+        via = f" (as {simplified})" if simplified else ""
         return result(
             "handled", "stops",
-            f"Neovim mode '{mm}' {scope}maps {notation} to {action}",
+            f"Neovim mode '{mm}' {scope}maps {notation}{via} to {action}",
             details + tail,
         )
 
@@ -317,6 +341,10 @@ def self_test():
     expr = build_expr("<C-x>")
     assert "\n" not in expr and "--" not in " ".join(LUA_QUERY)
     assert all("'" not in line for line in LUA_QUERY)
+    assert "@ALT@" not in expr and expr.endswith(", '<C-x>')") and "(_A, \"\")" in expr
+    # An unmapped <C-i> falls back to Neovim's <Tab> mapping.
+    assert to_nvim_notation({"modifiers": CTRL, "key": "I"}) == "<C-i>"
+    assert "(_A, \"<Tab>\")" in build_expr("<C-i>")
 
     env = (["/tmp/nvim.sock"], True)
 
@@ -332,6 +360,12 @@ def self_test():
     res = ask(dict(base, map={"lhs": "<C-X>", "rhs": "", "callback": True, "desc": "Telescope"}))
     assert (res["status"], res["propagation"]) == ("handled", "stops")
     assert "Lua callback" in res["summary"]
+
+    # The server resolved <C-i> through its simplified <Tab> mapping.
+    res = ask(dict(base, map={"lhs": "<Tab>", "rhs": ":echo 8<CR>"}, simplified="<Tab>"), key="I")
+    assert (res["status"], res["propagation"]) == ("handled", "stops")
+    assert "maps <C-i> (as <Tab>) to :echo 8<CR>" in res["summary"], res["summary"]
+    assert any(d.startswith("simplified: <C-i> has no mapping of its own") for d in res["details"])
 
     # <Plug> chains are followed and missing targets reported.
     res = ask(dict(base, map={"lhs": "<C-X>", "rhs": "<Plug>(Foo)"}, chain=[{"lhs": "<Plug>(Foo)", "missing": True}]))

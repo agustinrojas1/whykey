@@ -19,7 +19,7 @@
     {"id": "capture.ndjson", "area": "capture", "implemented": true, "summary": "Emit one compact schema-v2 record per captured event."},
     {"id": "capture.export", "area": "capture", "implemented": true, "summary": "Write replayable JSON or NDJSON capture records to an explicit file."},
     {"id": "capture.evdev", "area": "capture", "implemented": true, "summary": "Capture Linux evdev keyboard events when a readable device is available."},
-    {"id": "remapper.pre-compositor", "area": "input", "implemented": true, "summary": "Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions, kmonad, and input-remapper conditional."},
+    {"id": "remapper.pre-compositor", "area": "input", "implemented": true, "summary": "Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, kmonad, input-remapper, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions and kmonad or input-remapper rules for unproven devices conditional."},
     {"id": "input.ime-context", "area": "input", "implemented": true, "summary": "Detect IBus/Fcitx5 session context."},
     {"id": "input.ime-runtime-engine", "area": "input", "implemented": true, "summary": "Query an active IBus/Fcitx5 engine through a read-only API when possible."},
     {"id": "input.ime.fcitx5-safe-query", "area": "safety", "implemented": true, "summary": "Use bounded read-only Fcitx5 D-Bus calls without launching client helpers."},

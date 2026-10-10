@@ -1,6 +1,15 @@
-struct TerminalSession {
-    tty: File,
-    original: libc::termios,
+#[cfg(target_os = "linux")]
+use super::evdev::EvdevSession;
+use super::output::is_terminal_modifier_key;
+use super::protocol::{
+    flush_input, get_termios, is_complete_escape_sequence, query_keyboard_protocol, read_event,
+    remaining_millis, set_termios, utf8_width, wait_for_input,
+};
+use super::*;
+
+pub(super) struct TerminalSession {
+    pub(super) tty: File,
+    pub(super) original: libc::termios,
     protocol_enabled: bool,
     protocol_flags: Option<u32>,
 }
@@ -9,8 +18,8 @@ struct TerminalSession {
 /// the compatibility path, while this type exposes the same backend contract
 /// for callers that want to select transports uniformly.
 pub struct TerminalBackend {
-    session: Option<TerminalSession>,
-    pending: VecDeque<u8>,
+    pub(super) session: Option<TerminalSession>,
+    pub(super) pending: VecDeque<u8>,
 }
 
 impl TerminalBackend {
@@ -103,9 +112,9 @@ impl CaptureBackend for TerminalBackend {
 #[cfg(target_os = "linux")]
 /// Read-only Linux input transport adapter.
 pub struct EvdevBackend {
-    session: Option<EvdevSession>,
-    requested: Option<PathBuf>,
-    events_all: bool,
+    pub(super) session: Option<EvdevSession>,
+    pub(super) requested: Option<PathBuf>,
+    pub(super) events_all: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -178,12 +187,12 @@ impl CaptureBackend for EvdevBackend {
 /// stopping, so job control never leaves the shell in raw/kitty mode.
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-struct SignalGuard {
+pub(super) struct SignalGuard {
     previous: Vec<(libc::c_int, libc::sigaction)>,
 }
 
 impl SignalGuard {
-    fn install() -> io::Result<Self> {
+    pub(super) fn install() -> io::Result<Self> {
         INTERRUPTED.store(false, Ordering::Relaxed);
         STOP_REQUESTED.store(false, Ordering::Relaxed);
         let mut previous = Vec::new();
@@ -219,19 +228,19 @@ impl SignalGuard {
         Ok(Self { previous })
     }
 
-    fn received(&self) -> bool {
+    pub(super) fn received(&self) -> bool {
         INTERRUPTED.load(Ordering::Relaxed)
     }
 
     /// Consume a pending SIGTSTP request.
-    fn take_stop_request(&self) -> bool {
+    pub(super) fn take_stop_request(&self) -> bool {
         STOP_REQUESTED.swap(false, Ordering::Relaxed)
     }
 
     /// Stop the process with the SIGTSTP disposition that was active before
     /// capture, then reclaim SIGTSTP once the job is continued. Callers must
     /// restore the terminal first and re-enter capture mode afterwards.
-    fn stop_process(&self) -> io::Result<()> {
+    pub(super) fn stop_process(&self) -> io::Result<()> {
         let Some((_, previous)) = self
             .previous
             .iter()
@@ -292,13 +301,13 @@ impl Drop for SignalGuard {
     }
 }
 
-struct InputReader<'a> {
+pub(super) struct InputReader<'a> {
     tty: &'a mut File,
     pending: VecDeque<u8>,
 }
 
 impl<'a> InputReader<'a> {
-    fn with_pending(tty: &'a mut File, pending: Vec<u8>) -> Self {
+    pub(super) fn with_pending(tty: &'a mut File, pending: Vec<u8>) -> Self {
         Self {
             tty,
             pending: pending.into(),
@@ -336,7 +345,7 @@ impl<'a> InputReader<'a> {
         wait_for_input(self.tty.as_raw_fd(), timeout_ms)
     }
 
-    fn read_raw_event(&mut self, deadline: Option<Instant>) -> io::Result<Vec<u8>> {
+    pub(super) fn read_raw_event(&mut self, deadline: Option<Instant>) -> io::Result<Vec<u8>> {
         if !self.has_input(SIGNAL_POLL_MS, deadline)? {
             return Ok(Vec::new());
         }
@@ -379,7 +388,7 @@ impl<'a> InputReader<'a> {
 }
 
 impl TerminalSession {
-    fn open() -> io::Result<Self> {
+    pub(super) fn open() -> io::Result<Self> {
         let mut tty = File::options()
             .read(true)
             .write(true)
@@ -453,4 +462,3 @@ impl Drop for TerminalSession {
         let _ = self.restore();
     }
 }
-
