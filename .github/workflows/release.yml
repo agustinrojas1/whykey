@@ -75,7 +75,9 @@ jobs:
           run() {
             local platform=$1 image=$2 target=$3 output errors
             errors=$(mktemp)
-            output=$(docker run --rm --platform "$platform" \
+            # Pull first so the run's stderr holds only the binary's own messages.
+            docker pull -q --platform "$platform" "$image" >/dev/null
+            output=$(docker run --rm --pull never --platform "$platform" \
               -v "$PWD/target/$target/release:/b:ro" "$image" /b/whykey --version 2>"$errors")
             echo "$image ($platform, $target): $output"
             if [[ -s "$errors" ]]; then
