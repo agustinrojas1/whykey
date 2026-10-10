@@ -83,10 +83,13 @@ pub(crate) fn load(
     let mut forms = parse(content).map_err(|error| format!("{display}: {error}"))?;
     let mut included = Vec::new();
     for form in &forms {
-        if form.head() == Some("include")
-            && let Sexp::List(items, _) = form
-            && let Some(name) = items.get(1).and_then(Sexp::atom)
-        {
+        let include = match form {
+            Sexp::List(items, _) if form.head() == Some("include") => {
+                items.get(1).and_then(Sexp::atom)
+            }
+            _ => None,
+        };
+        if let Some(name) = include {
             let target = path
                 .parent()
                 .map_or_else(|| Path::new(name).to_path_buf(), |dir| dir.join(name));

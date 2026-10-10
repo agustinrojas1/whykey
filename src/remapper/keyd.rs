@@ -90,10 +90,10 @@ impl Keymap {
                 Err(reason) => unreadable.push(reason),
             }
         }
-        if let Some(path) = app_config
-            && let Ok(content) = super::read_config(path)
-        {
-            keymap.app_bindings = parse_app_bindings(path, &content);
+        if let Some(path) = app_config {
+            if let Ok(content) = super::read_config(path) {
+                keymap.app_bindings = parse_app_bindings(path, &content);
+            }
         }
         (keymap, unreadable)
     }
@@ -200,20 +200,20 @@ impl File {
     }
 
     fn lookup(&self, press: Press, held: &[&str]) -> Finding {
-        if held.len() > 1
-            && let Some(layer) = self.layers.iter().find(|layer| {
+        if held.len() > 1 {
+            let chord = self.layers.iter().find(|layer| {
                 let parts: Vec<&str> = layer.name.split('+').collect();
                 parts.len() == held.len() && held.iter().all(|name| parts.contains(name))
-            })
-            && let Some(binding) = layer.binding(press.code)
-        {
-            return self.binding_finding(binding, 0, &layer.name);
+            });
+            if let Some(layer) = chord {
+                if let Some(binding) = layer.binding(press.code) {
+                    return self.binding_finding(binding, 0, &layer.name);
+                }
+            }
         }
         let mut layered: Vec<Finding> = Vec::new();
         for name in held {
-            if let Some(layer) = self.layer(name)
-                && let Some(binding) = layer.binding(press.code)
-            {
+            if let Some(binding) = self.layer(name).and_then(|layer| layer.binding(press.code)) {
                 let carried = press.mods & !self.layer_mods(name);
                 layered.push(self.binding_finding(binding, carried, name));
             }
@@ -241,9 +241,7 @@ impl File {
             .map(String::as_str)
             .chain(["main"])
         {
-            if let Some(layer) = self.layer(name)
-                && let Some(binding) = layer.binding(press.code)
-            {
+            if let Some(binding) = self.layer(name).and_then(|layer| layer.binding(press.code)) {
                 return self.binding_finding(binding, press.mods, name);
             }
         }
@@ -545,25 +543,25 @@ fn parse_file(path: &Path, content: &str, unreadable: &mut Vec<String>) -> File 
                 }
             }
             "global" => {
-                if let Some((name, value)) = split_binding(line)
-                    && name == "default_layout"
-                {
-                    file.default_layout = Some(value.to_owned());
+                if let Some((name, value)) = split_binding(line) {
+                    if name == "default_layout" {
+                        file.default_layout = Some(value.to_owned());
+                    }
                 }
             }
             "aliases" => {
-                if let Some((name, alias)) = split_binding(line)
-                    && let Some(press) = key(name)
-                {
-                    aliases.push((alias.to_owned(), press.code));
-                    // An alias that is itself a key name remaps the key.
-                    if key(alias).is_some() {
-                        pending.push((
-                            "main".into(),
-                            name.to_owned(),
-                            alias.to_owned(),
-                            Rule::new(source, *number, line),
-                        ));
+                if let Some((name, alias)) = split_binding(line) {
+                    if let Some(press) = key(name) {
+                        aliases.push((alias.to_owned(), press.code));
+                        // An alias that is itself a key name remaps the key.
+                        if key(alias).is_some() {
+                            pending.push((
+                                "main".into(),
+                                name.to_owned(),
+                                alias.to_owned(),
+                                Rule::new(source, *number, line),
+                            ));
+                        }
                     }
                 }
             }

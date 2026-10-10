@@ -1615,12 +1615,20 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
     }
     // A remapper that turns the key into another one hands the rest of the
     // route to the remapped key; the conclusion follows that key.
-    if let [remapper, downstream @ ..] = layers
-        && remapper.id == LayerId::Remapper
-        && remapper.outcome == Outcome::Redirected
-        && let Some(binding) = &remapper.binding
-        && let Some(action) = binding.action.as_deref()
-    {
+    let redirect = match layers {
+        [remapper, downstream @ ..]
+            if remapper.id == LayerId::Remapper && remapper.outcome == Outcome::Redirected =>
+        {
+            remapper.binding.as_ref().and_then(|binding| {
+                binding
+                    .action
+                    .as_deref()
+                    .map(|action| (remapper, downstream, binding, action))
+            })
+        }
+        _ => None,
+    };
+    if let Some((remapper, downstream, binding, action)) = redirect {
         let name = binding
             .dispatcher
             .clone()
@@ -1703,26 +1711,28 @@ fn evaluate_layer_conclusion(layers: &[LayerResult], terminal_observed: bool) ->
                 l.binding.as_ref().and_then(|b| b.uncertainty),
                 Some(UncertaintyReason::UnresolvedBindingKey { .. })
             )
-    }) && let Some(UncertaintyReason::UnresolvedBindingKey {
-        consumes_if_matched,
-        ..
-    }) = layer.binding.as_ref().and_then(|b| b.uncertainty)
-    {
-        return Conclusion::PossibleUnresolvedMatch {
-            layer: layer.layer,
-            summary: concise_summary(&layer.summary),
+    }) {
+        if let Some(UncertaintyReason::UnresolvedBindingKey {
             consumes_if_matched,
-        };
+            ..
+        }) = layer.binding.as_ref().and_then(|b| b.uncertainty)
+        {
+            return Conclusion::PossibleUnresolvedMatch {
+                layer: layer.layer,
+                summary: concise_summary(&layer.summary),
+                consumes_if_matched,
+            };
+        }
     }
 
     let unverified_default = |l: &LayerResult| {
         l.binding.as_ref().and_then(|b| b.uncertainty) == Some(UncertaintyReason::UnverifiedDefault)
     };
-    if let Some(shell) = layers.iter().find(|l| unverified_default(l))
-        && !layers
+    if let Some(shell) = layers.iter().find(|l| unverified_default(l)).filter(|_| {
+        !layers
             .iter()
             .any(|l| l.status() == LayerStatus::Handled && !unverified_default(l))
-    {
+    }) {
         let binding = shell.binding.as_ref();
         return Conclusion::UnverifiedDefault {
             layer: shell.layer,
