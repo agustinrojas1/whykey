@@ -1,0 +1,50 @@
+{
+  "id": "zsh-bind-before-vi-init",
+  "description": "a ctrl+t binding made before `bindkey -v` stays in emacs; the viins prompt self-inserts ^T",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.zshrc": [
+      "PS1='%% '",
+      "lab-fire() { touch /tmp/fired }",
+      "zle -N lab-fire",
+      "bindkey '^T' lab-fire",
+      "bindkey -v",
+      "eval \"$(whykey shell-init zsh)\""
+    ]
+  },
+  "pty": {
+    "command": [
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo ab"
+    },
+    {
+      "type": "\\x14"
+    },
+    {
+      "type": " > /tmp/effect\\r"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/effect",
+      "equals": "ab\u0014"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Zsh / ZLE",
+    "run": "pty",
+    "summary": "bound to self-insert"
+  }
+}

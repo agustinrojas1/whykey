@@ -1,0 +1,33 @@
+{
+  "id": "openbox-unbound",
+  "description": "a key with no rc.xml keybind reaches the focused client",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/openbox/rc.xml": [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<openbox_config xmlns=\"http://openbox.org/3.4/rc\">",
+      "  <keyboard>",
+      "    <keybind key=\"W-Return\"><action name=\"Execute\"><command>touch /tmp/fired</command></action></keybind>",
+      "  </keyboard>",
+      "</openbox_config>"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["openbox", "--config-file", "/root/.config/openbox/rc.xml"],
+        "ready": "wm",
+        "ready_grab": [64, 36]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "Openbox",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "openbox"}
+  }
+}

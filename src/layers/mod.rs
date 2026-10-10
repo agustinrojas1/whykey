@@ -30,6 +30,7 @@ pub mod tiling;
 pub mod tmux;
 pub mod wayfire;
 pub mod x11;
+pub mod x11_grab;
 pub mod xfce;
 pub mod zellij;
 

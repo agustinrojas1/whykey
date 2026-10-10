@@ -1,0 +1,23 @@
+{
+  "id": "sway-mode-inactive",
+  "description": "a binding of an inactive mode does not fire in the default mode",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "bindsym Mod4+r mode lab",
+      "mode lab {",
+      "    bindsym t exec touch /tmp/fired",
+      "    bindsym Escape mode default",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["t"],
+    "layer": "Sway",
+    "env": {"XDG_CURRENT_DESKTOP": "sway", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

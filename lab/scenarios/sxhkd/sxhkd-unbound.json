@@ -1,0 +1,14 @@
+{
+  "id": "sxhkd-unbound",
+  "description": "a key with no sxhkd binding reaches the focused client",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/sxhkd/sxhkdrc": ["super + Return", "    touch /tmp/fired"]},
+  "x11": {
+    "daemons": [{"argv": ["sxhkd", "-c", "/root/.config/sxhkd/sxhkdrc"], "ready_grab": [64, 36]}]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {"args": ["super+y"], "layer": "sxhkd", "env": {"XDG_SESSION_TYPE": "x11"}}
+}

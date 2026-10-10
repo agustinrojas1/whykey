@@ -1,0 +1,21 @@
+{
+  "id": "tmux-prefix",
+  "description": "the default prefix C-b is consumed by tmux (C-b t then runs the prefix-table bind)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": ["bind t run-shell 'touch /tmp/fired'"],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "bind -x '\"\\C-t\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-b\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": ["tmux", "-f", "/root/.tmux.conf", "new-session", "-s", "lab", "bash", "-i"],
+    "env": {"SHELL": "/usr/bin/bash"}
+  },
+  "actions": [{"type": "\\x02"}, {"type": "t"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"file": "/tmp/reached-shell"}},
+  "whykey": {"args": ["ctrl+b"], "layer": "tmux", "run": "pty"}
+}

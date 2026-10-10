@@ -1,0 +1,47 @@
+{
+  "id": "zsh-user-bind-noinit",
+  "description": "a zle widget bound to ctrl+t in ~/.zshrc fires",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.zshrc": [
+      "PS1='%% '",
+      "lab-fire() { touch /tmp/fired }",
+      "zle -N lab-fire",
+      "bindkey '^T' lab-fire"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zsh",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Zsh / ZLE",
+    "run": "pty",
+    "summary": "bound to lab-fire",
+    "accept": [
+      "handled-uncertain"
+    ]
+  }
+}

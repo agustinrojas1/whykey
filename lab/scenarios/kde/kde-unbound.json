@@ -1,0 +1,32 @@
+{
+  "id": "kde-unbound",
+  "description": "a key with no kglobalaccel shortcut reaches the focused client",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired"],
+    "/root/.config/kglobalshortcutsrc": ["[services][lab-fire.desktop]", "_launch=Meta+Return"]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["/usr/libexec/kglobalacceld"],
+        "env": {"QT_QPA_PLATFORM": "xcb"},
+        "ready_grab": [64, 36]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "KDE Plasma",
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "KDE",
+      "KDE_FULL_SESSION": "true",
+      "KDE_SESSION_VERSION": "6"
+    }
+  }
+}

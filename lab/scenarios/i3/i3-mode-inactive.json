@@ -1,0 +1,32 @@
+{
+  "id": "i3-mode-inactive",
+  "description": "a binding of an inactive mode does not fire in the default mode",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/i3/config": [
+      "bindsym Mod4+r mode lab",
+      "mode lab {",
+      "    bindsym t exec touch /tmp/fired",
+      "    bindsym Escape mode default",
+      "}"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["i3", "-c", "/root/.config/i3/config"],
+        "ready": "wm",
+        "ready_grab": [64, 27]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["t"],
+    "layer": "i3",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "i3"}
+  }
+}

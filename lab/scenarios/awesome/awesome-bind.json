@@ -1,0 +1,33 @@
+{
+  "id": "awesome-bind",
+  "description": "an rc.lua root key Mod4+t fires and awesome consumes the key",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/awesome/rc.lua": [
+      "local awful = require(\"awful\")",
+      "-- Clients are only visible on a selected tag; the stock rc.lua creates tags",
+      "-- per screen and focuses new clients through its rules.",
+      "awful.tag({ \"1\" }, screen[1], awful.layout.suit.floating)",
+      "client.connect_signal(\"manage\", function(c) client.focus = c end)",
+      "root.keys(awful.key({ \"Mod4\" }, \"t\", function() awful.spawn(\"touch /tmp/fired\") end))"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["awesome", "-c", "/root/.config/awesome/rc.lua"],
+        "ready": "wm",
+        "ready_grab": [64, 28]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "AwesomeWM",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "awesome"}
+  }
+}

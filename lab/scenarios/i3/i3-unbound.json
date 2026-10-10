@@ -1,0 +1,24 @@
+{
+  "id": "i3-unbound",
+  "description": "a key with no binding reaches the focused client",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {"/root/.config/i3/config": ["bindsym Mod4+Return exec touch /tmp/other"]},
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["i3", "-c", "/root/.config/i3/config"],
+        "ready": "wm",
+        "ready_grab": [64, 36]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "i3",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "i3"}
+  }
+}

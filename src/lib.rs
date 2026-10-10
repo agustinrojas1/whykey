@@ -23,6 +23,7 @@ pub mod ime;
 pub mod key;
 pub mod layers;
 pub mod listen;
+pub mod probe;
 pub mod registry;
 pub mod remapper;
 pub mod replay;

@@ -1,0 +1,15 @@
+{
+  "id": "sway-unbound",
+  "description": "a key with no binding reaches the focused client",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {"/root/.config/sway/config": ["bindsym Mod4+Return exec touch /tmp/other"]},
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "Sway",
+    "env": {"XDG_CURRENT_DESKTOP": "sway", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

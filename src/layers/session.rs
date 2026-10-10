@@ -41,7 +41,7 @@ pub fn inspect_with_env(
         details.push(format!("terminal program: {term_program}"));
     }
     if !env.shell.is_empty() {
-        details.push(format!("shell: {}", env.shell));
+        details.push(format!("login shell ($SHELL): {}", env.shell));
     }
     if let Some(pane) = &env.tmux_pane {
         details.push(format!("tmux pane: {pane}"));

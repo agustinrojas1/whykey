@@ -1,5 +1,5 @@
-//! Capture one key event from a native compositor, Linux evdev, or the
-//! controlling terminal, and explain it.
+//! Capture one key event from a native compositor, Linux evdev, whykey's own
+//! probe window, or the controlling terminal, and explain it.
 //!
 //! When native compositor capture is available, the default listener observes
 //! through a pass-through hook; `--suppress` opts into a temporary runtime
@@ -9,7 +9,8 @@
 //! capture (`--terminal` explicitly forces terminal capture), while
 //! `--suppress` fails instead of silently capturing without suppression. The
 //! optional evdev backend observes physical input events before compositor
-//! processing.
+//! processing. `--window` opens a focused probe window and observes what the
+//! compositor/desktop actually delivers to a client.
 
 use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
@@ -47,6 +48,9 @@ pub enum CaptureDisposition {
     Suppressed,
     PassedThrough,
     ObservedOnly,
+    /// Modifier changes reached the observation point but the key pressed
+    /// with them did not: something above it consumed the key.
+    NotDelivered,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -63,6 +67,8 @@ pub struct Options {
     pub ndjson: bool,
     pub terminal: bool,
     pub evdev: bool,
+    /// Capture through whykey's own focused probe window.
+    pub window: bool,
     pub device: Option<PathBuf>,
     /// Stop waiting after this amount of wall-clock time. The deadline is
     /// shared by all reports in a repeated capture.
@@ -271,8 +277,15 @@ pub struct DeviceModifierState {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CaptureSource {
     Terminal,
-    CompositorNative { backend: String },
-    Evdev { device: String, path: String },
+    CompositorNative {
+        backend: String,
+    },
+    Evdev {
+        device: String,
+        path: String,
+    },
+    /// whykey's own focused Wayland/X11 client.
+    ProbeWindow,
 }
 
 impl Serialize for CaptureSource {
@@ -296,6 +309,12 @@ impl Serialize for CaptureSource {
                     "Evdev",
                     &serde_json::json!({ "device": device, "path": path }),
                 )?;
+                map.end()
+            }
+            Self::ProbeWindow => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("kind", "probe-window")?;
                 map.end()
             }
         }
@@ -328,16 +347,20 @@ impl<'de> Deserialize<'de> for CaptureSource {
                         backend: backend.to_owned(),
                     });
                 }
-                if object.get("kind").and_then(serde_json::Value::as_str)
-                    == Some("compositor-native")
-                {
-                    let backend = object
-                        .get("backend")
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(|| serde::de::Error::custom("native source lacks backend"))?;
-                    return Ok(Self::CompositorNative {
-                        backend: backend.to_owned(),
-                    });
+                match object.get("kind").and_then(serde_json::Value::as_str) {
+                    Some("probe-window") => return Ok(Self::ProbeWindow),
+                    Some("compositor-native") => {
+                        let backend = object
+                            .get("backend")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| {
+                                serde::de::Error::custom("native source lacks backend")
+                            })?;
+                        return Ok(Self::CompositorNative {
+                            backend: backend.to_owned(),
+                        });
+                    }
+                    _ => {}
                 }
                 if let Some(evdev) = object.remove("Evdev") {
                     return serde_json::from_value::<EvdevSource>(evdev)
@@ -370,13 +393,14 @@ impl CaptureSource {
                 self.backend_name().unwrap_or("compositor").to_owned()
             }
             Self::Evdev { device, path } => format!("evdev ({device}; {path})"),
+            Self::ProbeWindow => "probe window".into(),
         }
     }
 
     pub fn backend_name(&self) -> Option<&str> {
         match self {
             Self::CompositorNative { backend } => Some(backend),
-            Self::Terminal | Self::Evdev { .. } => None,
+            Self::Terminal | Self::Evdev { .. } | Self::ProbeWindow => None,
         }
     }
 
@@ -386,6 +410,12 @@ impl CaptureSource {
 
     pub fn proves_compositor_receipt(&self) -> bool {
         matches!(self, Self::CompositorNative { .. })
+    }
+
+    /// A key that reached whykey's focused probe window passed the
+    /// compositor/desktop and any input method on its way to a client.
+    pub fn proves_compositor_delivery(&self) -> bool {
+        matches!(self, Self::ProbeWindow)
     }
 }
 
@@ -407,12 +437,14 @@ impl KeyEventType {
 }
 
 /// Why `--suppress` cannot be honoured for an explicitly forced backend.
-/// Terminal and evdev capture never hold compositor shortcuts, so the
-/// combination is refused instead of silently capturing without suppression.
+/// Terminal, evdev, and probe-window capture never hold compositor
+/// shortcuts, so the combination is refused instead of silently capturing
+/// without suppression.
 pub fn suppress_conflict(
     policy: CapturePolicy,
     terminal: bool,
     evdev: bool,
+    window: bool,
 ) -> Option<&'static str> {
     if !policy.suppresses() {
         None
@@ -424,6 +456,10 @@ pub fn suppress_conflict(
         Some(
             "--suppress cannot be used with --evdev or --device: evdev capture is read-only and cannot suppress compositor shortcuts",
         )
+    } else if window {
+        Some(
+            "--suppress cannot be used with --window: the probe window only sees what the compositor delivers and cannot suppress compositor shortcuts",
+        )
     } else {
         None
     }
@@ -431,7 +467,12 @@ pub fn suppress_conflict(
 
 pub fn run(options: Options) -> Result<(), ListenError> {
     let evdev = options.evdev || options.device.is_some();
-    if let Some(conflict) = suppress_conflict(options.capture_policy, options.terminal, evdev) {
+    if let Some(conflict) = suppress_conflict(
+        options.capture_policy,
+        options.terminal,
+        evdev,
+        options.window,
+    ) {
         return Err(ListenError::Setup(conflict.into()));
     }
     if options.dry_run || options.explain_capture {
@@ -448,6 +489,9 @@ pub fn run(options: Options) -> Result<(), ListenError> {
             print_capture_dry_run(&discovery.environment, &options);
             return Ok(());
         }
+    }
+    if options.window {
+        return run_window(options);
     }
     if evdev {
         return run_evdev(options);
@@ -510,6 +554,7 @@ mod evdev;
 mod output;
 mod protocol;
 mod terminal;
+mod window;
 use evdev::run_evdev;
 #[cfg(target_os = "linux")]
 use evdev::{EvdevSession, evdev_device_name, evdev_keyboard_capability};
@@ -525,6 +570,7 @@ use output::{
 pub use terminal::EvdevBackend;
 use terminal::SignalGuard;
 pub use terminal::TerminalBackend;
+use window::run_window;
 
 #[cfg(test)]
 mod tests {
@@ -1393,27 +1439,38 @@ xkb_symbols "pc" {
     fn suppress_is_refused_for_backends_that_cannot_suppress() {
         let suppress = CapturePolicy::Suppress;
         assert!(
-            suppress_conflict(suppress, true, false)
+            suppress_conflict(suppress, true, false, false)
                 .unwrap()
                 .contains("--terminal")
         );
         assert!(
-            suppress_conflict(suppress, false, true)
+            suppress_conflict(suppress, false, true, false)
                 .unwrap()
                 .contains("--evdev")
         );
-        assert_eq!(suppress_conflict(suppress, false, false), None);
+        assert!(
+            suppress_conflict(suppress, false, false, true)
+                .unwrap()
+                .contains("--window")
+        );
+        assert_eq!(suppress_conflict(suppress, false, false, false), None);
         assert_eq!(
-            suppress_conflict(CapturePolicy::PassThrough, true, true),
+            suppress_conflict(CapturePolicy::PassThrough, true, true, true),
             None
         );
 
         // The listener refuses before any capture is opened, so no terminal
-        // mode or compositor state is touched.
-        for (terminal, evdev, device) in [
-            (true, false, None),
-            (false, true, None),
-            (false, false, Some(PathBuf::from("/dev/input/event0"))),
+        // mode, compositor state, or probe window is touched.
+        for (terminal, evdev, device, window) in [
+            (true, false, None, false),
+            (false, true, None, false),
+            (
+                false,
+                false,
+                Some(PathBuf::from("/dev/input/event0")),
+                false,
+            ),
+            (false, false, None, true),
         ] {
             let error = run(Options {
                 capture_policy: suppress,
@@ -1421,6 +1478,7 @@ xkb_symbols "pc" {
                 terminal,
                 evdev,
                 device,
+                window,
                 ..Options::default()
             })
             .unwrap_err();

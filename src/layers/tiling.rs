@@ -25,7 +25,11 @@ pub(crate) struct Family {
     pub msg: &'static str,
     /// Arguments placed after `-t <type>`.
     pub msg_args: &'static [&'static str],
-    /// Whether a `--release` binding forwards the key press to the focused
+    /// Extra arguments that make `get_config` print the JSON reply. Without
+    /// `-r`, i3-msg prints only the bare config text, and i3-msg < 4.20
+    /// rejects `-r`; both shapes are accepted.
+    pub config_raw_args: &'static [&'static str],
+    /// Whether a `--release` binding delivers the key press to the focused
     /// client. `None` when the compositor's behavior is not verified.
     pub release_press_forwarded: Option<bool>,
     /// Configuration paths the compositor searches, in order.
@@ -733,9 +737,12 @@ pub(crate) struct LoadedConfig {
     pub active_mode: Option<String>,
 }
 
-fn run_msg(family: &Family, message: &str) -> Result<serde_json::Value, String> {
+fn run_msg_stdout(family: &Family, message: &str, extra: &[&str]) -> Result<Vec<u8>, String> {
     let mut command = Command::new(family.msg);
-    command.args(["-t", message]).args(family.msg_args);
+    command
+        .args(["-t", message])
+        .args(family.msg_args)
+        .args(extra);
     let output = crate::command::output(&mut command).map_err(|error| error.to_string())?;
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -745,8 +752,43 @@ fn run_msg(family: &Family, message: &str) -> Result<serde_json::Value, String> 
             format!("{}: {message}", family.msg)
         });
     }
-    serde_json::from_slice(&output.stdout)
+    Ok(output.stdout)
+}
+
+fn run_msg(family: &Family, message: &str) -> Result<serde_json::Value, String> {
+    let stdout = run_msg_stdout(family, message, &[])?;
+    serde_json::from_slice(&stdout)
         .map_err(|error| format!("{} returned invalid {message} data: {error}", family.msg))
+}
+
+/// The `GET_CONFIG` reply as JSON. A client that printed the bare config text
+/// (i3-msg without `-r`) yields `{"config": <text>}`.
+fn run_get_config(family: &Family) -> Result<serde_json::Value, String> {
+    let stdout = match run_msg_stdout(family, "get_config", family.config_raw_args) {
+        Ok(stdout) => stdout,
+        Err(raw_error) if !family.config_raw_args.is_empty() => {
+            run_msg_stdout(family, "get_config", &[]).map_err(|error| {
+                format!(
+                    "{error} (with {}: {raw_error})",
+                    family.config_raw_args.join(" ")
+                )
+            })?
+        }
+        Err(error) => return Err(error),
+    };
+    get_config_value(&stdout)
+        .ok_or_else(|| format!("{} returned invalid get_config data", family.msg))
+}
+
+fn get_config_value(stdout: &[u8]) -> Option<serde_json::Value> {
+    match serde_json::from_slice::<serde_json::Value>(stdout) {
+        Ok(value) if value.get("config").is_some() => Some(value),
+        Ok(_) => None,
+        Err(_) => {
+            let text = std::str::from_utf8(stdout).ok()?;
+            Some(serde_json::json!({ "config": text }))
+        }
+    }
 }
 
 pub(crate) fn version_available(family: &Family) -> bool {
@@ -765,14 +807,25 @@ pub(crate) fn focused_pid(family: &Family) -> Result<u32, String> {
 
 /// Read and parse the running configuration.
 pub(crate) fn load(family: &Family) -> Result<LoadedConfig, String> {
-    let reply = run_msg(family, "get_config")?;
+    let reply = run_get_config(family)?;
     let (mut main, provided) = config_reply(&reply)?;
     if main.path.is_none() {
-        // Sway does not report the config path; identify it by content so
-        // relative includes resolve the way the compositor resolved them.
-        main.path = (family.config_candidates)().into_iter().find(|candidate| {
-            std::fs::read_to_string(candidate).is_ok_and(|contents| contents == main.contents)
+        // Sway and i3 < 4.20 do not attach the path to the config text;
+        // `get_version` names the loaded file, and the search order covers
+        // older releases. Identify it by content so relative includes
+        // resolve the way the compositor resolved them.
+        let reported = run_msg(family, "get_version").ok().and_then(|version| {
+            version
+                .get("loaded_config_file_name")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
         });
+        main.path = reported
+            .into_iter()
+            .chain((family.config_candidates)())
+            .find(|candidate| {
+                std::fs::read_to_string(candidate).is_ok_and(|contents| contents == main.contents)
+            });
     }
     let parsed = parse_config(&main, provided);
     let active_mode = run_msg(family, "get_binding_state").ok().and_then(|state| {
@@ -952,7 +1005,7 @@ pub(crate) fn inspect(
         match family.release_press_forwarded {
             Some(true) => {
                 details.push(format!(
-                    "--release: {} forwards the key press to the focused client and runs the command on release",
+                    "--release: {} delivers the press and the release to the focused client and runs the command on release",
                     family.layer
                 ));
                 (
@@ -1092,6 +1145,7 @@ mod tests {
         source: "Sway",
         msg: "swaymsg",
         msg_args: &["-r"],
+        config_raw_args: &[],
         release_press_forwarded: Some(true),
         config_candidates: Vec::new,
     };
@@ -1314,7 +1368,7 @@ bar {
         assert!(
             sway.details
                 .iter()
-                .any(|line| line.contains("forwards the key press"))
+                .any(|line| line.contains("delivers the press and the release"))
         );
         let i3 = inspect(&I3, loaded(SWAY_CONFIG, Some("default")), &query("print"));
         assert_eq!(i3.outcome, Outcome::Consumed);
@@ -1425,6 +1479,20 @@ bar {
         let (main, provided) = config_reply(&sway_reply).unwrap();
         assert!(main.path.is_none() && provided.is_empty());
         assert!(config_reply(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn get_config_accepts_json_and_the_bare_text_i3_msg_prints() {
+        // i3-msg 4.25 without `-r` prints only the config text.
+        let text = "set $mod Mod4\nbindsym $mod+t exec true\n";
+        let value = get_config_value(text.as_bytes()).unwrap();
+        let (main, provided) = config_reply(&value).unwrap();
+        assert_eq!(main.contents, text);
+        assert!(provided.is_empty());
+        let json = br#"{"config":"bindsym a exec b\n","included_configs":[]}"#;
+        let (main, _) = config_reply(&get_config_value(json).unwrap()).unwrap();
+        assert_eq!(main.contents, "bindsym a exec b\n");
+        assert!(get_config_value(br#"{"error":"x"}"#).is_none());
     }
 
     #[test]

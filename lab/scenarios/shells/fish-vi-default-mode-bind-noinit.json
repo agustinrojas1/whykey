@@ -1,0 +1,46 @@
+{
+  "id": "fish-vi-default-mode-bind-noinit",
+  "description": "with fish_vi_key_bindings, a plain `bind ctrl-t` belongs to mode default (normal) and does not fire at the insert prompt",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/fish/config.fish": [
+      "function fish_prompt; echo -n '> '; end",
+      "fish_vi_key_bindings",
+      "bind ctrl-t 'touch /tmp/fired'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "fish",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x14"
+    },
+    {
+      "sleep": 0.5
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "Fish",
+    "run": "pty",
+    "summary": "not bound in bind mode insert",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

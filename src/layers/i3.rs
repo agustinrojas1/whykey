@@ -15,12 +15,15 @@ pub struct I3;
 /// XCB_GRAB_MODE_ASYNC)` for every keyboard binding regardless of
 /// `bind->release`, so the X server delivers both the KeyPress and the
 /// KeyRelease to i3 alone, and i3 never replays them (`handle_key_press` in
-/// src/key_press.c only runs the matched binding).
+/// src/key_press.c only runs the matched binding). Lab-verified with i3 4.25
+/// on Xvfb and xdotool: a focused X client logged only `Super_L` for a
+/// `bindsym --release Mod4+r` while the command fired.
 pub(super) const FAMILY: Family = Family {
     layer: "i3",
     source: "i3",
     msg: "i3-msg",
     msg_args: &[],
+    config_raw_args: &["-r"],
     release_press_forwarded: Some(false),
     config_candidates,
 };

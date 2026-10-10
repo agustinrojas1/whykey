@@ -1,0 +1,38 @@
+{
+  "id": "kde-inactive-component",
+  "description": "a shortcut persisted for a component that is not running (kwin) stays registered in kglobalaccel but is not grabbed",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired-launch"],
+    "/root/.config/kglobalshortcutsrc": [
+      "[services][lab-fire.desktop]",
+      "_launch=Meta+T",
+      "",
+      "[kwin]",
+      "Window Close=Meta+Y,Alt+F4,Close Window"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["/usr/libexec/kglobalacceld"],
+        "env": {"QT_QPA_PLATFORM": "xcb"},
+        "ready_grab": [64, 28]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+y"]}],
+  "ground_truth": {"fired": {"sh": "false"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "KDE Plasma",
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "KDE",
+      "KDE_FULL_SESSION": "true",
+      "KDE_SESSION_VERSION": "6"
+    }
+  }
+}

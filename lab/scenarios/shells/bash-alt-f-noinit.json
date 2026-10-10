@@ -1,0 +1,51 @@
+{
+  "id": "bash-alt-f-noinit",
+  "description": "alt+f (ESC f) runs readline forward-word",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.bashrc": [
+      "PS1='$ '"
+    ]
+  },
+  "pty": {
+    "command": [
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "echo ab cd"
+    },
+    {
+      "type": "\\x1bb\\x1bb"
+    },
+    {
+      "type": "\\x1bf"
+    },
+    {
+      "type": "X > /tmp/effect\\r"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/effect",
+      "equals": "abX cd"
+    }
+  },
+  "whykey": {
+    "args": [
+      "alt+f"
+    ],
+    "layer": "Bash / Readline",
+    "run": "pty",
+    "summary": "bound to forward-word",
+    "accept": [
+      "handled-uncertain"
+    ]
+  }
+}
