@@ -41,6 +41,7 @@ exits 1 on any mismatch.
 | `--image NAME` | Use this lab image. Default: `whykey-lab`. |
 | `--results FILE` | Write the results to this file. Default: `lab/results.json`. |
 | `--repeat N` | Run every selected scenario N times at once, to hunt flakes, e.g. `--only sway-mode-inactive --repeat 30 -j 12`. |
+| `--retries N` | Rerun a scenario that ended in a lab error (ground truth could not be established, e.g. a slow terminal lost the first key) up to N times, one at a time. Default: 2. A mismatch with reality is never retried. Retried records carry `retried`. |
 
 To add a run's results to the support matrix, run
 `python3 tools/generate_support_matrix.py` (it reads `lab/results.json`) or

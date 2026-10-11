@@ -445,6 +445,10 @@ def main() -> int:
     parser.add_argument("--results", type=Path, default=LAB / "results.json")
     parser.add_argument("--repeat", type=int, default=1, metavar="N",
                         help="run every selected scenario N times at once (flake hunting)")
+    parser.add_argument("--retries", type=int, default=2, metavar="N",
+                        help="rerun a scenario up to N times, one at a time, when the lab "
+                             "could not establish ground truth (lab error); a mismatch "
+                             "with reality is never retried")
     args = parser.parse_args()
     args.binary = args.binary.resolve()
     if not args.binary.is_file():
@@ -471,6 +475,21 @@ def main() -> int:
             records.append(record)
             status = ("PASS~" if record.get("tolerated") else "PASS") if record["pass"] else "FAIL"
             print(f"[{status}] {record['scenario']}", file=sys.stderr, flush=True)
+
+    # A lab error means the oracle failed (slow start, lost first key), not
+    # that whykey disagreed with reality. Rerun those alone, without load.
+    loaded = {path.relative_to(ROOT).as_posix(): (path, scenario) for path, scenario in scenarios}
+    for attempt in range(1, max(0, args.retries) + 1):
+        errored = [record for record in records if record.get("error")]
+        if not errored:
+            break
+        for record in errored:
+            path, scenario = loaded[record["file"]]
+            retry = evaluate(path, scenario, run_container(args, path, scenario, 0))
+            retry["retried"] = attempt
+            records[records.index(record)] = retry
+            status = ("PASS~" if retry.get("tolerated") else "PASS") if retry["pass"] else "FAIL"
+            print(f"[{status}] {retry['scenario']} (retry {attempt})", file=sys.stderr, flush=True)
 
     records.sort(key=lambda record: record["file"])
     args.results.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
