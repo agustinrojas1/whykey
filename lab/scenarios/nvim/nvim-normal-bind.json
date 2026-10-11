@@ -1,0 +1,20 @@
+{
+  "id": "nvim-normal-bind",
+  "description": "<C-x> mapped in normal mode runs the lab's function; the mapping consumes the key",
+  "tier": "observed",
+  "environment": "nvim",
+  "files": {
+    "/root/.config/nvim/init.lua": [
+      "vim.on_key(function(key) vim.fn.writefile({vim.fn.keytrans(key)}, '/tmp/nvim-keys', 'a') end)",
+      "vim.keymap.set('n', '<C-x>', function() vim.fn.writefile({'fired'}, '/tmp/fired') end)"
+    ]
+  },
+  "pty": {"command": ["nvim", "-u", "/root/.config/nvim/init.lua"]},
+  "actions": [{"type": "\\x18"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "reached": {"sh": "grep -qxF '<C-X>' /tmp/nvim-keys"}},
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-nvim", "ctrl+x"],
+    "layer": "External extension",
+    "run": "direct"
+  }
+}

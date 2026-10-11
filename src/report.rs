@@ -249,7 +249,19 @@ pub fn render_with_options(
     layers: &[LayerResult],
     options: RenderOptions,
 ) -> String {
-    render_inner(key, layers, None, options, true)
+    render_inner(key, layers, None, options, true, None)
+}
+
+/// Like [`render_with_options`] for a `code:N` query whose key the active
+/// layout names `key_symbol`: the headline shows the symbol, the verbose
+/// evidence keeps the keycode.
+pub fn render_with_key_symbol(
+    key: &KeyCombo,
+    layers: &[LayerResult],
+    options: RenderOptions,
+    key_symbol: Option<&str>,
+) -> String {
+    render_inner(key, layers, None, options, true, key_symbol)
 }
 
 pub fn render_observed(observed: &ObservedKey, layers: &[LayerResult], verbose: bool) -> String {
@@ -264,7 +276,7 @@ pub fn render_observed_with_options(
     if observed.disposition == crate::listen::CaptureDisposition::NotDelivered {
         return render_not_delivered(observed, options);
     }
-    render_inner(&observed.combo, layers, Some(observed), options, true)
+    render_inner(&observed.combo, layers, Some(observed), options, true, None)
 }
 
 /// Modifiers reached the observation point but the key pressed with them
@@ -340,7 +352,7 @@ pub fn render_sequence_with_options(
                 style::human_key(key)
             ))
         ));
-        output.push_str(&render_inner(key, layers, None, options, false));
+        output.push_str(&render_inner(key, layers, None, options, false, None));
         if index + 1 < sequence.len() {
             output.push('\n');
         }
@@ -412,16 +424,23 @@ fn render_inner(
     observation: Option<&ObservedKey>,
     options: RenderOptions,
     include_header: bool,
+    key_symbol: Option<&str>,
 ) -> String {
     let observed = observation.is_some();
     let terminal_observed = observation.is_some_and(|value| value.source.confirms_terminal());
     let operation = if observed { "Listen" } else { "Inspect" };
-    let human_key = style::human_key(key);
     let evaluated = evaluate_conclusion(layers, observation, terminal_observed);
     let mut output = String::new();
 
     if include_header {
-        output.push_str(&options.bold(human_key));
+        let headline = match key_symbol {
+            Some(symbol) => style::human_key(&KeyCombo::from_parts(
+                key.modmask(),
+                crate::key::normalize_key_str(symbol),
+            )),
+            None => style::human_key(key),
+        };
+        output.push_str(&options.bold(headline));
         output.push_str(&options.accent(format!(" · {operation}")));
         output.push_str("\n\n");
     }
@@ -521,7 +540,7 @@ fn render_inner(
     }
 
     if options.verbose {
-        render_verbose_evidence(&mut output, key, layers, observation, options);
+        render_verbose_evidence(&mut output, key, layers, observation, options, key_symbol);
         if let Some(note) = compositor_candidates_note() {
             output.push_str(&options.muted(note));
         }
@@ -1063,7 +1082,7 @@ fn uncertainty_text(
         return match then {
             Some(then) => uncertainty_text(_key, layers, observation, then),
             None => Some(
-                "The remapped key depends on the XKB layout, so later layers were not evaluated for it."
+                "The remapped key's keysym depends on the XKB layout or NumLock state, so later layers were not evaluated for it."
                     .into(),
             ),
         };
@@ -1252,6 +1271,7 @@ fn render_verbose_evidence(
     layers: &[LayerResult],
     observation: Option<&ObservedKey>,
     options: RenderOptions,
+    key_symbol: Option<&str>,
 ) {
     output.push_str(&options.accent("Technical evidence"));
     output.push('\n');
@@ -1422,7 +1442,13 @@ fn render_verbose_evidence(
     }
     push_wrapped(
         output,
-        &format!("requested key: {}", style::human_key(key)),
+        &match key_symbol {
+            Some(symbol) => format!(
+                "requested key: {} ({symbol} in the active XKB layout)",
+                style::human_key(key)
+            ),
+            None => format!("requested key: {}", style::human_key(key)),
+        },
         options,
         "  ",
         "  ",
@@ -3905,5 +3931,18 @@ mod tests {
             Some("This applies if earlier layers forward the key.")
         );
         assert_eq!(uncertainty_text(&key, &layers, None, &conclusion), None);
+    }
+
+    #[test]
+    fn a_code_query_is_headlined_by_its_layout_symbol() {
+        let key: KeyCombo = "shift+super+code:201".parse().unwrap();
+        let plain = render_with_key_symbol(&key, &[], RenderOptions::plain(true), Some("F23"));
+        assert!(plain.starts_with("Shift+Super+F23 · Inspect"), "{plain}");
+        assert!(
+            plain.contains("requested key: Shift+Super+code:201 (F23 in the active XKB layout)"),
+            "{plain}"
+        );
+        let unresolved = render_with_key_symbol(&key, &[], RenderOptions::plain(false), None);
+        assert!(unresolved.starts_with("Shift+Super+code:201 · Inspect"));
     }
 }

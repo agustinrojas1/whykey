@@ -23,6 +23,7 @@ override_dh_auto_install:
 	install -D -m 0755 target/release/whykey debian/whykey/usr/bin/whykey
 	install -D -m 0755 extensions/whykey-nvim debian/whykey/usr/bin/whykey-nvim
 	install -D -m 0755 extensions/whykey-vscode debian/whykey/usr/bin/whykey-vscode
+	install -D -m 0644 extensions/whykey-vscode-defaults.json debian/whykey/usr/share/whykey/whykey-vscode-defaults.json
 	install -D -m 0755 extensions/whykey-emacs debian/whykey/usr/bin/whykey-emacs
 	install -D -m 0644 whykey.1 debian/whykey/usr/share/man/man1/whykey.1
 	install -D -m 0644 README.md debian/whykey/usr/share/doc/whykey/README.md

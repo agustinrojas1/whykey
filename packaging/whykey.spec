@@ -3,7 +3,7 @@
 %global __requires_exclude ^/usr/bin/python3$
 
 Name:           whykey
-Version:        2.1.0
+Version:        2.2.0
 Release:        1%{?dist}
 Summary:        Explain where a Linux key combination is handled
 License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3.0
@@ -36,6 +36,7 @@ optional whykey-nvim, whykey-vscode, and whykey-emacs extensions need python3.
 install -Dpm0755 target/release/whykey %{buildroot}%{_bindir}/whykey
 install -Dpm0755 extensions/whykey-nvim %{buildroot}%{_bindir}/whykey-nvim
 install -Dpm0755 extensions/whykey-vscode %{buildroot}%{_bindir}/whykey-vscode
+install -Dpm0644 extensions/whykey-vscode-defaults.json %{buildroot}%{_datadir}/whykey/whykey-vscode-defaults.json
 install -Dpm0755 extensions/whykey-emacs %{buildroot}%{_bindir}/whykey-emacs
 install -Dpm0644 whykey.1 %{buildroot}%{_mandir}/man1/whykey.1
 install -Dpm0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
@@ -52,6 +53,7 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %{_bindir}/whykey
 %{_bindir}/whykey-nvim
 %{_bindir}/whykey-vscode
+%{_datadir}/whykey/whykey-vscode-defaults.json
 %{_bindir}/whykey-emacs
 %{_mandir}/man1/whykey.1*
 %license %{_licensedir}/%{name}/LICENSE
@@ -66,6 +68,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %doc %{_docdir}/%{name}/support-matrix.json
 
 %changelog
+* Sun Oct 11 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.2.0-1
+- Verify more desktops, terminals, and editors in the lab; bundle VS Code default keybindings; kernel-keyboard Hyprland capture checks
+
 * Sun Oct 11 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.1.0-1
 - Fix bugs found by verification sweeps (tmux parsing, keypad keys, sxhkd, CLI robustness); static musl and glibc 2.28 release builds
 

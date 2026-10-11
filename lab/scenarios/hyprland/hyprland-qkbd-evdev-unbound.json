@@ -1,0 +1,44 @@
+{
+  "id": "hyprland-qkbd-evdev-unbound",
+  "description": "listen --evdev reads the VM kernel keyboard's /dev/input events before Hyprland; an unbound Super+X is observed and reaches the probe",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, T, exec, touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "qkbd": [
+        "super+x"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--evdev",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": {
+      "stderr": "Waiting for input"
+    },
+    "observation": true,
+    "combo": {
+      "key": "X",
+      "modifiers": 64
+    }
+  }
+}

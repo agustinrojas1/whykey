@@ -1,0 +1,20 @@
+{
+  "id": "emacs-global-bind",
+  "description": "<f5> bound in the global keymap runs lab-fire; Emacs consumes the key",
+  "tier": "observed",
+  "environment": "emacs",
+  "files": {
+    "/root/.emacs.d/init.el": [
+      "(defun lab-fire () (interactive) (write-region \"fired\\n\" nil \"/tmp/fired\"))",
+      "(global-set-key (kbd \"<f5>\") #'lab-fire)"
+    ]
+  },
+  "actions": [{"type": "\\e[15~"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "reached": {"keylog": "<f5>"}},
+  "emacs": {"key_binding": ["<f5>"]},
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-emacs", "f5"],
+    "layer": "External extension",
+    "run": "direct"
+  }
+}

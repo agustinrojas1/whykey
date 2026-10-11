@@ -48,9 +48,9 @@ fixtures pass.
 | `compositor.sway` | compositor | Implemented | lab-verified (9 scenarios) | Inspect Sway bindings by parsing the running configuration from get_config IPC and matching the get_binding_state mode. |
 | `compositor.i3` | compositor | Implemented | lab-verified (5 scenarios); named the grabbing binding in 3 scenarios where the X11 grab probe decided | Inspect i3 bindings by parsing the running configuration (including included_configs) from get_config IPC and matching the get_binding_state mode. |
 | `compositor.kde` | compositor | Implemented | lab-verified (3 scenarios); named the grabbing binding in 1 scenario where the X11 grab probe decided | Inspect KDE Plasma global shortcuts by asking the running kglobalaccel daemon which components use a key and whether they are active. |
-| `compositor.xfce` | compositor | Implemented | unverified | Inspect Xfce keyboard-shortcut channel values. |
+| `compositor.xfce` | compositor | Implemented | named the grabbing binding in 1 scenario where the X11 grab probe decided | Inspect Xfce keyboard-shortcut channel values. |
 | `compositor.cinnamon` | compositor | Implemented | unverified | Inspect Cinnamon global keybinding schemas. |
-| `compositor.mate` | compositor | Implemented | unverified | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
+| `compositor.mate` | compositor | Implemented | named the grabbing binding in 1 scenario where the X11 grab probe decided | Inspect MATE Marco and SettingsDaemon keybinding schemas. |
 | `compositor.niri` | compositor | Implemented | unverified | Inspect literal Niri binds configuration. |
 | `compositor.dwl` | compositor | Implemented | unverified | Inspect literal dwl config.h key mappings conditionally; dwl has no stable capture IPC. |
 | `compositor.herbstluftwm` | compositor | Implemented | unverified | Inspect effective herbstluftwm key bindings through bounded herbstclient IPC. |
@@ -65,7 +65,7 @@ fixtures pass.
 | `compositor.portal-globalshortcuts` | compositor | Implemented | unverified | Probe read-only xdg-desktop-portal GlobalShortcuts availability; the API does not expose an existing binding inventory. |
 | `compositor.kglobalaccel-runtime` | compositor | Implemented | lab-verified (3 scenarios); named the grabbing binding in 1 scenario where the X11 grab probe decided | Ask the running kglobalaccel over D-Bus (globalShortcutsByKey, isActive, allShortcutInfos) without auto-starting it; kglobalshortcutsrc is a configured-only fallback. |
 | `compositor.gnome-gsettings` | compositor | Implemented | lab-verified (4 scenarios; mutter-owned bindings only (org.gnome.desktop.wm.keybindings, mutter run headless); GNOME Shell and gnome-settings-daemon behavior not verified) | Read the live GNOME keybinding schemas (mutter, GNOME Shell, gnome-settings-daemon media and custom keys) with gsettings. |
-| `compositor.x11-grab` | compositor | Implemented | lab-verified (22 scenarios) | In an X11 session, observe passive key grabs on the root window (the X server refuses a second grab with BadAccess) to decide whether a window manager or hotkey daemon takes the key; the desktop adapter names the binding, and only an adapter that knows the owner passes the key on (sxhkd ~) keeps a pass-through verdict. |
+| `compositor.x11-grab` | compositor | Implemented | lab-verified (26 scenarios) | In an X11 session, observe passive key grabs on the root window (the X server refuses a second grab with BadAccess) to decide whether a window manager or hotkey daemon takes the key; the desktop adapter names the binding, and only an adapter that knows the owner passes the key on (sxhkd ~) keeps a pass-through verdict. |
 | `compositor.generic` | compositor | Implemented | unverified | Report generic desktop/session context with opaque global bindings. |
 | `compositor.additional-desktops` | compositor | Planned | unverified | Additional desktop integrations beyond the supported adapter set. |
 | `terminal.dedicated` | terminal | Implemented | unverified | Detect and query a dedicated terminal adapter when available. |
@@ -84,6 +84,8 @@ fixtures pass.
 - `compositor.i3` (binding only, X11 grab probe decided): `i3-mode-active`, `i3-plain-bind`, `i3-release-bind`
 - `compositor.kde`: `kde-inactive-component-no-display`, `kde-launch-bind-no-display`, `kde-unbound-no-display`
 - `compositor.kde` (binding only, X11 grab probe decided): `kde-launch-bind`
+- `compositor.xfce` (binding only, X11 grab probe decided): `xfce-bind`
+- `compositor.mate` (binding only, X11 grab probe decided): `mate-bind`
 - `compositor.bspwm-sxhkd`: `sxhkd-replay`, `sxhkd-replay-plain`
 - `compositor.bspwm-sxhkd` (binding only, X11 grab probe decided): `sxhkd-bind`, `sxhkd-brace`, `sxhkd-brace-range`, `sxhkd-plain-key`, `sxhkd-release`
 - `compositor.openbox` (binding only, X11 grab probe decided): `openbox-keybind`
@@ -93,6 +95,6 @@ fixtures pass.
 - `compositor.kglobalaccel-runtime`: `kde-inactive-component-no-display`, `kde-launch-bind-no-display`, `kde-unbound-no-display`
 - `compositor.kglobalaccel-runtime` (binding only, X11 grab probe decided): `kde-launch-bind`
 - `compositor.gnome-gsettings`: `gnome-changed-bound`, `gnome-changed-unbound`, `gnome-default-bound`, `gnome-default-unbound`
-- `compositor.x11-grab`: `awesome-bind`, `awesome-unbound`, `i3-mode-active`, `i3-mode-inactive`, `i3-plain-bind`, `i3-release-bind`, `i3-unbound`, `kde-inactive-component`, `kde-launch-bind`, `kde-unbound`, `openbox-keybind`, `openbox-unbound`, `sxhkd-bind`, `sxhkd-brace`, `sxhkd-brace-range`, `sxhkd-plain-key`, `sxhkd-release`, `sxhkd-replay`, `sxhkd-replay-plain`, `sxhkd-unbound`, `xbindkeys-bind`, `xbindkeys-unbound`
+- `compositor.x11-grab`: `awesome-bind`, `awesome-unbound`, `i3-mode-active`, `i3-mode-inactive`, `i3-plain-bind`, `i3-release-bind`, `i3-unbound`, `kde-inactive-component`, `kde-launch-bind`, `kde-unbound`, `mate-bind`, `mate-unbound`, `openbox-keybind`, `openbox-unbound`, `sxhkd-bind`, `sxhkd-brace`, `sxhkd-brace-range`, `sxhkd-plain-key`, `sxhkd-release`, `sxhkd-replay`, `sxhkd-replay-plain`, `sxhkd-unbound`, `xbindkeys-bind`, `xbindkeys-unbound`, `xfce-bind`, `xfce-unbound`
 - `shell.runtime-snapshot`: `bash-alt-f-init`, `bash-default-transpose-init`, `bash-user-bind-init`, `fish-default-transpose-init`, `fish-user-bind-init`, `fish-vi-default-mode-bind-init`, `fish-vi-insert-bind-init`, `tmux-fish-vi-insert-bind`, `tmux-zsh-user-bind`, `zsh-bind-before-vi-init`, `zsh-default-transpose-init`, `zsh-user-bind-init`, `zsh-vi-user-bind-init`
 - `session.multiplexers`: `screen-prefix-fish`, `tmux-prefix`, `tmux-prefix-zsh`, `tmux-root-bind`, `tmux-unbound`

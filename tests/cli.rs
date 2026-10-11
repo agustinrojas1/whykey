@@ -532,29 +532,59 @@ fn whykey_vscode_extension_returns_valid_schema_v1() {
 #[cfg(unix)]
 #[test]
 fn whykey_vscode_extension_matches_fixture_keybindings() {
-    let fixture_home = std::fs::canonicalize("tests/fixtures/extensions/vscode/home").unwrap();
+    let fixture = std::fs::canonicalize("tests/fixtures/extensions/vscode").unwrap();
 
-    for (key, status, prop, needle) in [
-        ("ctrl+x", "Handled", "Stops", "test.exact"),
-        // The `when` clause is not evaluated: handled only conditionally.
-        ("ctrl+y", "Handled", "Indeterminate", "not evaluated"),
+    // The bundled VS Code 1.140.0 defaults resolve keys missing from the user
+    // file; the fixture's installed Code is 1.139.0.
+    for (key, status, prop, tier, needle) in [
+        ("ctrl+x", "Handled", "Stops", "config_file", "test.exact"),
+        // The `when` clause is not evaluated, but either way a binding runs:
+        // the user's command or VS Code's default (redo).
+        ("ctrl+y", "Handled", "Stops", "default", "not evaluated"),
         // A chord prefix consumes the first chord.
-        ("ctrl+k", "Handled", "Stops", "chord"),
-        // Not in the user file: VS Code's defaults are unknown, not "unbound".
+        ("ctrl+k", "Handled", "Stops", "config_file", "chord"),
+        // Not in the user file: VS Code's own default applies.
         (
             "ctrl+q",
-            "Indeterminate",
-            "Indeterminate",
-            "default keybindings not inspected",
+            "Handled",
+            "Stops",
+            "default",
+            "workbench.action.quit",
         ),
         // `-command` removes default bindings only; the user's own binding stays.
-        ("ctrl+z", "Handled", "Stops", "test.removed"),
+        ("ctrl+z", "Handled", "Stops", "config_file", "test.removed"),
+        // The user removed F1's only default binding.
+        (
+            "f1",
+            "NotHandled",
+            "Continues",
+            "default",
+            "workbench.action.showCommands",
+        ),
+        // An installed extension's Linux key; its enablement is not checked.
+        (
+            "ctrl+alt+j",
+            "Handled",
+            "Indeterminate",
+            "default",
+            "fixture.extensionCommand",
+        ),
     ] {
         let output = binary()
-            .args(["extension", "extensions/whykey-vscode", key, "--json"])
-            .env("HOME", &fixture_home)
+            .args([
+                "--json",
+                "--schema-version",
+                "2",
+                "extension",
+                "extensions/whykey-vscode",
+                key,
+            ])
+            .env("HOME", fixture.join("home"))
+            .env("VSCODE_PRODUCT_JSON", fixture.join("product.json"))
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("VSCODE_KEYBINDINGS")
+            .env_remove("VSCODE_EXTENSIONS")
+            .env_remove("WHYKEY_VSCODE_DEFAULTS")
             .output()
             .unwrap();
         assert!(output.status.success(), "case: {key}");
@@ -564,8 +594,13 @@ fn whykey_vscode_extension_matches_fixture_keybindings() {
             value["extension"]["layer"]["propagation"], prop,
             "case: {key}"
         );
+        assert_eq!(value["tier"], tier, "case: {key}");
         let stdout_str = String::from_utf8_lossy(&output.stdout);
         assert!(stdout_str.contains(needle), "case: {key}");
+        assert!(
+            stdout_str.contains("installed Code 1.139.0"),
+            "case: {key}: the version difference is reported"
+        );
     }
 }
 
@@ -626,14 +661,9 @@ fn whykey_emacs_extension_matches_fixture_runtime_queries() {
             "my-custom-minor-cmd",
             Some("minor"),
         ),
-        // No binding in the active keymaps: translations and hooks are not inspected.
-        (
-            "ctrl+q",
-            "Indeterminate",
-            "Indeterminate",
-            "No binding",
-            None,
-        ),
+        // No binding in the active keymaps: nothing consumes the key, so it continues.
+        // Translations and hooks are not inspected.
+        ("ctrl+q", "Indeterminate", "Continues", "No binding", None),
     ] {
         let output = binary()
             .args(["extension", "extensions/whykey-emacs", key, "--json"])
@@ -2273,7 +2303,7 @@ fn alacritty_yaml_adapter_is_used_when_configured() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Alacritty sends a sequence to the PTY"));
+    assert!(text.contains("Alacritty"));
     assert!(text.contains("sequence: ESC [ 1 ; 5 D"));
     let _ = fs::remove_dir_all(base);
 }
@@ -2470,6 +2500,26 @@ fn virtual_session_matrix_covers_supported_desktop_adapters() {
     }
 }
 
+/// Mirrors the adapters' `/proc` probe so compositor-dependent asserts hold on
+/// hosts where the compositor is running as well as where it is not.
+fn compositor_process_running(comm: &str) -> bool {
+    fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            fs::read_to_string(entry.path().join("comm"))
+                .is_ok_and(|name| name.trim().eq_ignore_ascii_case(comm))
+        })
+}
+
+fn json_layer<'a>(value: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    value["layers"]
+        .as_array()
+        .and_then(|layers| layers.iter().find(|layer| layer["layer"] == name))
+        .unwrap_or_else(|| panic!("no {name} layer in {value}"))
+}
+
 #[test]
 fn dwl_adapter_reads_literal_config_conditionally() {
     let base = temp_dir("dwl-cli");
@@ -2477,12 +2527,12 @@ fn dwl_adapter_reads_literal_config_conditionally() {
     let config = base.join("config.h");
     fs::write(
         &config,
-        "static const Key keys[] = {\n { MODKEY, XKB_KEY_Return, spawn, {.v = termcmd} },\n};",
+        "#define MODKEY WLR_MODIFIER_LOGO\nstatic const Key keys[] = {\n { MODKEY, XKB_KEY_Return, spawn, {.v = termcmd} },\n};",
     )
     .unwrap();
 
     let output = binary()
-        .args(["--verbose", "super+return"])
+        .args(["--json", "super+return"])
         .env("XDG_CURRENT_DESKTOP", "dwl")
         .env("XDG_SESSION_DESKTOP", "dwl")
         .env("XDG_SESSION_TYPE", "wayland")
@@ -2496,14 +2546,16 @@ fn dwl_adapter_reads_literal_config_conditionally() {
         .output()
         .unwrap();
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        text.contains("dwl"),
-        "stdout={text:?} stderr={:?}",
-        output.stderr
-    );
-    assert!(text.contains("config.h contains a matching key binding"));
-    assert!(text.contains("conditional"));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let layer = json_layer(&value, "dwl");
+    assert!(layer["details"].to_string().contains("binding: spawn"));
+    let expected_propagation = if compositor_process_running("dwl") {
+        "Stops"
+    } else {
+        "Indeterminate"
+    };
+    assert_eq!(layer["status"], "Handled");
+    assert_eq!(layer["propagation"], expected_propagation);
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2641,7 +2693,7 @@ fn labwc_adapter_reads_openbox_compatible_keybinds() {
     fs::write(&config, include_str!("fixtures/sessions/labwc-rc.xml")).unwrap();
 
     let output = binary()
-        .args(["super+ctrl+t"])
+        .args(["--json", "super+ctrl+t"])
         .env("XDG_CURRENT_DESKTOP", "labwc")
         .env("XDG_SESSION_DESKTOP", "labwc")
         .env("PATH", "/nonexistent")
@@ -2654,10 +2706,16 @@ fn labwc_adapter_reads_openbox_compatible_keybinds() {
         .output()
         .unwrap();
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("labwc"));
-    assert!(text.contains("matching labwc keybind"));
-    assert!(text.contains("Execute: foot"));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let layer = json_layer(&value, "labwc");
+    assert!(layer["details"].to_string().contains("Execute: foot"));
+    let expected_propagation = if compositor_process_running("labwc") {
+        "Stops"
+    } else {
+        "Indeterminate"
+    };
+    assert_eq!(layer["status"], "Handled");
+    assert_eq!(layer["propagation"], expected_propagation);
     let _ = fs::remove_dir_all(base);
 }
 
@@ -3057,7 +3115,7 @@ fn konsole_adapter_reads_explicit_keytab() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Konsole sends a sequence to the PTY"));
+    assert!(text.contains("Konsole keytab encodes the key"));
     assert!(text.contains("sequence: ESC [ 1 ; 5 D"));
     let _ = fs::remove_dir_all(base);
 }

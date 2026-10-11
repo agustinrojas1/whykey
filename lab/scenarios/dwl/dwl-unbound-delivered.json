@@ -1,0 +1,18 @@
+{
+  "id": "dwl-unbound-delivered",
+  "description": "Alt+U has no dwl keys[] row, so the probe client receives it",
+  "tier": "observed",
+  "environment": "dwl",
+  "dwl": {
+    "definitions": ["static const char *touchcmd[] = {\"sh\", \"-c\", \"touch /tmp/fired\", NULL};"],
+    "bindings": ["{ MODKEY, XKB_KEY_t, spawn, {.v = touchcmd} }"]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["alt+u"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["alt+u"],
+    "layer": "dwl",
+    "env": {"XDG_SESSION_TYPE": "wayland"}
+  }
+}

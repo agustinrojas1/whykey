@@ -190,9 +190,14 @@ mod keyboard;
 mod matching;
 use config::hyprland_config_paths;
 pub(crate) use ipc::{INVENTORY_SOURCE, collect_probe, displayed_keycode};
-pub use ipc::{applicable, binding_inventory, focused_pid, ipc_available};
+pub use ipc::{
+    applicable, binding_inventory, code_key_symbol_for_query, focused_pid, ipc_available,
+};
 use ipc::{has_hyprland_signature, inspect_system, inspect_system_with_probe};
-pub(crate) use keyboard::{compile_main_xkb_keymap, main_keyboard_active_layout_index};
+pub(crate) use keyboard::{
+    KeyboardInventory, VIRTUAL_KEYBOARD_PREFIX, compile_main_xkb_keymap, keyboard_inventory,
+    keymap_layout_name, main_keyboard_active_layout_index,
+};
 use matching::deserialize_boolish;
 pub(crate) use matching::main_keyboard_lock_state;
 

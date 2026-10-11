@@ -1,0 +1,7 @@
+# Headless mutter; gnome-shell is installed for its GSettings schemas,
+# which whykey reads (GNOME Shell aborts without systemd-logind).
+gsettings-desktop-schemas
+gnome-shell
+mutter
+gnome-settings-daemon
+dconf

@@ -1,0 +1,46 @@
+{
+  "id": "hyprland-qkbd-listen-bound",
+  "description": "native listen (pass-through) on the VM kernel keyboard observes a Super+T that the Lua bind fires; the probe never gets the key",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "qkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--pass-through",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": {
+      "stderr": "Waiting for input"
+    },
+    "layer": "Hyprland",
+    "combo": {
+      "key": "T",
+      "modifiers": 64
+    },
+    "detail": "Lab fire",
+    "tty": true
+  }
+}

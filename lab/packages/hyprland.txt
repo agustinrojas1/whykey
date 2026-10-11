@@ -1,0 +1,15 @@
+# Hyprland from the sdegler/hyprland COPR (hyprland.sh), pinned so a COPR
+# update cannot silently change what the lab verifies (0.56.2 = the main
+# user's desktop; both the hyprlang .conf and the Lua config work). aquamarine
+# needs a KMS device even for headless outputs, so Hyprland scenarios boot
+# this image's kernel in a KVM guest (virtme-ng, the container as 9p root,
+# virtio-gpu for KMS, llvmpipe via kms_swrast; lab/envs/hyprland.py). file
+# and binutils are virtme-ng's kernel-version probes.
+hyprland-0.56.2
+virtme-ng
+qemu-system-x86-core
+qemu-device-display-virtio-gpu-pci
+kernel-core
+busybox
+file
+binutils

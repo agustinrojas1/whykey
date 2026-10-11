@@ -1,0 +1,24 @@
+{
+  "id": "wayfire-unbound-delivered",
+  "description": "Super+U has no wayfire binding, so the probe client receives it",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = command",
+      "",
+      "[command]",
+      "binding_terminal = <super> KEY_T",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+u"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+u"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

@@ -928,6 +928,10 @@ fn default_non_arrow_encoding(key: &str, mask: u32) -> Option<Vec<u8>> {
         bytes.extend_from_slice(text.as_bytes());
         return Some(bytes);
     }
+    // Alt prefixes Escape with ESC in legacy encoding (xterm, tmux, VTE).
+    if key == "ESCAPE" && mask == 8 {
+        return Some(vec![0x1b, 0x1b]);
+    }
     if mask != 0 {
         return modified_navigation_encoding(key, mask);
     }
@@ -1330,6 +1334,16 @@ mod tests {
     fn encodes_extended_modifier_bits_for_kitty() {
         let key: KeyCombo = "caps+num+hyper+x".parse().unwrap();
         assert_eq!(key_modifier_parameter(key.modmask()), 1 + 64 + 128 + 16);
+    }
+
+    #[test]
+    fn encodes_alt_escape_as_escape_prefixed_escape() {
+        let key: KeyCombo = "alt+escape".parse().unwrap();
+        assert_eq!(default_encoding(&key), Some(vec![0x1b, 0x1b]));
+        assert_eq!(
+            default_encoding_for_protocol(&key, Some(1), None).into_bytes(),
+            Some(b"\x1b[27;3u".to_vec())
+        );
     }
 
     const ALTGR_KEYMAP: &str = r#"

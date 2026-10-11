@@ -135,7 +135,7 @@ impl Programmable {
             return LayerResult::new(
                 desktop.name(),
                 LayerId::Compositor,
-                Outcome::Unknown,
+                Outcome::UncertainContinues,
                 format!("{} shortcut state is conditional", desktop.name()),
                 details,
             )
@@ -270,7 +270,31 @@ fn parse_awesome_modifiers(value: &str, modkey: Option<&str>) -> Option<Vec<Stri
     Some(modifiers)
 }
 
+fn qtile_variables(content: &str) -> Vec<(String, String)> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            let name = name.trim();
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return None;
+            }
+            Some((name.to_owned(), literal(value)?))
+        })
+        .collect()
+}
+
+fn qtile_literal(item: &str, variables: &[(String, String)]) -> Option<String> {
+    literal(item).or_else(|| {
+        variables
+            .iter()
+            .find(|(name, _)| name == item.trim())
+            .map(|(_, value)| value.clone())
+    })
+}
+
 fn parse_qtile(content: &str) -> Vec<Binding> {
+    let variables = qtile_variables(content);
     calls(content, "Key")
         .into_iter()
         .filter_map(|call| {
@@ -283,8 +307,7 @@ fn parse_qtile(content: &str) -> Vec<Binding> {
                 .strip_prefix('[')?
                 .strip_suffix(']')?
                 .split(',')
-                .map(str::trim)
-                .map(literal)
+                .map(|item| qtile_literal(item.trim(), &variables))
                 .collect::<Option<Vec<_>>>()?;
             let modifiers = modifiers
                 .into_iter()
@@ -296,7 +319,7 @@ fn parse_qtile(content: &str) -> Vec<Binding> {
                     _ => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
-            let key = literal(args[1].trim())?;
+            let key = qtile_literal(args[1].trim(), &variables)?;
             let combo = combo_from_names(&modifiers, &key)?;
             let action = args
                 .get(2)
@@ -518,6 +541,14 @@ mod tests {
     #[test]
     fn parses_literal_qtile_key() {
         let bindings = parse_qtile("Key([\"mod4\", \"shift\"], \"h\", lazy.layout.left())");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].combo, "super+shift+h".parse().unwrap());
+    }
+
+    #[test]
+    fn resolves_qtile_modifier_variables() {
+        let bindings =
+            parse_qtile("mod = \"mod4\"\nKey([mod, \"shift\"], \"h\", lazy.layout.left())");
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].combo, "super+shift+h".parse().unwrap());
     }

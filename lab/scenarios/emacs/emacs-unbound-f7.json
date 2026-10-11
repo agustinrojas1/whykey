@@ -1,0 +1,20 @@
+{
+  "id": "emacs-unbound-f7",
+  "description": "<f7> has no binding in any active keymap; Emacs reads the key and lab-fire does not run. whykey cannot inspect key-translation-map, input-decode-map or pre-command hooks, so it answers uncertain-continues rather than not_handled",
+  "tier": "observed",
+  "environment": "emacs",
+  "files": {
+    "/root/.emacs.d/init.el": [
+      "(defun lab-fire () (interactive) (write-region \"fired\\n\" nil \"/tmp/fired\"))"
+    ]
+  },
+  "actions": [{"type": "\\e[18~"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "reached": {"keylog": "<f7>"}},
+  "emacs": {"key_binding": ["<f7>"]},
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-emacs", "f7"],
+    "layer": "External extension",
+    "run": "direct",
+    "accept": ["uncertain-continues"]
+  }
+}

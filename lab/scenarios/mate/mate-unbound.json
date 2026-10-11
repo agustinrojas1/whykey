@@ -1,0 +1,31 @@
+{
+  "id": "mate-unbound",
+  "description": "<Super>y has no Marco run-command binding, so the key reaches the focused client; the <Super>t and <Super>Return bindings are live controls",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/glib-2.0/settings/keyfile": [
+      "[org/mate/marco/global-keybindings]",
+      "run-command-1='<Super>t'",
+      "run-command-2='<Super>Return'",
+      "",
+      "[org/mate/marco/keybinding-commands]",
+      "command-1='touch /tmp/fired'",
+      "command-2='touch /tmp/ready'"
+    ]
+  },
+  "x11": {
+    "env": {"GSETTINGS_BACKEND": "keyfile"},
+    "daemons": [
+      {"argv": ["marco"], "ready": "wm", "ready_grab": [64, 36], "ready_timeout": 30}
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["keydown", "Super_L", "keydown", "y", "keyup", "y", "keyup", "Super_L"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "MATE",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "MATE"}
+  }
+}

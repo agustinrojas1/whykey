@@ -1,0 +1,18 @@
+{
+  "id": "dwl-bind-consumed",
+  "description": "a keys[] row MODKEY+T (Alt by default in dwl) runs its command and dwl consumes the key",
+  "tier": "observed",
+  "environment": "dwl",
+  "dwl": {
+    "definitions": ["static const char *touchcmd[] = {\"sh\", \"-c\", \"touch /tmp/fired\", NULL};"],
+    "bindings": ["{ MODKEY, XKB_KEY_t, spawn, {.v = touchcmd} }"]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["alt+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["alt+t"],
+    "layer": "dwl",
+    "env": {"XDG_SESSION_TYPE": "wayland"}
+  }
+}

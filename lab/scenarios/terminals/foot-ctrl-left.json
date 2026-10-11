@@ -1,0 +1,15 @@
+{
+  "id": "foot-ctrl-left",
+  "description": "unbound ctrl+left reaches a foot program as CSI 1;5D",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "foot",
+  "files": {"/root/.config/foot/foot.ini": ["[main]", "term=foot"]},
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+left"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"equals": "\\x1b[1;5D"}}},
+  "whykey": {"args": ["ctrl+left"], "layer": "Foot"}
+}

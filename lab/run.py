@@ -19,29 +19,10 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
     description   one line: what reality is being checked
     tier          "observed": a real program reacted to real input (the only
                   tier; settings-store reads alone never verify anything)
-    environment   "sway"    headless Sway; config at sway.config
-                            (default /root/.config/sway/config)
-                  "hyprland" Hyprland 0.56.2 in a KVM guest booted inside the
-                            container (lab/driver.py), on a virtio-gpu KMS
-                            device; config from hyprland.config or Hyprland's
-                            own lookup (~/.config/hypr/hyprland.lua, then
-                            hyprland.conf); whykey gets the environment
-                            Hyprland exports to its clients
-                  "x11"     Xvfb :5 plus x11.daemons started in order (argv
-                            list or {"argv": [...], "env": {...}, "ready":
-                            "wm", "ready_grab": [modmask, keycode]}); "wm"
-                            waits for _NET_SUPPORTING_WM_CHECK, ready_grab
-                            until the daemon holds that X11 key grab
-                            (lab/xgrab.py); i3 also exports I3SOCK; then
-                            x11.settle seconds (default 0.5)
-                  "gnome"   headless mutter (GNOME's compositor and window
-                            manager) on a virtual monitor; GNOME Shell does
-                            not start in a container (no systemd-logind), so
-                            only mutter-owned keybindings behave for real;
-                            whykey gets XDG_CURRENT_DESKTOP=GNOME
-                  "pty"     pty.command started on a pseudo-terminal (TERM,
-                            pty.env); `type` actions are keystrokes into it
-    A session D-Bus is always started.
+    environment   name of a plugin lab/envs/<name>.py (sway, hyprland, gnome,
+                  x11, pty, ...); its docstring documents its own fields
+                  (e.g. sway.config, x11.daemons, pty.command), actions and
+                  checks. A session D-Bus is always started.
     files         {path: text or list of lines} written before anything starts
     setup         shell commands run before the session starts
     session_setup shell commands run after the environment is up
@@ -56,6 +37,7 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   {"sh": "cmd"}  {"sleep": seconds}  {"wait_quiet": seconds}
                   {"start_whykey": true}  start a "run": "background" whykey
                   here instead of before the first action
+                  {key: ...} for a key in the environment's ACTIONS
                   ("type" accepts \\xNN, \\e, \\r escapes; optional "settle")
     ground_truth  {"fired": CHECK, "delivered": "probe" | CHECK,
                    "reached": "fired" | CHECK}
@@ -63,6 +45,7 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                         | {"sh": "cmd"} (exit 0 = true)
                         | {"probe": "any"} (the probe received any key
                           press, modifiers included)
+                        | {key: ...} for a key in the environment's CHECKS
                   "fired": did the layer under test act on the key.
                   "delivered": did the key continue past it ("probe": the
                   probe received a non-modifier key).
@@ -135,14 +118,15 @@ import sys
 import time
 from pathlib import Path
 
+from envs import ENVIRONMENTS
+
 LAB = Path(__file__).resolve().parent
 ROOT = LAB.parent
 SCENARIOS = LAB / "scenarios"
 RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
-ENVIRONMENTS = {"sway", "hyprland", "gnome", "x11", "pty"}
 TIERS = {"observed"}
 REQUIRED = {"id", "description", "tier", "environment", "ground_truth", "whykey"}
-# Hyprland scenarios boot a VM inside the container (lab/driver.py).
+# VM environments (Hyprland) boot a guest inside the container (lab/driver.py).
 SCENARIO_TIMEOUT = 180
 # Verdicts a scenario may tolerate via whykey.accept, keyed by "fired".
 HONEST_UNCERTAINTY = {True: {"handled-uncertain"}, False: {"uncertain-continues"}}
@@ -221,6 +205,9 @@ def report_path(report: dict | None) -> list[dict]:
     key's path, which carries the sequence's verdict."""
     if not report:
         return []
+    # `whykey extension` reports carry a single layer.
+    if isinstance(report.get("extension"), dict) and "layer" in report["extension"]:
+        return [report["extension"]["layer"]]
     if "path" in report:
         return report["path"]
     steps = report.get("steps") or []
@@ -254,9 +241,9 @@ def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | N
 def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> list[str]:
     command = ["docker", "run", "--name", name, "--network", "none", "--init"]
     command += ["-d"] if keep else ["--rm"]
-    if scenario["environment"] == "hyprland" and os.path.exists("/dev/kvm"):
-        # The Hyprland VM uses KVM when the host offers it, else (slow) TCG.
-        command += ["--device", "/dev/kvm"]
+    docker_args = getattr(ENVIRONMENTS[scenario["environment"]], "docker_args", None)
+    if docker_args:
+        command += docker_args()
     command += [
         "-v", f"{LAB}:/lab:ro",
         "-v", f"{args.binary}:/w/whykey:ro",
@@ -448,7 +435,7 @@ def main() -> int:
     parser.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1))
     parser.add_argument("--vms", type=int,
                         default=max(1, (os.cpu_count() or 1) // (3 if os.path.exists("/dev/kvm") else 4)),
-                        help="Hyprland VMs (2 vCPUs each) run at once, within --jobs "
+                        help="VM scenarios (Hyprland; 2 vCPUs each) run at once, within --jobs "
                              "(default: a third of the CPUs with KVM, a quarter without; "
                              "starved guests time out)")
     parser.add_argument("--keep", action="store_true",
@@ -472,7 +459,7 @@ def main() -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=vms) as vm_pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs - vms)) as pool:
         futures = {
-            (vm_pool if scenario["environment"] == "hyprland" else pool).submit(
+            (vm_pool if getattr(ENVIRONMENTS[scenario["environment"]], "VM", None) else pool).submit(
                 run_container, args, path, scenario, copy
             ): (path, scenario)
             for path, scenario in scenarios

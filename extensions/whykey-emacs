@@ -254,7 +254,7 @@ def interpret(key_obj, data):
         "not inspected: key-translation-map, input-decode-map and pre-command hooks",
     ]
     return result(
-        "indeterminate", "indeterminate",
+        "indeterminate", "continues",
         f"No binding for {notation} in Emacs's active keymaps ({mode}); key translations not inspected",
         details,
     )
@@ -277,7 +277,9 @@ def inspect_key(req, query=query_emacs):
         return result(exc.status, "indeterminate", exc.summary, details)
     if not isinstance(data, dict):
         return result("indeterminate", "indeterminate", "Emacs returned an unexpected reply", [])
-    return interpret(key_obj, data)
+    res = interpret(key_obj, data)
+    res["tier"] = "live_query"  # the running Emacs daemon answered
+    return res
 
 
 def self_test():
@@ -316,15 +318,15 @@ def self_test():
         return inspect_key({"key": {"modifiers": mods, "key": key}}, query=query)
 
     res = ask(CTRL, "X", reply(**{"C-x": ("prefix", "Control-X-prefix", "global")}))
-    assert (res["status"], res["propagation"]) == ("handled", "stops")
+    assert (res["status"], res["propagation"], res["tier"]) == ("handled", "stops", "live_query")
     assert "winning-map: global" in res["details"]
 
     res = ask(CTRL, "C", reply(**{"C-c": ("command", "my-cmd", "minor (my-mode)")}))
     assert (res["status"], res["propagation"]) == ("handled", "stops")
 
-    # No binding: translations and hooks are unknown, never a confident not_handled.
+    # No binding: translations and hooks are unknown, but nothing binds it, so it continues.
     res = ask(CTRL, "Q", reply(**{"C-q": ("none", "", "")}))
-    assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+    assert (res["status"], res["propagation"]) == ("indeterminate", "continues")
 
     # Shift translation: an unbound C-S-x runs C-x.
     res = ask(CTRL | SHIFT, "X", reply(**{"C-S-x": ("none", "", ""), "C-x": ("prefix", "Control-X-prefix", "global")}))
@@ -340,6 +342,7 @@ def self_test():
         raise QueryError("indeterminate", "Emacs did not answer", "error: emacsclient timed out")
     res = ask(CTRL, "X", busy)
     assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+    assert "tier" not in res
 
     def missing(notations):
         raise QueryError("unavailable", "No running Emacs server found", "error: no socket")

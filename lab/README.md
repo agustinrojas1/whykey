@@ -61,6 +61,25 @@ does not silently switch versions. File capabilities are stripped from every
 binary, because they make `exec` fail with EPERM in an unprivileged
 container.
 
+The image also has Emacs 30.2 (`emacs-nw`, `emacsclient`) and Neovim 0.12.5;
+dwl v0.9, built from source against wlroots 0.20; Niri, labwc, and Wayfire
+from the Fedora repositories (unpinned); Ghostty and WezTerm from the
+`scottames/ghostty` and `wezfurlong/wezterm-nightly` COPRs; kitty, alacritty,
+foot, and Konsole; and Qtile, XMonad, Xfce, MATE, and herbstluftwm. Cinnamon
+is installed but not verified: `cinnamon --replace` fails headless, and muffin
+has no standalone binary.
+
+Packages come in families under `lab/packages/`: `<family>.txt` lists dnf
+package names, one per line (`#` comments allowed, pin versions as
+`name-1.2.3`), and an optional `<family>.sh` runs before the install (enable
+a COPR, as `hyprland.sh` does). `_install.sh` installs one family, then
+strips file capabilities and recompiles the GSettings schemas. The
+Dockerfile installs `base` first and then every other family in name order,
+one `COPY packages/<family>.* /tmp/packages/` + `RUN sh
+/tmp/packages/_install.sh <family>` pair each, so changing one family
+rebuilds only its layer and those after it. A new family adds its pair at
+its sorted place.
+
 ## How ground truth is established
 
 whykey's own probes are never the ground truth. Each scenario records the
@@ -123,6 +142,11 @@ Input sources and what they can prove:
 - `wtype` uploads its own private keymap. Sway `--to-code` binds do not
   fire for it, and Hyprland's Lua key hook sees every wtype key as keycode
   9, which the real layout reads as Escape (D-073, D-089).
+- `qkbd` (`lab/qkbd.py`) is the kernel keyboard of the Hyprland VM. `lab/qkbd.py`
+  drives it over QMP; its key requests reach the guest through the
+  `whykey.keyboard` virtio-serial port, which `keyboard_relay` in
+  `lab/driver.py` relays. The keys are real kernel input events
+  (`hyprland-qkbd-*`).
 - `xdotool` sends XTEST input on X11. `lab/xgrab.py` confirms over the raw X11
   socket that a daemon holds its grab before input is sent. Two traps:
   `xdotool key Super_L+t` releases Super before `t`, so an sxhkd `@`
@@ -178,10 +202,10 @@ docstring of `lab/run.py`. A minimal scenario:
 | Field | Meaning |
 | --- | --- |
 | `tier` | Always `observed`: a program reacted to input |
-| `environment` | `sway` (headless), `hyprland` (KVM guest), `gnome` (headless mutter), `x11` (Xvfb `:5` plus `x11.daemons` started in order and waited on), or `pty` (`pty.command` on a pseudo-terminal); a session D-Bus is always started |
+| `environment` | Name of an environment plugin, `lab/envs/<name>.py`: `sway` (headless), `hyprland` (KVM guest), `gnome` (headless mutter), `x11` (Xvfb `:5` plus `x11.daemons` started in order and waited on), `pty` (`pty.command` on a pseudo-terminal), ...; the plugin's docstring documents its own fields. A session D-Bus is always started |
 | `files`, `setup`, `session_setup` | Files written before start, and shell commands run before and after the environment comes up |
 | `probe` | Independent key recorder: `wayland` or `x11` |
-| `actions` | `vkbd`, `rdkbd`, `wtype`, `xdotool`, `type`, `sh`, `sleep`, `wait_quiet`, or `start_whykey` |
+| `actions` | `vkbd`, `rdkbd`, `wtype`, `xdotool`, `type`, `sh`, `sleep`, `wait_quiet`, `start_whykey`, or one of the environment's own `ACTIONS` |
 | `ground_truth` | `fired` (did the layer act), `delivered` (`probe`, or a check), and `reached` (`fired`, or a check such as `{"probe": "any"}`); `delivered` or `reached` is required |
 | `whykey.args`, `layer`, `env`, `run` | Command line, layer under test, environment, and how to run it: `direct`, `pty` (typed into the scenario's shell), or `background` (`listen`, with `ready`). For a key sequence (several key arguments) the verdict is the last key's (`steps[-1].path`) |
 | `whykey.summary`, `detail`, `binding`, `combo`, `stderr` | Substrings or values that must also match, so a right verdict for the wrong binding still fails. `binding` is a substring of the reported layer's primary binding action |
@@ -193,6 +217,32 @@ Probe-window scenarios send the same input twice. The first time, the lab's
 own probe client has focus. The second time, `whykey listen --window` has
 focus. The bind must fire both times, and whykey's observation must match
 what the independent client saw.
+
+## Environment plugins
+
+Each `lab/envs/<name>.py` (names starting with `_` excluded) is the
+environment `<name>`; `lab/envs/__init__.py` imports them all, and both
+`run.py` (host) and `driver.py` (container) use that registry, so a new
+environment is one new file plus its package family. Plugins are stdlib
+only and share `lab/common.py` (`LabError`, `wait_for`, paths). Every hook
+gets the driver's `Lab`: `lab.scenario`, `lab.env` (exported to whykey,
+actions and probes), `lab.spawn(name, argv, env)`, `lab.run(argv)`,
+`lab.ok(argv)`, `lab.ensure_alive()`, `lab.steps`, `lab.settle`, `lab.pty`.
+
+Registered environments: `dwl`, `emacs`, `gnome`, `hyprland`, `labwc`, `niri`,
+`nvim`, `pty`, `sway`, `terminals`, `wayfire`, and `x11`.
+
+| Hook | Use |
+| --- | --- |
+| `start(lab)` | Required. Start the session, wait until it is ready, export its variables into `lab.env` |
+| `stop(lab)` | Teardown before the spawned processes are killed |
+| `inject(lab, keys)` | Type chords (`"shift"`, `"super+t"`) with the environment's own injector; the Wayland probe's Shift tap uses it |
+| `focused_window(lab)` | `(app id, title)` of the focused window, or `("", "")`. Without it the probe skips its focus wait (the Shift tap still has to arrive) and `ready: window` never holds |
+| `logs(lab)` | Extra `{name: text}` for the result's logs |
+| `ACTIONS = {key: fn}` | Scenario actions `{key: ...}` beyond the generic ones; `fn(lab, action)`, after which the driver records the step and waits `settle` |
+| `CHECKS = {key: fn}` | Ground-truth checks `{key: ...}` beyond `file`, `sh`, and `probe`; `fn(lab, spec)` returns `(bool, evidence)` |
+| `VM = {...}` | Run the scenario in a KVM guest booted in the container: `qemu_opts`, `memory` (default `2G`), `cpus` (default 2). `run.py` runs these within `--vms` |
+| `docker_args()` | Host side: extra `docker run` arguments, e.g. `--device /dev/kvm` |
 
 ## Hyprland and KVM
 
@@ -210,6 +260,10 @@ it the guest falls back to TCG emulation, which is much slower and can time
 out. Check access with `ls -l /dev/kvm`; your user usually needs to be in
 the `kvm` group. GitHub's Linux runners provide `/dev/kvm`. Expect about
 12 s per Hyprland scenario with KVM.
+
+A VM spec with `keyboard: true` replaces the guest's keyboard with the `qkbd`
+virtio-keyboard (`-machine i8042=off`), so every key the guest receives comes
+from `qkbd`.
 
 ## Debugging a scenario
 

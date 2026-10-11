@@ -1,0 +1,14 @@
+# Xvfb, XTEST input, the xev probe, and the X11 window managers and
+# hotkey daemons.
+xorg-x11-server-Xvfb
+xdotool
+xev
+xinput
+setxkbmap
+xkbcomp
+xterm
+i3
+openbox
+xbindkeys
+sxhkd
+awesome

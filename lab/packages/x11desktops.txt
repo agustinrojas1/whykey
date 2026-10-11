@@ -1,0 +1,16 @@
+# X11 desktops and window managers whose key bindings live in executable
+# configs (Qtile, XMonad), runtime settings stores (Xfce xfconf, Cinnamon
+# and MATE GSettings) or a client query (herbstclient).
+qtile
+xmonad
+# xmonad recompiles ~/.xmonad/xmonad.hs with ghc against the xmonad library.
+ghc-xmonad-devel
+xfwm4
+xfce4-settings
+xfconf
+cinnamon
+muffin
+cinnamon-settings-daemon
+marco
+mate-settings-daemon
+herbstluftwm

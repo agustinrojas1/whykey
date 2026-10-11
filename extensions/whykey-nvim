@@ -4,16 +4,19 @@
 Asks a running Neovim server, in one `--remote-expr`, for its current mode,
 the mapping `maparg()` resolves for the key (buffer-local first, Lua
 callbacks included), the `<Plug>` chain behind it, and how many longer
-mappings start with the key. Neovim's built-in commands and plugin key
-handlers (`vim.on_key`, `getchar()` loops) are not inspectable, so a key
-without a mapping is reported as uncertain rather than unhandled.
+mappings start with the key. A key without a mapping is looked up in the
+server's own command index (doc/index.txt): a built-in command handles it.
+Plugin key handlers (`vim.on_key`, `getchar()` loops) are not inspectable; a key
+with neither a mapping nor a built-in is reported as not handled, and says so.
 """
 
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 
 SHIFT, CTRL, ALT, MOD3, SUPER, MOD5 = 1, 4, 8, 32, 64, 128
 QUERY_TIMEOUT = 1.5
@@ -49,6 +52,7 @@ LUA_QUERY = [
     "elseif c == \"t\" then mm = \"t\" end",
     "local out = {mode = full, map_mode = mm, timeout = vim.o.timeout,",
     "timeoutlen = vim.o.timeoutlen, longer = {}, longer_count = 0, chain = {}}",
+    "out.runtime = vim.env.VIMRUNTIME or \"\"",
     "if mm == \"\" then return vim.json.encode(out) end",
     "local function info(d) return {lhs = d.lhs, rhs = d.rhs or \"\",",
     "callback = d.callback ~= nil, desc = d.desc or \"\", expr = d.expr == 1,",
@@ -191,6 +195,82 @@ def describe_map(m):
     return action
 
 
+INDEX_MODES = {"i": "Insert mode", "n": "Normal mode", "x": "Visual mode"}
+# Entries of other modes carry a mode prefix (i_, v_, o_, ...); normal mode has none.
+INDEX_PREFIX = {"i": "i_", "x": "v_"}
+INDEX_TOP = re.compile(r"^\d\. ")  # top-level sections; subsections (2.1, ...) belong to their mode
+INDEX_ENTRY = re.compile(r"^\|([^|]+)\|(.*)$")
+OTHER_MODE_TAG = re.compile(r"^[a-z]_")
+
+
+def read_index(runtime):
+    """The server's doc/index.txt text, or None when it is not readable from here."""
+    if not runtime:
+        return None
+    try:
+        with open(os.path.join(runtime, "doc", "index.txt"), encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def builtin_table(index_text, mm):
+    """{key spelling: (tag, action)} for the mode's commands in Neovim's index.txt."""
+    name, own = INDEX_MODES[mm], INDEX_PREFIX.get(mm, "")
+    table, inside = {}, False
+    for line in index_text.splitlines():
+        if INDEX_TOP.match(line):
+            inside = line[3:].startswith(name)
+            continue
+        entry = INDEX_ENTRY.match(line) if inside else None
+        if entry is None:
+            continue
+        tag, rest = entry.group(1), entry.group(2).strip()
+        if OTHER_MODE_TAG.match(tag) and not (own and tag.startswith(own)):
+            continue
+        fields = re.split(r"\t+", rest)
+        table.setdefault(fields[0].strip(), (tag, fields[1].strip() if len(fields) > 1 else ""))
+    return table
+
+
+def index_spellings(notation, alt):
+    """How index.txt spells a key: <C-x> is CTRL-X there; a simplified form (<C-i> is <Tab>) counts too."""
+    spellings = {notation}
+    m = re.fullmatch(r"<C-(\w)>", notation)
+    if m:
+        spellings.add("CTRL-" + m.group(1).upper())
+    if alt:
+        spellings.add(alt)
+    return spellings
+
+
+def builtin_result(notation, mm, index_text, alt, details):
+    """Answer for a key with no user mapping, from the mode's built-in command index."""
+    table = builtin_table(index_text, mm)
+    spellings = index_spellings(notation, alt)
+    hit = next((table[s] for s in sorted(spellings) if s in table), None)
+    if hit is not None:
+        tag, action = hit
+        return result(
+            "handled", "stops",
+            f"{notation} runs a Neovim built-in command in mode '{mm}'",
+            details + [f"built-in: {action}", f"index: |{tag}|"],
+        )
+    starts = sorted(ch for ch in table if any(ch != s and ch.startswith(s) for s in spellings))
+    if starts:
+        return result(
+            "handled", "stops",
+            f"{notation} starts Neovim built-in command(s) in mode '{mm}'; Neovim waits for the next key",
+            details + [f"built-ins: {', '.join(starts[:5])}"],
+        )
+    return result(
+        "not_handled", "continues",
+        f"No mapping and no built-in command for {notation} in Neovim mode '{mm}'",
+        details + ["built-in: none in Neovim's command index",
+                   "not inspected: plugin key handlers (vim.on_key, getchar() loops)"],
+    )
+
+
 def interpret(notation, data, server):
     mode = data.get("mode", "?")
     mm = data.get("map_mode", "")
@@ -254,8 +334,8 @@ def interpret(notation, data, server):
         )
 
     unseen = (
-        "not inspected: Neovim built-in commands (:help index) and plugin key handlers "
-        "(vim.on_key, getchar() loops)"
+        "not inspected: Neovim built-in commands (doc/index.txt unreadable here, or mode "
+        "not indexed) and plugin key handlers (vim.on_key, getchar() loops)"
     )
     if mm == "t":
         if notation == "<C-Bslash>":
@@ -269,6 +349,10 @@ def interpret(notation, data, server):
             f"No terminal-mode mapping for {notation}; Neovim normally sends it to the terminal job",
             details + [unseen] + tail,
         )
+    if mm in INDEX_MODES:
+        index_text = read_index(data.get("runtime"))
+        if index_text is not None:
+            return builtin_result(notation, mm, index_text, SIMPLIFIED.get(notation), details + tail)
     return result(
         "indeterminate", "indeterminate",
         f"No user mapping for {notation} in Neovim mode '{mm}'; built-in commands not inspected",
@@ -311,6 +395,7 @@ def inspect_key(req, query=query_nvim, servers=None):
         )
 
     res = interpret(notation, data, server)
+    res["tier"] = "live_query"  # the running Neovim answered
     if len(candidates) > 1 and not named_by_env:
         res["details"].append(
             f"assumption: {len(candidates)} Neovim servers found ({', '.join(candidates)}); "
@@ -354,7 +439,7 @@ def self_test():
     base = {"mode": "n", "map_mode": "n", "timeout": True, "timeoutlen": 1000, "longer": {}, "longer_count": 0, "chain": {}}
 
     res = ask(dict(base, map={"lhs": "<C-X>", "rhs": ":echo 1<CR>", "noremap": True}))
-    assert (res["status"], res["propagation"]) == ("handled", "stops")
+    assert (res["status"], res["propagation"], res["tier"]) == ("handled", "stops", "live_query")
 
     # A Lua-callback mapping has an empty rhs but is still a mapping.
     res = ask(dict(base, map={"lhs": "<C-X>", "rhs": "", "callback": True, "desc": "Telescope"}))
@@ -375,7 +460,7 @@ def self_test():
     res = ask(dict(base, longer=["<C-X>a"], longer_count=1))
     assert (res["status"], res["propagation"]) == ("handled", "stops")
 
-    # No mapping: built-ins unknown, never a confident not_handled.
+    # No mapping and no readable index: built-ins unknown, never a confident not_handled.
     res = ask(dict(base))
     assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
     res = ask(dict(base, mode="t", map_mode="t"))
@@ -383,11 +468,46 @@ def self_test():
     res = ask(dict(base, mode="r", map_mode=""))
     assert res["status"] == "indeterminate"
 
+    # No mapping: the mode's built-in command index decides (built-in, prefix, or neither).
+    sample = (
+        "1. Insert mode\t\t*insert-index*\n"
+        "|i_CTRL-A|\tCTRL-A\t\tinsert previously inserted text\n"
+        "2. Normal mode\t\t*normal-index*\n"
+        "|CTRL-A|\tCTRL-A\t\tadd [count] to the number\n"
+        "|CTRL-W_s|\tCTRL-W s\tsplit window\n"
+        "2.6 Operator-pending mode\t*operator-pending-index*\n"
+        "|o_v|\tv\tforce motion\n"
+        "3. Visual mode\t\t*visual-index*\n"
+        "|v_o|\to\tmove to other end\n"
+    )
+    assert builtin_table(sample, "n") == {
+        "CTRL-A": ("CTRL-A", "add [count] to the number"),
+        "CTRL-W s": ("CTRL-W_s", "split window"),
+    }
+    assert builtin_table(sample, "i") == {"CTRL-A": ("i_CTRL-A", "insert previously inserted text")}
+    assert builtin_table(sample, "x") == {"o": ("v_o", "move to other end")}
+    res = builtin_result("<C-a>", "n", sample, None, [])
+    assert (res["status"], res["propagation"]) == ("handled", "stops") and res["summary"].startswith("<C-a> runs")
+    res = builtin_result("<C-w>", "n", sample, None, [])
+    assert (res["status"], res["propagation"]) == ("handled", "stops") and "starts" in res["summary"]
+    res = builtin_result("<F7>", "n", sample, None, [])
+    assert (res["status"], res["propagation"]) == ("not_handled", "continues")
+    with tempfile.TemporaryDirectory() as runtime:
+        os.makedirs(os.path.join(runtime, "doc"))
+        with open(os.path.join(runtime, "doc", "index.txt"), "w", encoding="utf-8") as fh:
+            fh.write(sample)
+        res = ask(dict(base, runtime=runtime), key="A")
+        assert (res["status"], res["propagation"]) == ("handled", "stops")
+        res = ask(dict(base, runtime=runtime), mods=0, key="F7")
+        assert (res["status"], res["propagation"]) == ("not_handled", "continues")
+
+
     # A timeout means a busy server, not a missing mapping.
     def slow(server, notation):
         raise subprocess.TimeoutExpired("nvim", QUERY_TIMEOUT)
     res = inspect_key({"key": {"modifiers": CTRL, "key": "X"}}, query=slow, servers=env)
     assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
+    assert "tier" not in res
     assert "did not answer" in res["summary"]
 
     # Several discovered servers: the answer may be about the wrong instance.

@@ -1,6 +1,6 @@
 {
   "id": "tmux-root-alt-escape",
-  "description": "root `bind -n M-Escape` (as in the Omarchy tmux.conf) consumes Alt+Escape; the generic terminal fallback has no Alt+Escape encoding, so whykey honestly marks byte delivery unverified",
+  "description": "root `bind -n M-Escape` (as in the Omarchy tmux.conf) consumes Alt+Escape; the generic terminal fallback encodes Alt+Escape as legacy ESC ESC, so whykey matches the tmux binding exactly",
   "tier": "observed",
   "environment": "pty",
   "files": {
@@ -53,9 +53,6 @@
     ],
     "layer": "tmux",
     "run": "pty",
-    "detail": "touch /tmp/fired",
-    "accept": [
-      "handled-uncertain"
-    ]
+    "detail": "touch /tmp/fired"
   }
 }

@@ -2,7 +2,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "whykey";
-  version = "2.1.0";
+  version = "2.2.0";
 
   # The checkout without build outputs, so a local `target/` or `result` is
   # never copied into the store.
@@ -28,6 +28,7 @@ rustPlatform.buildRustPackage {
   postInstall = ''
     install -Dm755 extensions/whykey-nvim $out/bin/whykey-nvim
     install -Dm755 extensions/whykey-vscode $out/bin/whykey-vscode
+    install -Dm644 extensions/whykey-vscode-defaults.json $out/share/whykey/whykey-vscode-defaults.json
     install -Dm755 extensions/whykey-emacs $out/bin/whykey-emacs
     install -Dm644 whykey.1 $out/share/man/man1/whykey.1
     install -Dm644 README.md $out/share/doc/whykey/README.md

@@ -1,0 +1,22 @@
+{
+  "id": "alacritty-command-shortcut",
+  "description": "an alacritty keyboard binding ctrl+shift+c runs its command and alacritty consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "alacritty",
+  "files": {
+    "/root/.config/alacritty/alacritty.toml": [
+      "[[keyboard.bindings]]",
+      "key = \"C\"",
+      "mods = \"Control|Shift\"",
+      "command = { program = \"sh\", args = [\"-c\", \"touch /tmp/fired\"] }"
+    ]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+shift+c"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"any": true}}},
+  "whykey": {"args": ["ctrl+shift+c"], "layer": "Alacritty"}
+}

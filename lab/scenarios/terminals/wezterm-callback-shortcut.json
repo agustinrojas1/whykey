@@ -1,0 +1,24 @@
+{
+  "id": "wezterm-callback-shortcut",
+  "description": "a wezterm key assignment ctrl+shift+c runs its callback and wezterm consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "wezterm",
+  "files": {
+    "/root/.wezterm.lua": [
+      "local wezterm = require 'wezterm'",
+      "local config = wezterm.config_builder()",
+      "config.keys = {",
+      "  { key = 'c', mods = 'CTRL|SHIFT', action = wezterm.action_callback(function() os.execute('touch /tmp/fired') end) },",
+      "}",
+      "return config"
+    ]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+shift+c"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"any": true}}},
+  "whykey": {"args": ["ctrl+shift+c"], "layer": "WezTerm"}
+}

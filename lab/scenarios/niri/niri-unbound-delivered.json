@@ -1,0 +1,21 @@
+{
+  "id": "niri-unbound-delivered",
+  "description": "Super+U has no niri bind, so the probe client receives it",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "binds {",
+      "    Super+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+u"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+u"],
+    "layer": "Niri",
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

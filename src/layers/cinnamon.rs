@@ -9,6 +9,15 @@ pub struct Cinnamon;
 
 const SCHEMA_PREFIX: &str = "org.cinnamon.desktop.keybindings";
 
+/// Cinnamon's relocatable custom shortcuts; `command` holds the command.
+const CUSTOM: gsettings::CustomKeybindings = gsettings::CustomKeybindings {
+    list_schema: "org.cinnamon.desktop.keybindings",
+    list_key: "custom-list",
+    child_schema: "org.cinnamon.desktop.keybindings.custom-keybinding",
+    path: "/org/cinnamon/desktop/keybindings/custom-keybindings/",
+    command_key: "command",
+};
+
 static META: GsettingsMeta = GsettingsMeta {
     layer: "Cinnamon",
     error_prefix: "Cinnamon: ",
@@ -57,7 +66,9 @@ impl Cinnamon {
 
 fn load_bindings() -> Result<Vec<GsettingsBinding>, String> {
     let output = gsettings::run_list(&["list-recursively", SCHEMA_PREFIX])?;
-    Ok(parse_bindings(&output))
+    let mut bindings = parse_bindings(&output);
+    bindings.extend(gsettings::custom_bindings(&CUSTOM)?);
+    Ok(bindings)
 }
 
 fn parse_bindings(content: &str) -> Vec<GsettingsBinding> {
@@ -114,6 +125,20 @@ mod tests {
         assert!(parse_accelerator("<Super>").is_none());
         assert!(parse_accelerator("<Unknown>r").is_none());
         assert!(quoted_values("[]").is_empty());
+    }
+
+    #[test]
+    fn parses_custom_keybinding_values() {
+        let rows = gsettings::custom_binding_rows(
+            &CUSTOM,
+            "custom0",
+            "['<Super>t']",
+            "'touch /tmp/fired'",
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].combo, "super+t".parse().unwrap());
+        assert_eq!(rows[0].command.as_deref(), Some("touch /tmp/fired"));
+        assert!(gsettings::custom_binding_rows(&CUSTOM, "custom1", "@as []", "''").is_empty());
     }
     #[test]
     fn keeps_shared_modifier_superset() {

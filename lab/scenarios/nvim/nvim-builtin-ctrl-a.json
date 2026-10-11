@@ -1,0 +1,24 @@
+{
+  "id": "nvim-builtin-ctrl-a",
+  "description": "<C-a> has no user mapping; Neovim's built-in normal-mode CTRL-A increments the number under the cursor",
+  "tier": "observed",
+  "environment": "nvim",
+  "files": {
+    "/root/.config/nvim/init.lua": [
+      "vim.on_key(function(key) vim.fn.writefile({vim.fn.keytrans(key)}, '/tmp/nvim-keys', 'a') end)",
+      "vim.api.nvim_create_autocmd('TextChanged', {callback = function() vim.cmd('silent write') end})"
+    ],
+    "/root/count.txt": ["1"]
+  },
+  "pty": {"command": ["nvim", "-u", "/root/.config/nvim/init.lua", "/root/count.txt"]},
+  "actions": [{"type": "\\x01"}],
+  "ground_truth": {
+    "fired": {"sh": "grep -qx 2 /root/count.txt"},
+    "reached": {"sh": "grep -qxF '<C-A>' /tmp/nvim-keys"}
+  },
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-nvim", "ctrl+a"],
+    "layer": "External extension",
+    "run": "direct"
+  }
+}

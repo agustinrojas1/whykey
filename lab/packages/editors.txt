@@ -1,0 +1,5 @@
+# Editors.
+neovim
+# Emacs 30 without a GUI toolkit; emacsclient is packaged separately.
+emacs-nw
+emacsclient

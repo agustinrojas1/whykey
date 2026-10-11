@@ -1,0 +1,22 @@
+{
+  "id": "niri-bind-consumed",
+  "description": "a Super+T bind in config.kdl runs its command and niri consumes the key",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "binds {",
+      "    Super+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Niri",
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

@@ -1,4 +1,4 @@
-.TH WHYKEY 1 "October 2026" "whykey 2.1.0" "User Commands"
+.TH WHYKEY 1 "October 2026" "whykey 2.2.0" "User Commands"
 .SH NAME
 whykey \- explain which layer handles a keyboard shortcut
 .SH SYNOPSIS
@@ -510,6 +510,7 @@ capabilities and a validated result layer. Unknown capability and status
 values are rejected; oversized responses are covered by the normal
 timeout/output limits; whykey never discovers extensions or sends
 the investigated key to them.
+The result may also carry an optional evidence tier: live_query, config_file, or default.
 .TP
 .B extension program combination [--json]
 Run an opt-in external diagnostic executable using the schema-v1 stdin/stdout
@@ -518,13 +519,13 @@ timeout. First-party extensions include
 .B extensions/whykey-nvim
 (live Neovim runtime via RPC),
 .B extensions/whykey-vscode
-(user VS Code keybindings), and
+(user and bundled default VS Code keybindings), and
 .B extensions/whykey-emacs
 (live Emacs keymap stack via emacsclient). They report an answer as
 indeterminate when the part of the editor that could handle the key is not
-inspected: VS Code default keybindings and unevaluated
+inspected: unevaluated
 .B when
-clauses, Neovim built-in commands and
+clauses (VS Code), Neovim
 .B vim.on_key
 handlers, and Emacs translation maps and hooks.
 .TP

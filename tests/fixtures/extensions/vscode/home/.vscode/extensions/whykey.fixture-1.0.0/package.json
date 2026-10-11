@@ -1,0 +1,10 @@
+{
+    "name": "fixture",
+    "publisher": "whykey",
+    "version": "1.0.0",
+    "contributes": {
+        "keybindings": [
+            {"key": "ctrl+shift+j", "linux": "ctrl+alt+j", "command": "fixture.extensionCommand"}
+        ]
+    }
+}

@@ -1,7 +1,9 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
+use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
 
@@ -104,6 +106,11 @@ struct Binding {
 }
 
 fn load_bindings() -> Result<Vec<Binding>, String> {
+    if let Some((major, minor)) = river_version().filter(|version| *version >= (0, 4)) {
+        return Err(format!(
+            "River {major}.{minor} has no riverctl map commands; its keybinds come from the window manager"
+        ));
+    }
     let path = config_path().ok_or_else(|| "River init script was not found".to_owned())?;
     let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     if bytes.len() > MAX_CONFIG_BYTES {
@@ -129,6 +136,26 @@ fn config_description() -> String {
     config_path()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "River init".into())
+}
+
+/// Version reported by the `river` binary on PATH, or `None` when it is absent
+/// or its output has no `major.minor` token.
+fn river_version() -> Option<(u32, u32)> {
+    let output = command::output(Command::new("river").arg("-version")).ok()?;
+    parse_river_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_river_version(text: &str) -> Option<(u32, u32)> {
+    text.split_whitespace().find_map(|token| {
+        let mut parts = token.split('.');
+        let major = parts.next()?.parse::<u32>().ok()?;
+        let minor = parts
+            .next()?
+            .trim_end_matches(|c: char| !c.is_ascii_digit())
+            .parse::<u32>()
+            .ok()?;
+        Some((major, minor))
+    })
 }
 
 fn parse_bindings(content: &str) -> Vec<Binding> {
@@ -257,5 +284,13 @@ mod tests {
     fn rejects_dynamic_river_keys() {
         assert!(parse_accelerator("Super+{key}").is_none());
         assert!(parse_accelerator("Super+Q").is_some());
+    }
+
+    #[test]
+    fn parses_river_version_output() {
+        assert_eq!(parse_river_version("river 0.4.8\n"), Some((0, 4)));
+        assert_eq!(parse_river_version("river 0.3.11"), Some((0, 3)));
+        assert_eq!(parse_river_version("river 1.0.0-dev"), Some((1, 0)));
+        assert_eq!(parse_river_version("river: unknown option"), None);
     }
 }

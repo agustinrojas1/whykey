@@ -1,0 +1,29 @@
+{
+  "id": "mate-bind",
+  "description": "Marco (MATE 1.28) run-command-1 <Super>t runs command-1 from org.mate.Marco.keybinding-commands, and Marco consumes the key",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/glib-2.0/settings/keyfile": [
+      "[org/mate/marco/global-keybindings]",
+      "run-command-1='<Super>t'",
+      "",
+      "[org/mate/marco/keybinding-commands]",
+      "command-1='touch /tmp/fired'"
+    ]
+  },
+  "x11": {
+    "env": {"GSETTINGS_BACKEND": "keyfile"},
+    "daemons": [
+      {"argv": ["marco"], "ready": "wm", "ready_grab": [64, 28], "ready_timeout": 30}
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["keydown", "Super_L", "keydown", "t", "keyup", "t", "keyup", "Super_L"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "MATE",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "MATE"}
+  }
+}

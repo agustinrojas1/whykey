@@ -315,6 +315,15 @@ const KEYPAD: &[(&str, u16)] = &[
     ("KP_DELETE", 83),
 ];
 
+/// The character Shift types on the US-layout key whose unshifted
+/// character is `plain` (`1` → `!`); `None` for letters and unknown keys.
+pub(crate) fn us_shifted_symbol(plain: char) -> Option<char> {
+    US_PRINTABLE
+        .iter()
+        .find(|(_, unshifted, shifted)| *unshifted == plain && !shifted.is_ascii_alphabetic())
+        .map(|(_, _, shifted)| *shifted)
+}
+
 /// Look up a Linux key name, case-insensitively, with or without `KEY_`.
 pub(crate) fn evdev_code(name: &str) -> Option<u16> {
     let upper = name.to_ascii_uppercase();
@@ -448,25 +457,37 @@ pub(crate) fn query_presses(
     })
 }
 
-/// The key combination downstream layers receive for an emitted press, when
-/// its keysym does not depend on an unknown layout.
-pub(crate) fn downstream_combo(press: Press, layout_us: bool) -> Option<KeyCombo> {
+/// The key combination downstream layers receive for an emitted press, or
+/// why its keysym is unknown (an unknown layout, or the NumLock state for a
+/// keypad key whose level NumLock selects).
+pub(crate) fn downstream_combo(press: Press, layout_us: bool) -> Result<KeyCombo, String> {
     if let Some((name, _)) = LAYOUT_INVARIANT
         .iter()
         .find(|(_, code)| *code == press.code)
     {
-        return Some(KeyCombo::from_parts(press.mods, name));
+        return Ok(KeyCombo::from_parts(press.mods, name));
     }
+    let mut keypad = KEYPAD.iter().filter(|(_, code)| *code == press.code);
+    if let Some((digit, _)) = keypad.next() {
+        return match keypad.next() {
+            None => Ok(KeyCombo::from_parts(press.mods, digit)),
+            Some((navigation, _)) => Err(format!(
+                "its keysym depends on NumLock: {digit} with NumLock on, {navigation} with it off"
+            )),
+        };
+    }
+    let layout = || "its keysym depends on the XKB layout".to_owned();
     if !layout_us {
-        return None;
+        return Err(layout());
     }
     if press.code == 100 {
-        return Some(KeyCombo::from_parts(press.mods, "ALT_R"));
+        return Ok(KeyCombo::from_parts(press.mods, "ALT_R"));
     }
     US_PRINTABLE
         .iter()
         .find(|(code, ..)| *code == press.code)
         .map(|(_, plain, _)| KeyCombo::from_parts(press.mods, plain.to_string()))
+        .ok_or_else(layout)
 }
 
 /// Human-readable press for evidence lines, e.g. `Ctrl+KEY_A`.
@@ -514,10 +535,25 @@ mod tests {
         assert!(!query_presses(&key, None, true).unwrap().layout_assumed);
         let escape = KeyCombo::parse_query("escape").unwrap();
         assert!(!query_presses(&escape, None, false).unwrap().layout_assumed);
-        assert_eq!(downstream_combo(Press::new(0, 30), false), None);
+        assert!(downstream_combo(Press::new(0, 30), false).is_err());
         assert_eq!(
             downstream_combo(Press::new(CTRL, 48), true),
-            Some(KeyCombo::parse_query("ctrl+b").unwrap())
+            Ok(KeyCombo::parse_query("ctrl+b").unwrap())
+        );
+    }
+
+    #[test]
+    fn emitted_keypad_codes_reach_downstream_as_keypad_keys() {
+        for (code, name) in [(96, "kp_enter"), (78, "kp_add"), (98, "kp_divide")] {
+            assert_eq!(
+                downstream_combo(Press::new(0, code), false),
+                Ok(KeyCombo::parse_query(name).unwrap())
+            );
+        }
+        let digit = downstream_combo(Press::new(0, 79), true).unwrap_err();
+        assert!(
+            digit.contains("KP_1") && digit.contains("KP_END"),
+            "{digit}"
         );
     }
 

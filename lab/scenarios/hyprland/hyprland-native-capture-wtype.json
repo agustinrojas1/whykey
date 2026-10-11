@@ -1,0 +1,45 @@
+{
+  "id": "hyprland-native-capture-wtype",
+  "description": "native Hyprland capture (Lua key hook, pass-through) of a wtype key: wtype uploads a private keymap and types `a` as keycode 9, which the main layout reads as Escape; whykey reports only the certain keycode (code:9) and keeps listening instead of treating it as Escape",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "wtype": [
+        "a"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--pass-through",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": {
+      "stderr": "Waiting for input"
+    },
+    "layer": "Hyprland",
+    "combo": {
+      "key": "CODE:9",
+      "modifiers": 0
+    },
+    "tty": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "wezterm-ctrl-left",
+  "description": "unbound ctrl+left reaches a wezterm program as CSI 1;5D",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "wezterm",
+  "files": {"/root/.wezterm.lua": ["local wezterm = require 'wezterm'", "return wezterm.config_builder()"]},
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+left"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"equals": "\\x1b[1;5D"}}},
+  "whykey": {"args": ["ctrl+left"], "layer": "WezTerm"}
+}

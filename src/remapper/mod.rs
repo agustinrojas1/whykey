@@ -8,7 +8,7 @@
 mod input_remapper;
 mod kanata;
 mod keyd;
-mod keys;
+pub(crate) mod keys;
 mod kmonad;
 mod sexp;
 mod xremap;
@@ -428,7 +428,7 @@ fn definite(
     let description = finding.rule.as_ref().map(|rule| rule.text.clone());
     let (outcome, summary, action) = match &finding.effect {
         Effect::Remap(press) => match keys::downstream_combo(*press, layout_us) {
-            Some(target) => (
+            Ok(target) => (
                 Outcome::Redirected,
                 format!(
                     "{name} remaps {key} to {}",
@@ -436,12 +436,12 @@ fn definite(
                 ),
                 target.compact_display(),
             ),
-            None => {
+            Err(why) => {
                 let emitted = keys::describe(*press);
                 (
                     Outcome::Redirected,
                     format!("{name} remaps {key} to {emitted}"),
-                    format!("{emitted} (its keysym depends on the XKB layout)"),
+                    format!("{emitted} ({why})"),
                 )
             }
         },

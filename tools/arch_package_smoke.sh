@@ -48,6 +48,9 @@ test -x "$install_root/usr/bin/whykey"
 test -x "$install_root/usr/bin/whykey-nvim"
 test -x "$install_root/usr/bin/whykey-vscode"
 test -x "$install_root/usr/bin/whykey-emacs"
+test -s "$install_root/usr/share/whykey/whykey-vscode-defaults.json"
+# The installed extension finds its defaults table through ../share/whykey.
+python3 "$install_root/usr/bin/whykey-vscode" --test
 test -s "$install_root/usr/share/doc/whykey/DEPENDENCY_PROVENANCE.md"
 test -s "$install_root/usr/share/doc/whykey/SUPPORT_MATRIX.md"
 bash "$root_dir/tools/clean_install_smoke.sh" "$install_root/usr/bin/whykey"

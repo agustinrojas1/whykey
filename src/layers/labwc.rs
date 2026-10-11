@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::key::KeyCombo;
 use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome, openbox};
+use crate::util::ProcessSnapshot;
 
 /// Read-only labwc adapter. labwc intentionally keeps an Openbox-compatible
 /// `rc.xml` keybind format, so the shared conservative XML scanner is reused.
@@ -65,15 +66,12 @@ impl Labwc {
             .collect::<Vec<_>>();
         let mut details = vec![format!("config: {}", path.display())];
         if matches.is_empty() {
-            details.push(
-                "no matching static labwc keybind found; runtime reload state remains unknown"
-                    .into(),
-            );
+            details.push("no matching static labwc keybind found in rc.xml".into());
             return LayerResult::new(
                 "labwc",
                 LayerId::Compositor,
-                Outcome::Unknown,
-                "labwc shortcut state is conditional",
+                Outcome::Pass,
+                "no matching labwc key binding found",
                 details,
             )
             .with_tier(EvidenceTier::ConfigFile);
@@ -81,11 +79,25 @@ impl Labwc {
         for binding in matches {
             details.push(format!("binding: {}", binding.action));
         }
+        let running = !ProcessSnapshot::collect()
+            .matching_pids(&["labwc"])
+            .is_empty();
+        if running {
+            return LayerResult::new(
+                "labwc",
+                LayerId::Compositor,
+                Outcome::Consumed,
+                "labwc keybind is configured and labwc is running",
+                details,
+            )
+            .with_tier(EvidenceTier::ConfigFile);
+        }
+        details.push("no running labwc process found; the keybind may not be active".into());
         LayerResult::new(
             "labwc",
             LayerId::Compositor,
             Outcome::HandledUncertain,
-            "matching labwc keybind configured; runtime activation is conditional",
+            "matching labwc keybind configured; labwc is not running",
             details,
         )
         .with_tier(EvidenceTier::ConfigFile)

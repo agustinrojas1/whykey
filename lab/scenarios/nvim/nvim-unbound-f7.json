@@ -1,0 +1,19 @@
+{
+  "id": "nvim-unbound-f7",
+  "description": "<F7> has no mapping in any mode; Neovim reads the key and nothing fires",
+  "tier": "observed",
+  "environment": "nvim",
+  "files": {
+    "/root/.config/nvim/init.lua": [
+      "vim.on_key(function(key) vim.fn.writefile({vim.fn.keytrans(key)}, '/tmp/nvim-keys', 'a') end)"
+    ]
+  },
+  "pty": {"command": ["nvim", "-u", "/root/.config/nvim/init.lua"]},
+  "actions": [{"type": "\\e[18~"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "reached": {"sh": "grep -qxF '<F7>' /tmp/nvim-keys"}},
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-nvim", "f7"],
+    "layer": "External extension",
+    "run": "direct"
+  }
+}

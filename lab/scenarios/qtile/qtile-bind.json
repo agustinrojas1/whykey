@@ -1,0 +1,40 @@
+{
+  "id": "qtile-bind",
+  "description": "a Qtile config key Mod4+t (mod set through a variable) fires and Qtile consumes it",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.config/qtile/config.py": [
+      "from libqtile import layout",
+      "from libqtile.config import Group, Key, Screen",
+      "from libqtile.lazy import lazy",
+      "",
+      "mod = \"mod4\"",
+      "keys = [",
+      "    Key([mod], \"t\", lazy.spawn(\"touch /tmp/fired\")),",
+      "    Key([mod], \"Return\", lazy.spawn(\"touch /tmp/ready\")),",
+      "]",
+      "groups = [Group(\"1\")]",
+      "layouts = [layout.Max()]",
+      "screens = [Screen()]"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["qtile", "start", "-b", "x11", "-c", "/root/.config/qtile/config.py"],
+        "ready_grab": [64, 28],
+        "ready_timeout": 30
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Qtile",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "qtile"},
+    "accept": ["handled-uncertain"]
+  }
+}
