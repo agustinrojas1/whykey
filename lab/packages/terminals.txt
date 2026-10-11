@@ -1,0 +1,7 @@
+# Terminal emulators driven by lab/envs/terminals.py.
+alacritty
+foot
+ghostty
+kitty
+konsole
+wezterm

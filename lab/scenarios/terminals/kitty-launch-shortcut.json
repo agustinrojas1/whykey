@@ -1,0 +1,20 @@
+{
+  "id": "kitty-launch-shortcut",
+  "description": "a kitty map ctrl+shift+c launch runs its command and kitty consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "kitty",
+  "files": {
+    "/root/.config/kitty/kitty.conf": [
+      "allow_remote_control no",
+      "map ctrl+shift+c launch --type=background sh -c 'touch /tmp/fired'"
+    ]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+shift+c"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"any": true}}},
+  "whykey": {"args": ["ctrl+shift+c"], "layer": "Kitty"}
+}

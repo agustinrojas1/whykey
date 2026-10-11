@@ -130,8 +130,8 @@ receive real synthetic input, and their reaction is the ground truth (a bind
 ran a command, a key arrived at an independent test client). Each scenario
 also needs a positive control: the probe must have seen a key, or the bind
 must be shown able to fire, so a dead setup cannot pass by default. whykey's
-verdict must match the ground truth. The current run has 125 scenarios: 111
-match exactly, 14 pass only as honest uncertainty (see below), none fail,
+verdict must match the ground truth. The current run has 172 scenarios: 156
+match exactly, 16 pass only as honest uncertainty (see below), none fail,
 and none are lab errors. The per-capability list is in the
 [support matrix](SUPPORT_MATRIX.md).
 
@@ -139,37 +139,43 @@ and none are lab errors. The per-capability list is in the
 
 | Environment | Version | Scenarios |
 | --- | --- | --- |
-| Hyprland, `hyprland.conf` and `hyprland.lua`, in a KVM guest | 0.56.2 | 22, plus 2 probe-window |
-| Sway (headless) | 1.11 | 14, plus 2 probe-window |
-| i3 on Xvfb | 4.25.1 | 12 (5 with `DISPLAY` unset, to check the adapter without the X11 grab probe), plus 3 probe-window (one is a lone Super tap) |
-| KDE kglobalacceld on Xvfb (daemon only, no Plasma session) | 6.7.5 | 6 (3 with `DISPLAY` unset) |
+| Hyprland, `hyprland.conf` and `hyprland.lua`, in a KVM guest | 0.56.2 | 30 (4 probe-window; 5 use the `qkbd` kernel keyboard) |
+| Sway (headless) | 1.11 | 16 (2 probe-window) |
+| i3 on Xvfb | 4.25.1 | 15 (3 probe-window; 5 with `DISPLAY` unset) |
+| KDE kglobalacceld on Xvfb (daemon only, no Plasma session) | 6.7.5 | 8 (3 with `DISPLAY` unset) |
 | GNOME: headless mutter (mutter-owned bindings only; GNOME Shell cannot start in the container, so Shell and gnome-settings-daemon bindings are not verified) | mutter 50.5 | 4 |
 | sxhkd on Xvfb (replay `~`, release `@`, braces, ranges, plain keys, continuations) | 0.6.1 | 11 |
 | Openbox, AwesomeWM, xbindkeys on Xvfb | 3.6.1, 4.3, 1.8.7 | 2 each |
+| Qtile, XMonad, Xfce, MATE on Xvfb | Fedora 44 (unpinned) | 2 each |
 | bash, zsh, fish in a pty | 5.3.9, 5.9, 4.6.0 | 27 (14 with `shell-init`, 13 without) |
 | tmux and GNU Screen, with bash, zsh, or fish inside | 3.7c, 5.0.1 | 16 |
+| Terminal emulators: Alacritty, foot, Ghostty, kitty, Konsole, WezTerm | Fedora 44; Ghostty and WezTerm from COPRs | 16 |
+| Emacs (`emacs-nw`, `emacsclient`) | 30.2 | 4 (1 tolerated) |
+| Neovim | 0.12.5 | 3 |
+| dwl, built from source | v0.9 (wlroots 0.20) | 2 |
+| labwc | Fedora 44 (unpinned) | 2 |
+| Niri, nested in a headless Sway | Fedora 44 (unpinned) | 2 (1 tolerated) |
+| Wayfire | Fedora 44 (unpinned) | 2 (1 tolerated) |
 
 Without `shell-init`, the 13 shell scenarios pass only as honest
 uncertainty: whykey says the shell probably handles the key, unverified.
-`tmux-root-alt-escape` also passes only as uncertainty: the generic terminal
-fallback has no Alt+Escape encoding, so whykey cannot tell which bytes tmux
-receives. These 14 do not count as verification.
+Three more pass only as uncertainty: `emacs-unbound-f7`, `niri-bind-consumed`,
+and `wayfire-bind-consumed`. For the two compositor binds, whykey reports the
+bind as handled, but the lab cannot confirm the compositor consumed the key.
+`tmux-root-alt-escape` is now exact. These 16 do not count as verification.
 
 **Live-verified by hand on the maintainer's desktop:** static `whykey KEY`
 inspection on Hyprland 0.56.2, bash with `shell-init`, and the Neovim
 extension.
 
-**Not verified against the real program:** Niri, River, Wayfire, labwc, dwl,
-Qtile, XMonad, herbstluftwm, Xfce, Cinnamon, MATE, a full GNOME Shell or
-Plasma session, the remappers (keyd, kanata, kmonad, input-remapper,
-xremap), IBus and Fcitx5, the terminal emulator adapters (Ghostty, Kitty,
-Alacritty, foot, WezTerm, Konsole; the lab's shells run in a bare pty),
-Zellij, Emacs, Vim, Helix, Kakoune, Micro, JetBrains IDEs, and VS Code
-(whose default keybindings are not inspected). `listen --evdev`, Sway native
-capture, Hyprland `--suppress`, and capture of a physical keyboard on a real
-desktop have no lab scenario. These
-adapters work from documentation, upstream source, and fixtures. Treat
-their answers as informed guesses.
+**Not verified against the real program:** River 0.4 and later (the lab has
+no `riverctl`), Cinnamon, herbstluftwm (installed, no scenario), a full GNOME
+Shell or Plasma session, the remappers (keyd, kanata, kmonad, input-remapper,
+xremap), IBus and Fcitx5, Zellij, Vim, Helix, Kakoune, Micro, JetBrains IDEs,
+and VS Code (its bundled default keybindings are not run by any lab scenario).
+Sway native capture, Hyprland `--suppress`, and capture of a physical keyboard
+on a real desktop have no lab scenario. These adapters work from documentation,
+upstream source, and fixtures. Treat their answers as informed guesses.
 
 ## Permissions
 
@@ -221,6 +227,11 @@ mise and `cargo install` do not put them on `PATH`. With mise they are in
 `"$(mise where github:agustinrojas1/whykey)/extensions"`; with Cargo, take
 them from the repository's `extensions/` directory. Add that directory to
 `PATH` or link the scripts into a directory that is already on it.
+
+The `whykey-vscode` extension answers a missing key from VS Code's default
+keybindings, bundled in `extensions/whykey-vscode-defaults.json` (VS Code
+1.140.0). Extensions set a `tier` on each answer (`live_query`, `config_file`,
+or `default`); the bundled defaults answer with `default`.
 
 ## Usage
 

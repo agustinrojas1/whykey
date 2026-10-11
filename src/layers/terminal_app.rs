@@ -132,11 +132,26 @@ fn resolve_bindings(
     }
     if let Some(output) = &binding.output {
         details.push(format!("sequence: {}", format_bytes(output)));
+        // Konsole's keytab is its encoding table, not a shortcut: the key passes
+        // as these bytes. In other terminals a byte-only binding is a user
+        // rewrite (send_text, chars, ...): the terminal acts on the key and the
+        // program receives the replacement bytes instead.
+        let (outcome, summary) = if kind == TerminalKind::Konsole {
+            (
+                Outcome::Pass,
+                format!("{kind} keytab encodes the key for the PTY"),
+            )
+        } else {
+            (
+                Outcome::HandledAndPassed,
+                format!("{kind} binding rewrites the key to a sequence for the PTY"),
+            )
+        };
         return LayerResult::new(
             kind.layer_name(),
             LayerId::Terminal,
-            Outcome::HandledAndPassed,
-            format!("{kind} sends a sequence to the PTY"),
+            outcome,
+            summary,
             details,
         );
     }
@@ -613,6 +628,12 @@ fn parse_wezterm_key(key: &str, modifiers: &[String]) -> Option<KeyCombo> {
         return None;
     }
     let mut parts = modifiers.to_vec();
+    // show-keys writes a shifted letter in capitals without a SHIFT token:
+    // `CTRL C` is ctrl+shift+c, while `CTRL c` is ctrl+c.
+    let shifted_letter = key.len() == 1 && key.as_bytes()[0].is_ascii_uppercase();
+    if shifted_letter && !modifiers.iter().any(|modifier| modifier == "shift") {
+        parts.push("shift".to_owned());
+    }
     parts.push(key.to_owned());
     parts.join("+").parse().ok()
 }
@@ -919,6 +940,9 @@ fn yaml_field(
         "mods" => *mods = Some(value),
         "action" => *action = Some(value),
         "chars" => *chars = Some(value),
+        "command" => {
+            action.get_or_insert_with(|| "command".to_owned());
+        }
         _ => {}
     }
 }
@@ -929,6 +953,7 @@ fn alacritty_block(lines: &[&str]) -> Option<Binding> {
     let trigger = parse_alacritty_key(&key, &mods)?;
     let action = field_value(lines, "action")
         .or_else(|| field_value(lines, "chars"))
+        .or_else(|| field_value(lines, "command").map(|_| "command".to_owned()))
         .unwrap_or_default();
     let output = field_value(lines, "chars").map(|value| decode_escape(&value));
     let description = format!("{trigger} = {action}");
@@ -969,23 +994,38 @@ fn parse_foot(content: &str) -> Vec<Binding> {
     let mut in_bindings = false;
     content
         .lines()
-        .filter_map(|raw| {
-            let line = raw.split('#').next()?.trim();
+        .flat_map(|raw| {
+            let line = raw.split('#').next().unwrap_or_default().trim();
             if line.starts_with('[') {
                 in_bindings = line.eq_ignore_ascii_case("[key-bindings]");
-                return None;
+                return Vec::new();
             }
             if !in_bindings || line.is_empty() {
-                return None;
+                return Vec::new();
             }
-            let (raw_trigger, action) = line.split_once('=')?;
-            let trigger = parse_key(raw_trigger.trim())?;
-            Some(Binding {
-                trigger,
-                action: action.trim().to_owned(),
-                output: None,
-                description: line.to_owned(),
-            })
+            // foot binds `action=keys`; pipe actions take `action=[command] keys`.
+            let Some((action, keys)) = line.split_once('=') else {
+                return Vec::new();
+            };
+            let action = action.trim();
+            let keys = keys.trim();
+            let keys = if keys.starts_with('[') {
+                keys.split_once(']').map_or("", |(_, rest)| rest)
+            } else {
+                keys
+            };
+            // foot writes `none` for an unbound action; it is not a key.
+            keys.split_whitespace()
+                .filter(|key| !key.eq_ignore_ascii_case("none"))
+                .filter_map(|key| {
+                    parse_key(key).map(|trigger| Binding {
+                        trigger,
+                        action: action.to_owned(),
+                        output: None,
+                        description: line.to_owned(),
+                    })
+                })
+                .collect()
         })
         .collect()
 }
@@ -1028,6 +1068,10 @@ fn action_is_consuming(action: &str) -> bool {
             | "clipboardcopy"
             | "clipboardpaste"
             | "launch"
+            | "command"
+            | "pipevisible"
+            | "pipescrollback"
+            | "pipeselected"
             | "kitten"
             | "closewindow"
             | "newwindow"
@@ -1052,6 +1096,7 @@ fn action_is_consuming(action: &str) -> bool {
             | "scrolldown"
             | "copyto"
             | "pastefrom"
+            | "emitevent"
             | "activatecommandpalette"
             | "activatetab"
             | "activatetabrelative"
@@ -1190,6 +1235,22 @@ chars = "\u001b[1;5D"
     }
 
     #[test]
+    fn alacritty_command_binding_is_consuming() {
+        let toml = r#"
+[[keyboard.bindings]]
+key = "C"
+mods = "Control|Shift"
+command = { program = "sh", args = ["-c", "touch /tmp/fired"] }
+"#;
+        let bindings = parse_alacritty(toml);
+        assert_eq!(bindings[0].action, "command");
+        assert!(action_is_consuming(&bindings[0].action));
+        let yaml = "key_bindings:\n  - { key: C, mods: Control|Shift, command: { program: sh } }\n";
+        let bindings = parse_alacritty(yaml);
+        assert!(action_is_consuming(&bindings[0].action));
+    }
+
+    #[test]
     fn parses_alacritty_yaml_inline_binding() {
         let content = r#"
 key_bindings:
@@ -1213,9 +1274,19 @@ key_bindings:
 
     #[test]
     fn parses_foot_key_bindings() {
-        let bindings = parse_foot("[key-bindings]\nctrl+left=clipboard-copy\n");
+        let bindings = parse_foot("[key-bindings]\nclipboard-copy=Control+Left\n");
         assert_eq!(bindings[0].trigger.to_string(), "CTRL + LEFT");
         assert_eq!(bindings[0].action, "clipboard-copy");
+    }
+
+    #[test]
+    fn foot_pipe_binding_is_consuming() {
+        let content = "[key-bindings]\nclipboard-copy=none\npipe-visible=[sh -c \"touch /tmp/fired\"] Control+Shift+c\n";
+        let bindings = parse_foot(content);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].trigger.to_string(), "CTRL + SHIFT + C");
+        assert_eq!(bindings[0].action, "pipe-visible");
+        assert!(action_is_consuming(&bindings[0].action));
     }
 
     #[test]
@@ -1227,6 +1298,32 @@ key_bindings:
         assert!(action_is_consuming(&bindings[0].action));
         assert_eq!(bindings[1].trigger.to_string(), "CTRL + SHIFT + TAB");
         assert_eq!(bindings[2].output.as_deref(), Some(b"\x1b[1;5C".as_slice()));
+    }
+
+    #[test]
+    fn wezterm_capital_letter_is_shift_and_emit_event_consumes() {
+        let content = "Default key table\n-----------------\n    CTRL                 C                ->   EmitEvent(\"user-defined-0\")\n";
+        let bindings = parse_wezterm(content);
+        assert_eq!(bindings.len(), 1);
+        let shifted: KeyCombo = "ctrl+shift+c".parse().unwrap();
+        assert_eq!(bindings[0].trigger, shifted);
+        let result = resolve_bindings(
+            TerminalKind::WezTerm,
+            &"ctrl+shift+c".parse().unwrap(),
+            &bindings,
+            "test",
+        );
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(
+            resolve_bindings(
+                TerminalKind::WezTerm,
+                &"ctrl+c".parse().unwrap(),
+                &bindings,
+                "test"
+            )
+            .outcome,
+            Outcome::Pass
+        );
     }
 
     #[test]

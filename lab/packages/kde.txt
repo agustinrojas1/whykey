@@ -1,0 +1,3 @@
+# A bare kglobalacceld on Xvfb.
+kf6-kglobalaccel
+kglobalacceld

@@ -121,7 +121,7 @@ fn load_bindings() -> Result<Vec<Binding>, String> {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("WAYFIRE_CONFIG") {
+    if let Some(path) = env::var_os("WAYFIRE_CONFIG_FILE") {
         return Some(PathBuf::from(path));
     }
     let base = crate::util::config_base()?;
@@ -188,7 +188,7 @@ fn parse_accelerator(value: &str) -> Option<KeyCombo> {
         if let Some(modifier) = parse_modifier(token) {
             modifiers.push(modifier);
         } else if key.is_none() {
-            key = Some(token.to_owned());
+            key = Some(wayfire_key_name(token));
         } else {
             return None;
         }
@@ -200,6 +200,30 @@ fn parse_accelerator(value: &str) -> Option<KeyCombo> {
         format!("{}+{key}", modifiers.join("+"))
     };
     input.parse().ok()
+}
+
+/// Wayfire names keys by evdev code (`KEY_T`, `KEY_KP1`). Map those to the
+/// spelling `KeyCombo` parses; bare names pass through unchanged. Keypad
+/// digits and Enter are the only keypad names mapped; other `KEY_KP*` names
+/// pass through and so do not match a keypad key.
+fn wayfire_key_name(token: &str) -> String {
+    let Some(name) = token
+        .get(..4)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("KEY_"))
+        .and_then(|_| token.get(4..))
+    else {
+        return token.to_owned();
+    };
+    let upper = name.to_ascii_uppercase();
+    if upper == "KPENTER" {
+        return "KP_ENTER".to_owned();
+    }
+    match upper.strip_prefix("KP") {
+        Some(digit) if digit.len() == 1 && digit.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("KP_{digit}")
+        }
+        _ => name.to_owned(),
+    }
 }
 
 fn parse_modifier(value: &str) -> Option<&'static str> {
@@ -236,5 +260,16 @@ mod tests {
         assert!(parse_accelerator("none").is_none());
         assert!(parse_accelerator("<super> {key}").is_none());
         assert!(parse_accelerator("<super> <ctrl> t").is_some());
+    }
+
+    #[test]
+    fn parses_wayfire_evdev_key_names() {
+        let bindings = parse_bindings(
+            "[command]\nbinding_terminal = <super> KEY_T\nbinding_kp = <ctrl> KEY_KP1\nbinding_enter = <super> KEY_KPENTER\n",
+        );
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(bindings[0].combo, "super+t".parse().unwrap());
+        assert_eq!(bindings[1].combo, "ctrl+KP_1".parse().unwrap());
+        assert_eq!(bindings[2].combo, "super+KP_Enter".parse().unwrap());
     }
 }

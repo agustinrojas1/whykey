@@ -1,0 +1,7 @@
+# Wayland compositors with their own keybinding config: niri (Fedora repo
+# update), labwc and wayfire. dwl has no Fedora package; waylandwms.sh builds
+# it from source before this list runs. river 0.4 is not included: its
+# keybinds come from a window manager, not riverctl, and no WM is packaged.
+niri
+labwc
+wayfire

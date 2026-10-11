@@ -1,0 +1,25 @@
+{
+  "id": "xfce-bind",
+  "description": "an xfce4-keyboard-shortcuts custom command for <Super>t is set at runtime through xfconf; xfsettingsd grabs it and consumes the key",
+  "tier": "observed",
+  "environment": "x11",
+  "x11": {
+    "daemons": [
+      {"argv": ["xfwm4"], "ready": "wm"},
+      {"argv": ["xfsettingsd"], "ready_grab": [64, 27], "ready_timeout": 30}
+    ]
+  },
+  "session_setup": [
+    "xfconf-query -c xfce4-keyboard-shortcuts -n -p '/commands/custom/<Super>t' -t string -s 'touch /tmp/fired' && sleep 1"
+  ],
+  "probe": "x11",
+  "actions": [
+    {"xdotool": ["keydown", "Super_L", "keydown", "t", "keyup", "t", "keyup", "Super_L"]}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Xfce",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "XFCE"}
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "konsole-fullscreen-shortcut",
+  "description": "a Konsole keytab binding ctrl+f11 toggles fullscreen and Konsole consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "konsole",
+  "files": {
+    "/root/.config/konsolerc": ["[Desktop Entry]", "DefaultProfile=whykey.profile"],
+    "/root/.local/share/konsole/whykey.profile": ["[General]", "Name=whykey", "[Keyboard]", "KeyBindings=whykey"],
+    "/root/.local/share/konsole/whykey.keytab": ["keyboard \"whykey\"", "key F11 +Ctrl : toggleFullScreen"]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+f11"]},
+    {"sleep": 1},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "swaymsg -t get_tree | grep -Eq '\"fullscreen_mode\": *1'"},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["ctrl+f11"], "layer": "Konsole"}
+}

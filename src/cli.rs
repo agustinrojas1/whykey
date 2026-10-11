@@ -603,12 +603,14 @@ pub(crate) fn dispatch(
             whykey::report::render_json(&key, &results, None, schema_version)
         );
     } else {
+        let key_symbol = whykey::layers::hyprland::code_key_symbol_for_query(&key);
         print!(
             "{}",
-            whykey::report::render_with_options(
+            whykey::report::render_with_key_symbol(
                 &key,
                 &results,
                 whykey::style::RenderOptions::cli(color, verbose),
+                key_symbol.as_deref(),
             )
         );
     }

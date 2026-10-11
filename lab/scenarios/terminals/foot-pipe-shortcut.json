@@ -1,0 +1,23 @@
+{
+  "id": "foot-pipe-shortcut",
+  "description": "a foot key-binding pipe-visible action runs its command and foot consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "foot",
+  "files": {
+    "/root/.config/foot/foot.ini": [
+      "[main]",
+      "term=foot",
+      "[key-bindings]",
+      "clipboard-copy=none",
+      "pipe-visible=[sh -c \"touch /tmp/fired\"] Control+Shift+c"
+    ]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+shift+c"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"any": true}}},
+  "whykey": {"args": ["ctrl+shift+c"], "layer": "Foot"}
+}

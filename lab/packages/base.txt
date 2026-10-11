@@ -1,0 +1,11 @@
+# Always needed: the driver (python3), lab/rdkbd.py (python3-dbus), the
+# session bus, Mesa software rendering, `script` for tty runs, and the
+# tools the setup scripts and scenarios use.
+python3
+python3-dbus
+dbus-daemon
+mesa-dri-drivers
+procps-ng
+util-linux-script
+libcap
+acl

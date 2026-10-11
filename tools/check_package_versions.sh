@@ -18,7 +18,7 @@ check packaging/whykey.spec "$(sed -n 's/^Version:[[:space:]]*//p' "$root_dir/pa
 check packaging/whykey.nix "$(sed -n 's/^[[:space:]]*version = "\([^"]*\)";.*/\1/p' "$root_dir/packaging/whykey.nix")"
 check debian/changelog "$(sed -n '1s/.*(\([^)]*\)).*/\1/p' "$root_dir/debian/changelog")"
 
-for ext in whykey-nvim whykey-vscode whykey-emacs; do
+for ext in whykey-nvim whykey-vscode whykey-vscode-defaults.json whykey-emacs; do
     for recipe in packaging/PKGBUILD packaging/whykey.spec debian/rules packaging/whykey.nix; do
         if ! grep -q "$ext" "$root_dir/$recipe"; then
             echo "$recipe does not install $ext" >&2

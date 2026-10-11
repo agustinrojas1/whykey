@@ -1,0 +1,45 @@
+{
+  "id": "hyprland-qkbd-listen-unbound",
+  "description": "native listen (pass-through) on the VM kernel keyboard observes an unbound Super+X that reaches the probe",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "qkbd": [
+        "super+x"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--pass-through",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": {
+      "stderr": "Waiting for input"
+    },
+    "layer": "Hyprland",
+    "combo": {
+      "key": "X",
+      "modifiers": 64
+    },
+    "tty": true
+  }
+}

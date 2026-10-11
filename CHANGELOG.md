@@ -1,5 +1,79 @@
 # Changelog
 
+## [2.2.0] - 2026-10-11
+
+The lab grows to 172 scenarios: 156 match exactly, 16 pass only as honest
+uncertainty (13 shells without `shell-init`, `emacs-unbound-f7`,
+`niri-bind-consumed`, and `wayfire-bind-consumed`), and none fail. The
+lab adds Niri (nested in Sway), Wayfire, labwc, dwl, Qtile, XMonad, Xfce,
+MATE, the kitty, alacritty, foot, WezTerm, Konsole, and Ghostty terminals,
+Emacs 30.2 (daemon and `emacsclient`), and Neovim 0.12.5. The Hyprland VM
+gets a kernel keyboard (QEMU virtio-keyboard, driven through QMP), so
+`listen --evdev` and Hyprland's native listen and `--window` capture run
+against real kernel input.
+
+### Fixes
+
+- Alt+Escape is predicted as ESC ESC in terminal prediction, not as a
+  lone Escape. Test `encodes_alt_escape_as_escape_prefixed_escape`; lab
+  `tmux-root-alt-escape` (exact).
+- A `code:N` query is headlined by its layout symbol. The verbose report
+  keeps the keycode. Test `a_code_query_is_headlined_by_its_layout_symbol`.
+- A remap whose target is a keypad key reports the downstream key as the
+  keypad key (`KP_*`). Digits stay conditional on NumLock. Test
+  `emitted_keypad_codes_reach_downstream_as_keypad_keys`.
+- KDE maps the `Launch` (0–F) keys, keypad shortcuts, and shifted digit
+  symbols. Test `maps_launch_media_keypad_and_shifted_digit_keys`; lab
+  `kde-launch5-key`, `kde-shift-digit-symbol`.
+- A Hyprland virtual keyboard that brings its own keymap is reported as
+  `code:N`, with only the keycode certain, and never ends `listen`. Test
+  `virtual_keyboard_keymaps_leave_only_the_keycode_certain`.
+- VS Code's default keybindings are bundled: VS Code 1.140.0's default
+  table (US layout), the keybindings of its bundled extensions, and their
+  removals. An installed VS Code of another version adds a note that the
+  defaults may have changed. `tools/generate_vscode_defaults.py`
+  regenerates the table; `WHYKEY_VSCODE_DEFAULTS`, `VSCODE_PRODUCT_JSON`,
+  and `VSCODE_EXTENSIONS` override its inputs. Test
+  `whykey_vscode_extension_matches_fixture_keybindings`.
+- Extension responses may carry an optional `tier` (`live_query`,
+  `config_file`, or `default`). `observed` is reserved for whykey's own
+  captures and is rejected. Test `accepts_only_tiers_an_extension_can_establish`.
+- Emacs answers are live-verified: a bound key fires (`emacs-global-bind`,
+  `emacs-minor-mode-bind`, `emacs-prefix-c-x`), and an unbound key reports
+  honest uncertainty (`emacs-unbound-f7`). Test
+  `whykey_emacs_extension_matches_fixture_runtime_queries`.
+- `whykey-nvim` identifies built-in commands from `$VIMRUNTIME/doc/index.txt`.
+  Neovim scenarios: `nvim-builtin-ctrl-a`, `nvim-normal-bind`,
+  `nvim-unbound-f7`.
+- Terminal adapters: WezTerm reads a capital letter as Shift and its
+  `EmitEvent` consumes the key; Alacritty `command` bindings and foot's
+  `action = keys` parser and pipe actions consume the key. Tests
+  `wezterm_capital_letter_is_shift_and_emit_event_consumes`,
+  `alacritty_command_binding_is_consuming`, `foot_pipe_binding_is_consuming`.
+  Konsole's keytab is encoding, so it passes. Lab `wezterm-*`, `alacritty-*`,
+  `foot-*`, `konsole-*`.
+- labwc and dwl consume bound keys while the compositor runs. dwl reads
+  `MODKEY` from its `#define`, and falls back to Alt without one. Tests
+  `defaults_modkey_to_alt_without_define`; lab `labwc-bind-consumed`,
+  `dwl-bind-consumed`.
+- Wayfire reads evdev key names. Test `parses_wayfire_evdev_key_names`.
+  Its bound keys are `handled` with uncertainty (`wayfire-bind-consumed`).
+- River 0.4 and later reports `unavailable` with the reason; there is no
+  `riverctl` to query. Test `parse_river_version`.
+- MATE reads `run-command-N` and `keybinding-commands` for run-command
+  bindings. Test `run_command_binding_takes_command_from_keybinding_commands`;
+  lab `mate-bind`, `mate-unbound`.
+- Qtile reads its variables and modifier names from its config. Tests
+  `qtile_variables`, `resolves_qtile_modifier_variables`; lab `qtile-bind`,
+  `qtile-unbound`. XMonad and Xfce are lab-verified too (`xmonad-*`,
+  `xfce-*`).
+
+### Lab
+
+- Environment plugins: `lab/envs/*.py` (one module per environment), with
+  package families in `lab/packages/`. See `lab/README.md`.
+- Hyprland scenarios run on the kernel keyboard (`hyprland-qkbd-*`).
+
 ## [2.1.0] - 2026-10-11
 
 A verification sweep of 2.0.0 (host, configuration, packaging, and lab

@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::key::KeyCombo;
 use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::util::ProcessSnapshot;
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -100,14 +101,26 @@ impl Dwl {
                 .iter()
                 .map(|binding| format!("binding: {}", binding.action)),
         );
-        details.push(
-            "dwl has no stable global-shortcut IPC; config.h evidence is conditional until runtime verification exists".into(),
-        );
+        let running = !ProcessSnapshot::collect()
+            .matching_pids(&["dwl"])
+            .is_empty();
+        if running {
+            details.push("dwl config.h is compiled into the running dwl build".into());
+            return LayerResult::new(
+                "dwl",
+                LayerId::Compositor,
+                Outcome::Consumed,
+                "dwl key binding is configured and dwl is running",
+                details,
+            )
+            .with_tier(EvidenceTier::ConfigFile);
+        }
+        details.push("no running dwl process found; the key binding may not be active".into());
         LayerResult::new(
             "dwl",
             LayerId::Compositor,
             Outcome::HandledUncertain,
-            "dwl config.h contains a matching key binding",
+            "matching dwl key binding configured; dwl is not running",
             details,
         )
         .with_tier(EvidenceTier::ConfigFile)
@@ -142,6 +155,7 @@ fn config_path() -> Option<std::path::PathBuf> {
 }
 
 fn parse_bindings(content: &str) -> Vec<Binding> {
+    let modkey = modkey_token(content);
     let mut bindings = Vec::new();
     for raw_line in content.lines() {
         let line = raw_line.split_once("//").map_or(raw_line, |(line, _)| line);
@@ -156,7 +170,7 @@ fn parse_bindings(content: &str) -> Vec<Binding> {
         if fields.len() < 3 || !fields[1].contains("XKB_KEY_") {
             continue;
         }
-        let Some(combo) = parse_key(fields[0], fields[1]) else {
+        let Some(combo) = parse_key(fields[0], fields[1], modkey) else {
             continue;
         };
         let action = fields[2]
@@ -172,11 +186,24 @@ fn parse_bindings(content: &str) -> Vec<Binding> {
     bindings
 }
 
-fn parse_key(modifiers: &str, symbol: &str) -> Option<KeyCombo> {
+fn modkey_token(content: &str) -> &str {
+    content
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("#define MODKEY "))
+        .and_then(|value| value.split_whitespace().next())
+        .unwrap_or("WLR_MODIFIER_ALT")
+}
+
+fn parse_key(modifiers: &str, symbol: &str, modkey: &str) -> Option<KeyCombo> {
     let mut parts = Vec::new();
     for modifier in modifiers.split('|').map(str::trim) {
+        let modifier = if modifier == "MODKEY" {
+            modkey
+        } else {
+            modifier
+        };
         match modifier {
-            "MODKEY" | "WLR_MODIFIER_LOGO" => parts.push("super"),
+            "WLR_MODIFIER_LOGO" => parts.push("super"),
             "WLR_MODIFIER_SHIFT" => parts.push("shift"),
             "WLR_MODIFIER_CTRL" => parts.push("ctrl"),
             "WLR_MODIFIER_ALT" => parts.push("alt"),
@@ -211,7 +238,7 @@ mod tests {
     #[test]
     fn parses_dwl_key_table_without_executing_config() {
         let bindings = parse_bindings(
-            "static const Key keys[] = {\n { MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Return, spawn, {.v = termcmd} },\n { MODKEY, XKB_KEY_q, quit, {0} },\n};",
+            "#define MODKEY WLR_MODIFIER_LOGO\nstatic const Key keys[] = {\n { MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Return, spawn, {.v = termcmd} },\n { MODKEY, XKB_KEY_q, quit, {0} },\n};",
         );
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].combo.compact_display(), "SHIFT+SUPER+RETURN");
@@ -222,5 +249,11 @@ mod tests {
     #[test]
     fn skips_unknown_modifier_rows() {
         assert!(parse_bindings("{ MODKEY|CUSTOM, XKB_KEY_q, quit, {0} },").is_empty());
+    }
+
+    #[test]
+    fn defaults_modkey_to_alt_without_define() {
+        let bindings = parse_bindings("{ MODKEY, XKB_KEY_q, quit, {0} },");
+        assert_eq!(bindings[0].combo.compact_display(), "ALT+Q");
     }
 }

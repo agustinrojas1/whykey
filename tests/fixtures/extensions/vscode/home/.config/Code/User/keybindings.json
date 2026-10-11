@@ -24,5 +24,10 @@
     {
         "key": "ctrl+z",
         "command": "-test.removed"
+    },
+    /* removes VS Code's only default binding of F1 */
+    {
+        "key": "f1",
+        "command": "-workbench.action.showCommands"
     }
 ]

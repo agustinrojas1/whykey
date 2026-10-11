@@ -1,0 +1,21 @@
+{
+  "id": "ghostty-fullscreen-shortcut",
+  "description": "a ghostty keybind ctrl+f11 toggles fullscreen and ghostty consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "ghostty",
+  "files": {
+    "/root/.config/ghostty/config": ["keybind = ctrl+f11=toggle_fullscreen"]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+f11"]},
+    {"sleep": 1},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "swaymsg -t get_tree | grep -Eq '\"fullscreen_mode\": *1'"},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["ctrl+f11"], "layer": "Ghostty"}
+}

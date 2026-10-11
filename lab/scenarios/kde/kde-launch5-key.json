@@ -1,0 +1,61 @@
+{
+  "id": "kde-launch5-key",
+  "description": "a kglobalaccel shortcut on Qt's Launch (5) key (XF86Launch5) fires and kglobalacceld grabs it",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.local/share/applications/lab-fire.desktop": [
+      "[Desktop Entry]",
+      "Type=Application",
+      "Name=Lab fire",
+      "Exec=touch /tmp/fired"
+    ],
+    "/root/.config/kglobalshortcutsrc": [
+      "[services][lab-fire.desktop]",
+      "_launch=Launch (5)"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": [
+          "/usr/libexec/kglobalacceld"
+        ],
+        "env": {
+          "QT_QPA_PLATFORM": "xcb"
+        },
+        "ready_grab": [
+          0,
+          192
+        ]
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [
+    {
+      "xdotool": [
+        "key",
+        "XF86Launch5"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "xf86launch5"
+    ],
+    "layer": "KDE Plasma",
+    "env": {
+      "XDG_SESSION_TYPE": "x11",
+      "XDG_CURRENT_DESKTOP": "KDE",
+      "KDE_FULL_SESSION": "true",
+      "KDE_SESSION_VERSION": "6"
+    }
+  }
+}

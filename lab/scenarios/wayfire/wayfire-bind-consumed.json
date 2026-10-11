@@ -1,0 +1,25 @@
+{
+  "id": "wayfire-bind-consumed",
+  "description": "a [command] binding Super+T in wayfire.ini runs its command and Wayfire consumes the key",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = command",
+      "",
+      "[command]",
+      "binding_terminal = <super> KEY_T",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Wayfire",
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

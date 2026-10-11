@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""VS Code user keybindings query extension for whykey (schema v1).
+"""VS Code keybindings query extension for whykey (schema v1).
 
 Models VS Code's keybinding resolver (src/vs/platform/keybinding/common/
-keybindingResolver.ts): user entries override the built-in and extension
-defaults, the last matching entry whose `when` clause holds wins, `-command`
-entries remove *default* bindings only, an empty command lets the key through,
-a `^command` runs and lets the key through, and a multi-chord binding consumes
-its first chord. `when` clauses and the default keybinding table are not
-evaluated, so answers that depend on them are reported as uncertain.
+keybindingResolver.ts). The resolver list is VS Code's default keybindings
+(bundled in whykey-vscode-defaults.json, generated from a real VS Code by
+tools/generate_vscode_defaults.py), then keybindings contributed by installed
+extensions, then the user's keybindings.json. `-command` entries remove
+*default* (and extension) bindings whose key and `when` clause they cover;
+for a key, the last remaining entry whose `when` clause holds wins. An empty
+command lets the key through, a `^command` runs and lets the key through, and
+a multi-chord binding consumes its first chord. `when` clauses are not
+evaluated (only VS Code's platform constants are substituted), so answers
+that depend on them are conditional.
 """
 
 import glob
@@ -52,14 +56,52 @@ SCAN_CODE_NAMES = {
 }
 
 DEFAULTS_UNKNOWN = "VS Code default and extension keybindings (not inspected)"
+DEFAULTS_FILE = "whykey-vscode-defaults.json"
 TERMINAL_NOTE = (
     "assumes an editor surface has focus: the integrated terminal sends keys whose command "
     "is not in terminal.integrated.commandsToSkipShell to the shell"
 )
+# Conditional bindings listed in the details before the rest are counted.
+MAX_LISTED = 12
+
+# Context keys with a fixed value in desktop VS Code on Linux. The first group
+# are the constants VS Code itself substitutes before resolving
+# (contextkey.ts CONSTANT_VALUES); isIOS and isMobile are ordinary context keys
+# that are always false there.
+WHEN_CONSTANTS = {
+    "isLinux": True, "isMac": False, "isMacNative": False, "isWindows": False, "isWeb": False,
+    "isEdge": False, "isFirefox": False, "isChrome": False, "isSafari": False,
+    "isIOS": False, "isMobile": False,
+}
+
+# Config directory name -> (product nameShort, data folder holding extensions/).
+BUILDS = {
+    "Code": ("Code", ".vscode"),
+    "Code - Insiders": ("Code - Insiders", ".vscode-insiders"),
+    "Code - OSS": ("Code - OSS", ".vscode-oss"),
+    "VSCodium": ("VSCodium", ".vscode-oss"),
+}
+# Install roots (directories holding product.json) of the common Linux packages.
+PRODUCT_DIRS = [
+    "/usr/share/code/resources/app",
+    "/opt/visual-studio-code/resources/app",
+    "/usr/share/code-insiders/resources/app",
+    "/opt/visual-studio-code-insiders/resources/app",
+    "/snap/code/current/usr/share/code/resources/app",
+    "/var/lib/flatpak/app/com.visualstudio.code/current/active/files/extra/vscode/resources/app",
+    "/usr/lib/code",
+    "/usr/share/codium/resources/app",
+    "/opt/vscodium/resources/app",
+    "/opt/vscodium-bin/resources/app",
+    "/var/lib/flatpak/app/com.vscodium.codium/current/active/files/share/codium/resources/app",
+]
 
 
-def result(status, propagation, summary, details):
-    return {"status": status, "propagation": propagation, "summary": summary, "details": details}
+def result(status, propagation, summary, details, tier=None):
+    res = {"status": status, "propagation": propagation, "summary": summary, "details": details}
+    if tier:
+        res["tier"] = tier
+    return res
 
 
 def format_chord(mods, key):
@@ -232,6 +274,194 @@ def load_entries(path):
     return data
 
 
+def split_outside(text, sep):
+    """Split a `when` clause on `sep` outside quoted strings and `=~` regexes.
+
+    Returns None for a clause with parentheses, which needs a real parser.
+    """
+    parts, start, i, n = [], 0, 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "'\"":
+            end = text.find(ch, i + 1)
+            if end == -1:
+                return None
+            i = end + 1
+        elif text.startswith("=~", i):
+            i += 2
+            while i < n and text[i] == " ":
+                i += 1
+            if i < n and text[i] == "/":
+                i += 1
+                while i < n and text[i] != "/":
+                    i += 2 if text[i] == "\\" else 1
+                if i >= n:
+                    return None
+                i += 1
+        elif ch in "()":
+            return None
+        elif text.startswith(sep, i):
+            parts.append(text[start:i])
+            i += len(sep)
+            start = i
+        else:
+            i += 1
+    parts.append(text[start:])
+    return parts
+
+
+def parse_dnf(when):
+    """Parse a `when` clause into OR-of-AND form, a list of term tuples.
+
+    `[()]` is true (no clause), `[]` is false, and None is a clause this
+    parser does not handle (parentheses). VS Code serializes its own clauses
+    in this form, so every bundled default parses.
+    """
+    text = when.strip()
+    if text in ("", "true"):
+        return [()]
+    if text == "false":
+        return []
+    disjuncts = split_outside(text, "||")
+    if disjuncts is None:
+        return None
+    dnf = []
+    for part in disjuncts:
+        terms = split_outside(part, "&&")
+        if terms is None:
+            return None
+        terms = tuple(term.strip() for term in terms)
+        if not all(terms):
+            return None
+        dnf.append(terms)
+    return dnf
+
+
+def constant_value(term):
+    negated = term.startswith("!")
+    name = term[1:].strip() if negated else term
+    if name in ("true", "false"):
+        value = name == "true"
+    elif name in WHEN_CONSTANTS:
+        value = WHEN_CONSTANTS[name]
+    else:
+        return None
+    return not value if negated else value
+
+
+def substitute_constants(dnf):
+    """Fold fixed context keys, like VS Code's ContextKeyExpr.substituteConstants."""
+    out = []
+    for terms in dnf:
+        kept = []
+        for term in terms:
+            value = constant_value(term)
+            if value is False:
+                break
+            if value is None:
+                kept.append(term)
+        else:
+            if not kept:
+                return [()]
+            out.append(tuple(kept))
+    return out
+
+
+def serialize_dnf(dnf):
+    return " || ".join(" && ".join(terms) for terms in dnf) if dnf else "false"
+
+
+def term_key(term):
+    """Comparison form of a term: VS Code compares parsed terms, not spelling."""
+    return re.sub(r"[\s'\"]", "", term)
+
+
+def implies(p, q):
+    """VS Code's `implies` (contextkey.ts) on parsed clauses: p provably implies q."""
+    if not p or () in q:
+        return True
+    if () in p:
+        return False
+    ps = [frozenset(map(term_key, terms)) for terms in p]
+    qs = [frozenset(map(term_key, terms)) for terms in q]
+    if len(ps) > 1:
+        return len(qs) > 1 and all(terms in qs for terms in ps)
+    if len(qs) > 1:
+        return any(terms <= ps[0] for terms in qs)
+    return qs[0] <= ps[0]
+
+
+def make_item(key, command, when, origin, is_default):
+    """One resolver entry. `dnf` is None when the `when` clause did not parse."""
+    dnf = parse_dnf(when)
+    return {
+        "key": key, "command": command, "when": when.strip(),
+        "dnf": None if dnf is None else substitute_constants(dnf),
+        "chords": parse_keybinding(key), "origin": origin, "default": is_default, "doubt": None,
+    }
+
+
+def targeted(default, removal):
+    """VS Code's _isTargetedForRemoval; None when the `when` clauses could not be compared."""
+    if removal["chords"]:
+        if len(removal["chords"]) > len(default["chords"]):
+            return False
+        for (chord, _), (other, _) in zip(removal["chords"], default["chords"]):
+            if chord != other:
+                return False
+    if removal["when"] in ("", "true"):
+        return True
+    if not default["when"]:
+        return False
+    if default["dnf"] is None or removal["dnf"] is None:
+        return None
+    return implies(default["dnf"], removal["dnf"])
+
+
+def handle_removals(items):
+    """VS Code's KeybindingResolver.handleRemovals: (kept items, [(removed, by)])."""
+    removals = {}
+    for item in items:
+        if item["command"].startswith("-"):
+            removals.setdefault(item["command"][1:], []).append(item)
+    kept, removed = [], []
+    for item in items:
+        cmd = item["command"]
+        if cmd.startswith("-"):
+            continue
+        if not cmd or not item["default"] or cmd not in removals:
+            kept.append(item)
+            continue
+        doubtful = None
+        for removal in removals[cmd]:
+            hit = targeted(item, removal)
+            if hit:
+                removed.append((item, removal))
+                break
+            if hit is None:
+                doubtful = removal
+        else:
+            if doubtful is not None:
+                item = dict(item, doubt=(
+                    f"unless the user's removal `{doubtful['command']}` when `{doubtful['when']}` "
+                    "covers it (when clauses not compared)"
+                ))
+            kept.append(item)
+    return kept, removed
+
+
+def condition(item):
+    """Why a binding may not apply (a phrase), or None when it always applies."""
+    parts = []
+    if item["dnf"] != [()]:
+        parts.append(f" only when `{item['when']}` (not evaluated)")
+    if item["origin"].startswith("extension "):
+        parts.append(" if that extension is enabled (not checked)")
+    if item["doubt"]:
+        parts.append(f" {item['doubt']}")
+    return "".join(parts) or None
+
+
 def binding_effect(entry):
     """(status, propagation, description) of a matching binding whose `when` holds."""
     cmd = entry["command"]
@@ -244,10 +474,6 @@ def binding_effect(entry):
     if cmd.startswith("^"):
         return ("handled", "continues", f"runs {cmd[1:]} and lets the key through (^ prefix)")
     return ("handled", "stops", f"runs {cmd}")
-
-
-def is_unconditional(when):
-    return when.strip() in ("", "true")
 
 
 def combine(effects):
@@ -263,80 +489,135 @@ def combine(effects):
     return status, propagation
 
 
-def inspect_entries(entries, query, display_key, source):
-    """Resolve the queried key against parsed user keybindings."""
-    candidates = []  # matching non-removal entries in file order
-    removals = []
+def binding_line(item, description):
+    who = "user" if not item["default"] else item["origin"]
+    return f"{who} binding: {item['key']} {description}{condition(item) or ''}"
+
+
+def inspect_entries(entries, query, display_key, sources, defaults=None, contributed=()):
+    """Resolve the queried key like VS Code: defaults, extension bindings, then the user file.
+
+    `defaults` is the bundled table (None when unavailable), `contributed` the
+    items of installed extensions, and `sources` the provenance detail lines.
+    Returns (result, whether a matching user binding used a scan code).
+    """
+    user_items = []
     notes = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
+        # VS Code reads a missing or non-string key as "no key" and ignores a
+        # non-string `when`; a removal without a key covers every key.
         key_str = entry.get("key")
         cmd = entry.get("command", "")
         when = entry.get("when", "")
-        if not isinstance(key_str, str) or not isinstance(cmd, str) or not isinstance(when, str):
+        if not isinstance(cmd, str):
             continue
-        chords = parse_keybinding(key_str)
-        if cmd.startswith("-"):
-            # A removal without a key removes every default binding of the command.
-            if chords is None or chords[0][0] == query:
-                removals.append((key_str, cmd[1:].strip(), when))
-            continue
-        if chords is None or chords[0][0] != query:
-            continue
-        if when.strip() == "false":
-            continue  # VS Code never registers a binding whose clause is literally false
-        if chords[0][1]:
-            notes.append(f"{key_str}: {chords[0][1]}")
-        candidates.append({"key": key_str, "command": cmd, "when": when, "chords": chords})
+        item = make_item(key_str if isinstance(key_str, str) else "", cmd,
+                         when if isinstance(when, str) else "", "user", False)
+        if item["chords"] and item["chords"][0][0] == query and item["chords"][0][1]:
+            notes.append(f"{item['key']}: {item['chords'][0][1]}")
+        user_items.append(item)
 
-    details = []
-    effects = []
+    removal_commands = {i["command"][1:] for i in user_items if i["command"].startswith("-")}
+    items = []
+    if defaults is not None:
+        origin = f"VS Code {defaults['vscode']['version']} default"
+        for row in defaults["bindings"]:
+            chords = parse_keybinding(row[0])
+            # Only bindings of this key or of a removed command can matter.
+            if chords and (chords[0][0] == query or row[1] in removal_commands):
+                items.append(make_item(row[0], row[1], row[2] if len(row) > 2 else "", origin, True))
+    items.extend(contributed)
+    items.extend(user_items)
+    kept, removed = handle_removals(items)
+
+    def on_key(item):
+        return item["chords"] and item["chords"][0][0] == query
+
+    # VS Code never registers a binding whose clause is constant false.
+    candidates = [i for i in kept if on_key(i) and i["dnf"] != []]
+
+    details, conditional, effects = [], [], []
     decisive = None
-    for entry in reversed(candidates):
-        status, propagation, description = binding_effect(entry)
+    from_defaults = False
+    for item in reversed(candidates):
+        status, propagation, description = binding_effect(item)
         effects.append((status, propagation))
-        if is_unconditional(entry["when"]):
-            decisive = description
-            details.append(f"user binding: {entry['key']} {description}")
+        from_defaults = from_defaults or item["default"]
+        if condition(item) is None:
+            decisive = item
             break
-        details.append(
-            f"user binding: {entry['key']} {description} only when `{entry['when']}` "
-            "(when clause not evaluated)"
-        )
-    if decisive is None and candidates:
-        effects.append(("indeterminate", "indeterminate"))
-        details.append(f"otherwise: {DEFAULTS_UNKNOWN}")
-    for key_str, cmd, when in removals:
-        scope = f" on {key_str}" if key_str.strip() else " on every key"
-        clause = f" when `{when}`" if when.strip() else ""
-        details.append(f"removes default binding: {cmd}{scope}{clause}")
+        conditional.append(item)
+    for item in conditional[:MAX_LISTED]:
+        details.append(binding_line(item, binding_effect(item)[2]))
+    if len(conditional) > MAX_LISTED:
+        details.append(f"... and {len(conditional) - MAX_LISTED} more conditional bindings of {display_key}")
+
+    if decisive is not None:
+        details.append(binding_line(decisive, binding_effect(decisive)[2]))
+        fallback = binding_effect(decisive)[2]
+    elif defaults is not None:
+        from_defaults = True
+        fallback = "no binding applies: VS Code dispatches nothing and lets the key through"
+        if candidates:
+            effects.append(("not_handled", "continues"))
+            details.append(f"otherwise: {fallback}")
+    else:
+        fallback = DEFAULTS_UNKNOWN
+        if candidates:
+            effects.append(("indeterminate", "indeterminate"))
+            details.append(f"otherwise: {fallback}")
+
+    for item in user_items:
+        if item["command"].startswith("-") and (not item["chords"] or item["chords"][0][0] == query):
+            scope = f" on {item['key']}" if item["chords"] else " on every key"
+            clause = f" when `{item['when']}`" if item["when"] else ""
+            details.append(f"removes default binding: {item['command'][1:]}{scope}{clause}")
+    for item, _ in removed:
+        if on_key(item):
+            clause = f" (when `{item['when']}`)" if item["when"] else ""
+            details.append(f"removed by the user: {item['origin']} binding {item['key']} {item['command']}{clause}")
     details.extend(f"assumption: {note}" for note in notes)
-    details.append(f"source: {source}")
+    details.extend(sources)
     details.append(f"note: {TERMINAL_NOTE}")
 
+    if defaults is None and decisive is None:
+        tier = "config_file" if candidates else None
+    else:
+        tier = "default" if from_defaults else "config_file"
+    removed_here = sorted({item["command"] for item, _ in removed if on_key(item)})
+
     if not candidates:
-        summary = f"{display_key} is not in user keybindings.json; VS Code default keybindings not inspected"
-        if removals:
-            removed = ", ".join(sorted({cmd for _, cmd, _ in removals}))
-            summary += f" (the user file removes default bindings for {removed})"
-        return result("indeterminate", "indeterminate", summary, details), bool(notes)
+        if defaults is None:
+            summary = f"{display_key} is not in user keybindings.json; VS Code default keybindings not inspected"
+            removed_cmds = sorted({i["command"][1:] for i in user_items if i["command"].startswith("-")
+                                   and (not i["chords"] or i["chords"][0][0] == query)})
+            if removed_cmds:
+                summary += f" (the user file removes default bindings for {', '.join(removed_cmds)})"
+            return result("indeterminate", "indeterminate", summary, details, tier), bool(notes)
+        summary = f"VS Code has no binding for {display_key} (VS Code {defaults['vscode']['version']} defaults"
+        summary += ", installed extensions, and user keybindings.json)" if contributed else " and user keybindings.json)"
+        if removed_here:
+            summary += f"; the user file removes its default binding to {', '.join(removed_here)}"
+        return result("not_handled", "continues", summary, details, tier), bool(notes)
 
     status, propagation = combine(effects)
     top = candidates[-1]
-    if decisive is not None and len(effects) == 1:
+    origin = f" ({top['origin']} keybinding)" if top["default"] else ""
+    if decisive is top:
         if top["command"] and len(top["chords"]) == 1 and not top["command"].startswith("^"):
-            summary = f"VS Code binds {display_key} to {top['command']}"
+            summary = f"VS Code binds {display_key} to {top['command']}{origin}"
         else:
-            summary = f"VS Code {display_key}: {decisive}"
+            summary = f"VS Code {display_key}: {fallback}{origin}"
     else:
-        top_description = binding_effect(top)[2]
-        fallback = decisive if decisive is not None else DEFAULTS_UNKNOWN
+        others = len(conditional) - 1
+        more = f"; {others} more conditional binding{'s' if others > 1 else ''}" if others else ""
         summary = (
-            f"VS Code {display_key}: {top_description} only when `{top['when']}` "
-            f"(not evaluated); otherwise {fallback}"
+            f"VS Code {display_key}: {binding_effect(top)[2]}{condition(top)}{origin}{more}; "
+            f"otherwise {fallback}"
         )
-    return result(status, propagation, summary, details), bool(notes)
+    return result(status, propagation, summary, details, tier), bool(notes)
 
 
 def downgrade(res, reasons):
@@ -348,6 +629,158 @@ def downgrade(res, reasons):
         res["status"] = "indeterminate"
     res["propagation"] = "indeterminate"
     return res
+
+
+def defaults_paths():
+    """Where the defaults table lives: beside the script (source tree, release
+    tarball) or in ../share/whykey (distribution packages, Nix)."""
+    if os.environ.get("WHYKEY_VSCODE_DEFAULTS"):
+        return [os.environ["WHYKEY_VSCODE_DEFAULTS"]]
+    here = os.path.dirname(os.path.realpath(__file__))
+    return [
+        os.path.join(here, DEFAULTS_FILE),
+        os.path.normpath(os.path.join(here, os.pardir, "share", "whykey", DEFAULTS_FILE)),
+    ]
+
+
+def load_defaults():
+    """(table, path) of the first defaults table found, or (None, reason)."""
+    paths = defaults_paths()
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                table = json.load(f)
+            for field in ("product", "version"):
+                if not isinstance(table["vscode"][field], str):
+                    raise ValueError(f"vscode.{field} must be a string")
+            rows = table["bindings"]
+            if not isinstance(rows, list) or not all(
+                isinstance(row, list) and 2 <= len(row) <= 3 and all(isinstance(x, str) for x in row)
+                for row in rows
+            ):
+                raise ValueError("bindings must be [key, command, when?] rows")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return None, f"{path} could not be read: {exc}"
+        return table, path
+    return None, f"no defaults table found (searched {', '.join(paths)})"
+
+
+def installed_products():
+    """product.json of every VS Code build found: name, version, data folder, path."""
+    if os.environ.get("VSCODE_PRODUCT_JSON"):
+        paths = [os.environ["VSCODE_PRODUCT_JSON"]]
+    else:
+        dirs = list(PRODUCT_DIRS)
+        if os.environ.get("HOME"):
+            dirs.append(os.path.join(
+                os.environ["HOME"], ".local", "share", "flatpak", "app", "com.visualstudio.code",
+                "current", "active", "files", "extra", "vscode", "resources", "app",
+            ))
+        paths = [os.path.join(d, "product.json") for d in dirs]
+    products = []
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("version"), str):
+            products.append({
+                "name": str(data.get("nameShort", "")), "version": data["version"],
+                "data_folder": data.get("dataFolderName"), "path": path,
+            })
+    return products
+
+
+def extensions_dir(config_path, build, product):
+    """The extensions directory VS Code uses for this configuration."""
+    if os.environ.get("VSCODE_EXTENSIONS"):
+        return os.environ["VSCODE_EXTENSIONS"]
+    marker = os.sep + os.path.join(".var", "app") + os.sep
+    if marker in config_path:
+        # Flathub builds pass --extensions-dir under the sandbox's data dir.
+        app_root = config_path.split(os.sep + "config" + os.sep)[0]
+        name = "codium" if build[0] == "VSCodium" else "vscode"
+        return os.path.join(app_root, "data", name, "extensions")
+    folder = product["data_folder"] if product and isinstance(product["data_folder"], str) else build[1]
+    return os.path.join(os.environ.get("HOME", ""), folder, "extensions")
+
+
+def installed_extensions(ext_dir):
+    """Directory names of installed extensions, in extensions.json order when present."""
+    try:
+        with open(os.path.join(ext_dir, ".obsolete"), encoding="utf-8") as f:
+            obsolete = set(json.load(f))
+    except (OSError, ValueError, TypeError):
+        obsolete = set()
+    names = None
+    try:
+        with open(os.path.join(ext_dir, "extensions.json"), encoding="utf-8") as f:
+            listing = json.load(f)
+        names = []
+        for ext in listing:
+            rel = ext.get("relativeLocation") or os.path.basename(ext.get("location", {}).get("path", ""))
+            if rel:
+                names.append(rel)
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    if names is None:
+        try:
+            names = sorted(os.listdir(ext_dir))
+        except OSError:
+            return []
+    return [n for n in names if n not in obsolete and os.path.isfile(os.path.join(ext_dir, n, "package.json"))]
+
+
+def contributed_items(ext_dir):
+    """Resolver items for the keybindings installed extensions contribute on Linux."""
+    items = []
+    for name in installed_extensions(ext_dir):
+        try:
+            with open(os.path.join(ext_dir, name, "package.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+            bindings = manifest.get("contributes", {}).get("keybindings", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(bindings, dict):
+            bindings = [bindings]
+        if not isinstance(bindings, list):
+            continue
+        ext_id = f"{manifest.get('publisher', '?')}.{manifest.get('name', name)}"
+        for kb in bindings:
+            if not isinstance(kb, dict):
+                continue
+            key = kb.get("linux") or kb.get("key")
+            cmd = kb.get("command")
+            when = kb.get("when", "")
+            if isinstance(key, str) and isinstance(cmd, str) and cmd and isinstance(when, str):
+                items.append(make_item(key, cmd, when, f"extension {ext_id}", True))
+    return items
+
+
+def defaults_details(defaults, defaults_source, build, products):
+    """Provenance of the defaults and how they relate to the installed build."""
+    if defaults is None:
+        return [f"defaults: {defaults_source}"]
+    want = defaults["vscode"]
+    lines = [f"defaults: {want['product']} {want['version']} Linux default keybindings (US layout), "
+             f"{defaults_source}"]
+    product = next((p for p in products if p["name"] == build[0]), products[0] if products else None)
+    if product is None:
+        lines.append(f"note: no installed {build[0]} found to compare with the bundled "
+                     f"{want['product']} {want['version']} defaults")
+        return lines
+    if product["name"] != want["product"]:
+        lines.append(f"note: the defaults are {want['product']}'s; {product['name']} ({product['path']}) "
+                     "ships other built-in extensions, so its defaults may differ")
+    if product["version"] != want["version"]:
+        lines.append(f"note: installed {product['name']} {product['version']} ({product['path']}) differs "
+                     f"from the bundled {want['product']} {want['version']} defaults; defaults may have changed")
+    else:
+        lines.append(f"installed: {product['name']} {product['version']} ({product['path']})")
+    return lines
 
 
 def inspect_key(req):
@@ -390,7 +823,17 @@ def inspect_key(req):
                 [f"file: {config_path}", f"error: {exc}"],
             )
 
-    res, layout_dependent = inspect_entries(entries, query, display_key, source)
+    build = BUILDS.get(os.path.basename(os.path.dirname(os.path.dirname(config_path))), BUILDS["Code"])
+    products = installed_products()
+    product = next((p for p in products if p["name"] == build[0]), None)
+    ext_dir = extensions_dir(config_path, build, product)
+    contributed = contributed_items(ext_dir)
+    defaults, defaults_source = load_defaults()
+    sources = defaults_details(defaults, defaults_source, build, products)
+    sources.append(f"extensions: {ext_dir} ({len(contributed)} contributed keybindings)")
+    sources.append(f"source: {source}")
+
+    res, layout_dependent = inspect_entries(entries, query, display_key, sources, defaults, contributed)
     if layout_dependent:
         assumptions.append("scan-code bindings are layout-dependent; keyboard layout not checked")
     return downgrade(res, assumptions)
@@ -426,11 +869,62 @@ def self_test():
     jsonc = '// c\n[ /* b */ {"key": "ctrl+a", "when": "a // b, ]",}, ]'
     assert json.loads(strip_jsonc(jsonc)) == [{"key": "ctrl+a", "when": "a // b, ]"}]
 
+    # `when` clauses: OR-of-AND split outside strings and regexes; parentheses unparsed.
+    assert parse_dnf("a && b || c") == [("a", "b"), ("c",)]
+    assert parse_dnf("x =~ /^(md|a||b)$/ && y == 'p || q'") == [("x =~ /^(md|a||b)$/", "y == 'p || q'")]
+    assert parse_dnf("(a || b) && c") is None
+    assert parse_dnf("") == [()] and parse_dnf("true") == [()] and parse_dnf("false") == []
+    # VS Code's platform constants fold away on Linux.
+    chat = parse_dnf("inChatInput && isLinux && !quick || inChatInput && isWindows && !quick")
+    assert substitute_constants(chat) == [("inChatInput", "!quick")]
+    assert substitute_constants(parse_dnf("!isIOS")) == [()]
+    assert substitute_constants(parse_dnf("isMacNative && openFolder")) == []
+    assert serialize_dnf(substitute_constants(chat)) == "inChatInput && !quick"
+    # implies() follows contextkey.ts, including its Or/Or element-wise rule.
+    assert implies([("a", "b")], [("a",)]) and not implies([("a",)], [("a", "b")])
+    assert not implies([("a",), ("b",)], [("a",)]) and implies([("a",)], [("a",), ("b",)])
+    assert implies(parse_dnf("v == 'x'"), parse_dnf("v==x"))
+
+    # The bundled table loads and every clause in it parses.
+    saved = {k: os.environ.get(k) for k in (
+        "HOME", "XDG_CONFIG_HOME", "VSCODE_KEYBINDINGS", "WHYKEY_VSCODE_DEFAULTS",
+        "VSCODE_PRODUCT_JSON", "VSCODE_EXTENSIONS",
+    )}
+    os.environ.pop("WHYKEY_VSCODE_DEFAULTS", None)
+    bundled, bundled_path = load_defaults()
+    assert bundled is not None, bundled_path
+    assert all(parse_dnf(row[2]) for row in bundled["bindings"] if len(row) > 2)
+    assert ["ctrl+q", "workbench.action.quit"] in bundled["bindings"]
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        saved = {k: os.environ.get(k) for k in ("HOME", "XDG_CONFIG_HOME", "VSCODE_KEYBINDINGS")}
         os.environ["HOME"] = tmpdir
-        os.environ.pop("XDG_CONFIG_HOME", None)
-        os.environ.pop("VSCODE_KEYBINDINGS", None)
+        for k in ("XDG_CONFIG_HOME", "VSCODE_KEYBINDINGS", "VSCODE_EXTENSIONS"):
+            os.environ.pop(k, None)
+        defaults_file = os.path.join(tmpdir, "defaults.json")
+        with open(defaults_file, "w", encoding="utf-8") as f:
+            json.dump({"vscode": {"product": "Code", "version": "9.9.9"}, "bindings": [
+                ["ctrl+q", "workbench.action.quit"],
+                ["ctrl+w", "workbench.action.closeActiveEditor"],
+                ["ctrl+w", "workbench.action.closeGroup", "activeEditorGroupEmpty && multipleEditorGroups"],
+                ["ctrl+j", "workbench.action.togglePanel"],
+                ["ctrl+g", "workbench.action.gotoLine"],
+                ["ctrl+g", "editor.special", "editorFocus && textInputFocus"],
+                ["ctrl+t", "default.t", "terminalFocus"],
+                ["ctrl+d", "default.d", "a"],
+                ["ctrl+n", "workbench.action.files.newUntitledFile"],
+                ["ctrl+k ctrl+s", "workbench.action.openGlobalKeybindings"],
+            ]}, f)
+        os.environ["WHYKEY_VSCODE_DEFAULTS"] = defaults_file
+        product_file = os.path.join(tmpdir, "product.json")
+        with open(product_file, "w", encoding="utf-8") as f:
+            json.dump({"nameShort": "Code", "version": "9.9.8", "dataFolderName": ".vscode"}, f)
+        os.environ["VSCODE_PRODUCT_JSON"] = product_file
+        ext_dir = os.path.join(tmpdir, ".vscode", "extensions", "pub.ext-1.0.0")
+        os.makedirs(ext_dir)
+        with open(os.path.join(ext_dir, "package.json"), "w", encoding="utf-8") as f:
+            json.dump({"name": "ext", "publisher": "pub", "contributes": {"keybindings": [
+                {"key": "ctrl+h", "linux": "ctrl+alt+h", "command": "ext.linux"},
+            ]}}, f)
         user_dir = os.path.join(tmpdir, ".config", "Code", "User")
         os.makedirs(user_dir, exist_ok=True)
         kb_file = os.path.join(user_dir, "keybindings.json")
@@ -445,11 +939,16 @@ def self_test():
     {"key": "ctrl+z", "command": "test.user"},
     {"key": "ctrl+z", "command": "-test.user"},
     {"key": "ctrl+w", "command": "test.disabled", "when": "false"},
+    {"key": "ctrl+l", "command": "test.mac", "when": "isMac"},
     {"key": "ctrl+e", "command": "test.base"},
     {"key": "ctrl+e", "command": "test.override", "when": "terminalFocus"},
     {"key": "ctrl+u", "command": ""},
     {"key": "ctrl+b", "command": "^test.bubble"},
     {"key": "ctrl+j", "command": "-workbench.action.togglePanel"},
+    {"key": "ctrl+g", "command": "-editor.special", "when": "textInputFocus && editorFocus"},
+    {"key": "ctrl+t", "command": "-default.t", "when": "otherFocus"},
+    {"key": "ctrl+d", "command": "-default.d", "when": "(a)"},
+    {"command": "-workbench.action.files.newUntitledFile"},
     {"key": "ctrl+shift+p", "command": "test.palette"},
 ]
 """
@@ -458,42 +957,98 @@ def self_test():
         def ask(mods, key):
             return inspect_key({"key": {"modifiers": mods, "key": key}})
 
+        def verdict(res):
+            return res["status"], res["propagation"], res.get("tier")
+
         res = ask(CTRL, "X")
-        assert (res["status"], res["propagation"]) == ("handled", "stops")
+        assert verdict(res) == ("handled", "stops", "config_file")
         assert "test.exact" in res["summary"]
 
         res = ask(CTRL | SHIFT, "P")
-        assert (res["status"], res["propagation"]) == ("handled", "stops")
+        assert verdict(res) == ("handled", "stops", "config_file")
         assert "test.palette" in res["summary"]
 
-        # A `when` clause is not evaluated: handled only conditionally, defaults unknown.
-        res = ask(CTRL, "Y")
-        assert (res["status"], res["propagation"]) == ("handled", "indeterminate")
-        assert "editorTextFocus" in res["summary"]
+        # A default the user did not touch answers with tier default and its version.
+        res = ask(CTRL, "Q")
+        assert verdict(res) == ("handled", "stops", "default")
+        assert "workbench.action.quit" in res["summary"] and "9.9.9" in res["summary"]
+        assert any("installed Code 9.9.8" in d and "differs" in d for d in res["details"])
 
-        # A conditional override above an unconditional binding: handled either way,
-        # by one of two commands.
+        # A user `when` clause is not evaluated; otherwise no default binds the key.
+        res = ask(CTRL, "Y")
+        assert verdict(res) == ("handled", "indeterminate", "default")
+        assert "editorTextFocus" in res["summary"] and "no binding applies" in res["summary"]
+
+        # A conditional default above an unconditional one: handled either way.
+        # The user's `when: false` binding never registers.
+        res = ask(CTRL, "W")
+        assert verdict(res) == ("handled", "stops", "default")
+        assert "closeGroup" in res["summary"] and "closeActiveEditor" in res["summary"]
+        assert "test.disabled" not in json.dumps(res)
+
+        # A conditional user override above an unconditional user binding.
         res = ask(CTRL, "E")
-        assert (res["status"], res["propagation"]) == ("handled", "stops")
+        assert verdict(res) == ("handled", "stops", "config_file")
         assert "test.override" in res["summary"] and "test.base" in res["summary"]
 
-        # A chord prefix consumes the first chord.
+        # A chord prefix consumes the first chord; the user's chord is last.
         res = ask(CTRL, "K")
-        assert (res["status"], res["propagation"]) == ("handled", "stops")
-        assert "chord" in res["summary"]
+        assert verdict(res) == ("handled", "stops", "config_file")
+        assert "ctrl+k ctrl+c" in res["summary"]
 
         # `-command` removes default bindings only; the user's own binding stays.
         res = ask(CTRL, "Z")
-        assert (res["status"], res["propagation"]) == ("handled", "stops")
+        assert verdict(res) == ("handled", "stops", "config_file")
         assert "test.user" in res["summary"]
 
         # Empty command shadows defaults and lets the key through; ^command bubbles.
         res = ask(CTRL, "U")
-        assert (res["status"], res["propagation"]) == ("not_handled", "continues")
+        assert verdict(res) == ("not_handled", "continues", "config_file")
         res = ask(CTRL, "B")
-        assert (res["status"], res["propagation"]) == ("handled", "continues")
+        assert verdict(res)[:2] == ("handled", "continues")
 
-        # Not in the user file (or only `when: false`): defaults unknown, never not_handled.
+        # Removals: by key, by covering `when`, and without a key.
+        res = ask(CTRL, "J")
+        assert verdict(res) == ("not_handled", "continues", "default")
+        assert "togglePanel" in res["summary"]
+        res = ask(CTRL, "G")
+        assert verdict(res) == ("handled", "stops", "default")
+        assert "gotoLine" in res["summary"]
+        assert any("removed by the user" in d and "editor.special" in d for d in res["details"])
+        res = ask(CTRL, "N")
+        assert verdict(res) == ("not_handled", "continues", "default")
+        # A removal whose `when` does not cover the default's leaves it in place.
+        res = ask(CTRL, "T")
+        assert verdict(res) == ("handled", "indeterminate", "default")
+        assert "default.t" in res["summary"]
+        # A removal clause this parser cannot read keeps the default, flagged.
+        res = ask(CTRL, "D")
+        assert verdict(res) == ("handled", "indeterminate", "default")
+        assert "not compared" in res["summary"]
+
+        # A user binding whose clause folds to false (`isMac`) never registers.
+        res = ask(CTRL, "L")
+        assert verdict(res) == ("not_handled", "continues", "default")
+        assert "has no binding" in res["summary"]
+
+        # Installed extensions contribute their Linux key; enablement is not checked.
+        res = ask(CTRL | ALT, "H")
+        assert verdict(res) == ("handled", "indeterminate", "default")
+        assert "ext.linux" in res["summary"] and "extension pub.ext" in res["summary"]
+        assert verdict(ask(CTRL, "H")) == ("not_handled", "continues", "default")
+        with open(os.path.join(tmpdir, ".vscode", "extensions", ".obsolete"), "w", encoding="utf-8") as f:
+            json.dump({"pub.ext-1.0.0": True}, f)
+        assert verdict(ask(CTRL | ALT, "H"))[:2] == ("not_handled", "continues")
+
+        # The installed version matching the table is stated, not flagged.
+        with open(product_file, "w", encoding="utf-8") as f:
+            json.dump({"nameShort": "Code", "version": "9.9.9"}, f)
+        res = ask(CTRL, "Q")
+        assert not any("differs" in d for d in res["details"])
+        assert any(d.startswith("installed: Code 9.9.9") for d in res["details"])
+
+        # Without a defaults table, keys missing from the user file stay unknown.
+        os.environ["WHYKEY_VSCODE_DEFAULTS"] = os.path.join(tmpdir, "missing.json")
         for key in ("Q", "W"):
             res = ask(CTRL, key)
             assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate"), key
@@ -501,6 +1056,10 @@ def self_test():
         res = ask(CTRL, "J")
         assert res["status"] == "indeterminate"
         assert any("workbench.action.togglePanel" in d for d in res["details"])
+        res = ask(CTRL, "Y")
+        assert (res["status"], res["propagation"]) == ("handled", "indeterminate")
+        assert "not inspected" in res["summary"]
+        os.environ["WHYKEY_VSCODE_DEFAULTS"] = defaults_file
 
         # An active-profile ambiguity downgrades a definite answer.
         profile_dir = os.path.join(user_dir, "profiles", "abc")
@@ -519,22 +1078,23 @@ def self_test():
         assert get_config_paths()[0].startswith(xdg)
         os.environ.pop("XDG_CONFIG_HOME")
 
-        # An installed VS Code without keybindings.json has no user bindings; defaults unknown.
+        # Without keybindings.json there are no user bindings: the defaults decide.
         os.remove(kb_file)
         shutil.rmtree(os.path.join(user_dir, "profiles"))
         res = ask(CTRL, "X")
-        assert (res["status"], res["propagation"]) == ("indeterminate", "indeterminate")
-        assert "not in user keybindings.json" in res["summary"]
+        assert verdict(res) == ("not_handled", "continues", "default")
+        assert any("absent: no user keybindings" in d for d in res["details"])
+        assert verdict(ask(CTRL, "J")) == ("handled", "stops", "default")
 
         shutil.rmtree(os.path.join(tmpdir, ".config"))
         res = ask(CTRL, "X")
         assert (res["status"], res["propagation"]) == ("unavailable", "indeterminate")
 
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
     print("whykey-vscode self_test passed")
 

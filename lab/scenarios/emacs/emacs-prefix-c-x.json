@@ -1,0 +1,20 @@
+{
+  "id": "emacs-prefix-c-x",
+  "description": "C-x is an Emacs prefix; C-x l runs lab-fire, so the prefix consumes the chord",
+  "tier": "observed",
+  "environment": "emacs",
+  "files": {
+    "/root/.emacs.d/init.el": [
+      "(defun lab-fire () (interactive) (write-region \"fired\\n\" nil \"/tmp/fired\"))",
+      "(global-set-key (kbd \"C-x l\") #'lab-fire)"
+    ]
+  },
+  "actions": [{"type": "\\x18"}, {"type": "l"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "reached": {"keylog": "C-x l"}},
+  "emacs": {"key_binding": ["C-x", "C-x l"]},
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-emacs", "ctrl+x"],
+    "layer": "External extension",
+    "run": "direct"
+  }
+}

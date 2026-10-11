@@ -1,3 +1,11 @@
+whykey (2.2.0) unstable; urgency=medium
+
+  * Verify Niri, Wayfire, labwc, dwl, Qtile, XMonad, Xfce, MATE, six terminal
+    emulators, Emacs, and Neovim against the real programs; fix the adapters.
+  * Bundle VS Code default keybindings; Neovim built-ins from the runtime index.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Sun, 11 Oct 2026 18:00:00 -0300
+
 whykey (2.1.0) unstable; urgency=medium
 
   * Fix bugs found by verification sweeps: tmux key parsing and ordering,

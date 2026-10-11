@@ -60,17 +60,31 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
     let value = binding_inventory_json().map_err(|error| format!("Hyprland: {error}"))?;
     // Runtime `code:N` keys are shown as the active layout's key so the
     // inventory can be filtered and compared by the key a user types.
-    let devices = run_hyprctl(&["devices", "-j"]).ok();
-    let keymap = devices.as_deref().and_then(|devices| {
-        Some((
-            compile_main_xkb_keymap(devices)?,
-            main_keyboard_active_layout_index(devices)?,
-        ))
-    });
+    let keymap = main_keymap();
     let keymap = keymap
         .as_ref()
         .map(|(keymap, group)| (keymap.as_str(), *group));
     Ok(collect_records(&value, &CONFIG_HINTS.lua, keymap))
+}
+
+/// The main keyboard's compiled keymap and active layout group.
+fn main_keymap() -> Option<(String, usize)> {
+    let devices = run_hyprctl(&["devices", "-j"]).ok()?;
+    Some((
+        compile_main_xkb_keymap(&devices)?,
+        main_keyboard_active_layout_index(&devices)?,
+    ))
+}
+
+/// The key the main keyboard's active layout produces for a `code:N`
+/// query (`F23` for `code:201`), so inspect names it like `bindings` does.
+/// `None` for other keys or when Hyprland's keymap is unavailable.
+pub fn code_key_symbol_for_query(key: &KeyCombo) -> Option<String> {
+    if !key.key().starts_with("CODE:") || !applicable() {
+        return None;
+    }
+    let (keymap, group) = main_keymap()?;
+    code_key_symbol(key.key(), Some((&keymap, group))).map(|(_, symbol)| symbol)
 }
 
 fn binding_inventory_json() -> Result<serde_json::Value, String> {

@@ -1,0 +1,6 @@
+# Sway, the Wayland probe terminal (foot) and input tools.
+sway
+wtype
+foot
+wev
+libxkbcommon-utils

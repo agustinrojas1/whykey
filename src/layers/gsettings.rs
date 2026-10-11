@@ -163,6 +163,49 @@ pub(crate) fn quoted_values(value: &str) -> Vec<String> {
     values
 }
 
+/// A relocatable custom-shortcut family: `list_schema`'s `list_key` names each
+/// child, and `{child_schema}:{path}{name}/` holds `binding` plus `command_key`
+/// (`command` for Cinnamon, `action` for MATE).
+pub(crate) struct CustomKeybindings {
+    pub list_schema: &'static str,
+    pub list_key: &'static str,
+    pub child_schema: &'static str,
+    pub path: &'static str,
+    pub command_key: &'static str,
+}
+
+pub(crate) fn custom_bindings(spec: &CustomKeybindings) -> Result<Vec<GsettingsBinding>, String> {
+    let names = quoted_values(&run_list(&["get", spec.list_schema, spec.list_key])?);
+    let mut bindings = Vec::new();
+    for name in names {
+        let child = format!("{}:{}{name}/", spec.child_schema, spec.path);
+        let binding = run_list(&["get", child.as_str(), "binding"])?;
+        let command = run_list(&["get", child.as_str(), spec.command_key])?;
+        bindings.extend(custom_binding_rows(spec, &name, &binding, &command));
+    }
+    Ok(bindings)
+}
+
+pub(crate) fn custom_binding_rows(
+    spec: &CustomKeybindings,
+    name: &str,
+    binding: &str,
+    command: &str,
+) -> Vec<GsettingsBinding> {
+    let action = format!("{} {name}", spec.child_schema);
+    let command = quoted_values(command).into_iter().next();
+    quoted_values(binding)
+        .iter()
+        .filter_map(|raw| parse_accelerator(raw))
+        .map(|combo| GsettingsBinding {
+            combo,
+            action: action.clone(),
+            command: command.clone(),
+            detail: format!("binding: {action}"),
+        })
+        .collect()
+}
+
 pub(crate) fn parse_accelerator(value: &str) -> Option<KeyCombo> {
     let mut remainder = value.trim();
     let mut modifiers = Vec::new();

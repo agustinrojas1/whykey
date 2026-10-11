@@ -1,0 +1,15 @@
+{
+  "id": "ghostty-ctrl-left",
+  "description": "unbound ctrl+left reaches a ghostty program as CSI 1;5D",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "ghostty",
+  "files": {"/root/.config/ghostty/config": ["# whykey lab: no keybinds"]},
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+left"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": {"tty_input": {"equals": "\\x1b[1;5D"}}},
+  "whykey": {"args": ["ctrl+left"], "layer": "Ghostty"}
+}

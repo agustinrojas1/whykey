@@ -1,0 +1,25 @@
+{
+  "id": "labwc-unbound-delivered",
+  "description": "Super+U has no rc.xml keybind, so the probe client receives it",
+  "tier": "observed",
+  "environment": "labwc",
+  "files": {
+    "/root/.config/labwc/rc.xml": [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<labwc_config>",
+      "  <keyboard>",
+      "    <keybind key=\"W-t\"><action name=\"Execute\"><command>touch /tmp/fired</command></action></keybind>",
+      "  </keyboard>",
+      "</labwc_config>"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+u"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+u"],
+    "layer": "labwc",
+    "accept": ["uncertain-continues"],
+    "env": {"XDG_CURRENT_DESKTOP": "labwc", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

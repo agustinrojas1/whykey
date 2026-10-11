@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{LayerResult, LayerStatus, Outcome, Propagation};
+use crate::layers::{EvidenceTier, LayerResult, LayerStatus, Outcome, Propagation};
 use crate::schema;
 use crate::style::RenderOptions;
 
@@ -48,6 +48,10 @@ pub struct ExtensionResult {
     pub summary: String,
     #[serde(default)]
     pub details: Vec<String>,
+    /// Where the answer came from: `live_query`, `config_file`, or `default`.
+    /// Optional; `observed` is reserved for whykey's own captures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,6 +135,9 @@ pub fn render_text_with_options(
         _ => options.uncertain("Forwarding unknown"),
     };
     output.push_str(&format!("  outcome: {outcome}\n"));
+    if let Some(tier) = result.layer.tier {
+        output.push_str(&format!("  tier: {}\n", tier.label()));
+    }
     for line in crate::style::wrap_hanging(&result.layer.summary, options.width, "  ", "  ") {
         output.push_str(&line);
         output.push('\n');
@@ -152,6 +159,7 @@ pub fn render_json(result: &RunResult, key: &KeyCombo, schema_version: u8) -> St
             "context": schema::context(),
             "input": {"key": key, "key_display": key.to_string()},
             "extension": result,
+            "tier": result.layer.tier,
         }))
         .expect("extension v2 result is serializable")
             + "\n";
@@ -201,7 +209,23 @@ fn validate(response: &Response) -> Result<(), String> {
             response.result.propagation
         ));
     }
+    if let Some(tier) = &response.result.tier {
+        if parse_tier(tier).is_none() {
+            return Err(format!(
+                "extension returned unsupported tier '{tier}'; expected live_query, config_file, or default (observed is reserved for whykey's own captures)"
+            ));
+        }
+    }
     Ok(())
+}
+
+fn parse_tier(tier: &str) -> Option<EvidenceTier> {
+    match tier {
+        "live_query" => Some(EvidenceTier::LiveQuery),
+        "config_file" => Some(EvidenceTier::ConfigFile),
+        "default" => Some(EvidenceTier::Default),
+        _ => None,
+    }
 }
 
 fn to_layer(program: &str, result: ExtensionResult) -> LayerResult {
@@ -217,6 +241,7 @@ fn to_layer(program: &str, result: ExtensionResult) -> LayerResult {
         "redirected" => Propagation::Redirected,
         _ => Propagation::Indeterminate,
     };
+    let tier = result.tier.as_deref().and_then(parse_tier);
     let mut details = vec![format!("extension: {program}")];
     details.extend(result.details);
     LayerResult::new(
@@ -226,6 +251,7 @@ fn to_layer(program: &str, result: ExtensionResult) -> LayerResult {
         result.summary,
         details,
     )
+    .with_optional_tier(tier)
 }
 
 #[cfg(test)]
@@ -241,6 +267,7 @@ mod tests {
                 propagation: propagation.into(),
                 summary: "test result".into(),
                 details: vec!["evidence".into()],
+                tier: None,
             },
         }
     }
@@ -250,6 +277,28 @@ mod tests {
         validate(&response("handled", "stops")).unwrap();
         assert!(validate(&response("unknown", "stops")).is_err());
         assert!(validate(&response("handled", "unknown")).is_err());
+    }
+
+    #[test]
+    fn accepts_only_tiers_an_extension_can_establish() {
+        let mut with_tier = response("handled", "stops");
+        for (tier, expected) in [
+            ("live_query", EvidenceTier::LiveQuery),
+            ("config_file", EvidenceTier::ConfigFile),
+            ("default", EvidenceTier::Default),
+        ] {
+            with_tier.result.tier = Some(tier.into());
+            validate(&with_tier).unwrap();
+            assert_eq!(to_layer("x", with_tier.result.clone()).tier, Some(expected));
+        }
+        for tier in ["observed", "unknown"] {
+            with_tier.result.tier = Some(tier.into());
+            assert!(validate(&with_tier).is_err(), "{tier}");
+        }
+        assert_eq!(
+            to_layer("x", response("handled", "stops").result).tier,
+            None
+        );
     }
 
     #[test]

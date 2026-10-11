@@ -706,7 +706,12 @@ end"#,
 pub enum SocketMessage {
     Armed(String),
     Key(HyprlandKeyEvent),
-    ActiveLayout,
+    /// `activelayout>>KEYBOARD,LAYOUT`: a keyboard's keymap or active group
+    /// changed. A virtual keyboard sends one when it uploads its keymap.
+    ActiveLayout {
+        keyboard: String,
+        layout: String,
+    },
     ConfigReloaded,
     Other,
 }
@@ -719,13 +724,113 @@ pub struct HyprlandKeyEvent {
     pub modifier_mask: u32,
 }
 
+/// Which keyboard's keymap the next key events may come from (D-089).
+/// Hyprland v0.56.2's Lua `input.keyboard.key` hook passes only the
+/// keycode, its time and state (src/config/lua/LuaEventHandler.cpp), and no
+/// Lua getter or socket2 event names the source keyboard of a key. A virtual
+/// keyboard (wtype) uploads a private keymap, which Hyprland announces as
+/// `activelayout>>hl-virtual-keyboard…,<keymap>`; while such a keyboard is
+/// attached, a keycode cannot be read with the main keyboard's layout.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct KeyboardSources {
+    /// Active keymap name of the physical keyboard whykey decodes with.
+    reference_keymap: Option<String>,
+    virtual_source: Option<VirtualSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VirtualSource {
+    name: String,
+    keymap: String,
+    /// Socket bytes still buffered when `hyprctl devices` first stopped
+    /// listing the keyboard. Hyprland removes a keyboard only after handling
+    /// its key requests, so only those already-queued events may be its own.
+    queued_after_detach: Option<usize>,
+}
+
+impl KeyboardSources {
+    fn foreign_keymap(&self, keyboard: &str, keymap: &str) -> bool {
+        keyboard.starts_with(crate::layers::hyprland::VIRTUAL_KEYBOARD_PREFIX)
+            && self.reference_keymap.as_deref() != Some(keymap)
+    }
+
+    fn on_active_layout(&mut self, keyboard: &str, keymap: &str) {
+        if self.foreign_keymap(keyboard, keymap) {
+            self.virtual_source = Some(VirtualSource {
+                name: keyboard.to_owned(),
+                keymap: keymap.to_owned(),
+                queued_after_detach: None,
+            });
+        }
+    }
+
+    /// Update from `hyprctl devices`. Returns true when the virtual keyboard
+    /// was just found detached; the caller then records the queued bytes.
+    fn on_inventory(&mut self, inventory: crate::layers::hyprland::KeyboardInventory) -> bool {
+        self.reference_keymap = inventory.reference_keymap;
+        if let Some(source) = &self.virtual_source {
+            let listed = inventory
+                .keyboards
+                .iter()
+                .any(|(name, _, _)| *name == source.name);
+            return !listed && source.queued_after_detach.is_none();
+        }
+        // A virtual keyboard attached before capture started and last used.
+        if let Some((name, keymap, _)) = inventory
+            .keyboards
+            .iter()
+            .find(|(name, keymap, main)| *main && self.foreign_keymap(name, keymap))
+        {
+            self.virtual_source = Some(VirtualSource {
+                name: name.clone(),
+                keymap: keymap.clone(),
+                queued_after_detach: None,
+            });
+        }
+        false
+    }
+
+    fn detached(&mut self, queued: usize) {
+        if let Some(source) = &mut self.virtual_source {
+            source.queued_after_detach = Some(queued);
+        }
+    }
+
+    /// A socket line of `bytes` (with its newline) was taken off the buffer.
+    fn consumed(&mut self, bytes: usize) {
+        if let Some(queued) = self
+            .virtual_source
+            .as_mut()
+            .and_then(|source| source.queued_after_detach.as_mut())
+        {
+            *queued = queued.saturating_sub(bytes);
+        }
+    }
+
+    /// After decoding an event: forget a detached virtual keyboard once no
+    /// event queued before its removal remains.
+    fn settle(&mut self) {
+        if self
+            .virtual_source
+            .as_ref()
+            .is_some_and(|source| source.queued_after_detach == Some(0))
+        {
+            self.virtual_source = None;
+        }
+    }
+}
+
 pub fn parse_socket_line(line: &str) -> SocketMessage {
     let trimmed = line.trim();
     if trimmed.starts_with("configreloaded>>") {
         return SocketMessage::ConfigReloaded;
     }
-    if trimmed.starts_with("activelayout>>") {
-        return SocketMessage::ActiveLayout;
+    if let Some(payload) = trimmed.strip_prefix("activelayout>>") {
+        let (keyboard, layout) = payload.split_once(',').unwrap_or((payload, ""));
+        return SocketMessage::ActiveLayout {
+            keyboard: keyboard.to_owned(),
+            layout: layout.to_owned(),
+        };
     }
     let Some(payload) = trimmed.strip_prefix("custom>>whykey-probe,") else {
         return SocketMessage::Other;
@@ -781,6 +886,7 @@ pub struct HyprlandCaptureSession {
     locked_num: bool,
     keyboard_state_dirty: bool,
     layout_uncertain: bool,
+    sources: KeyboardSources,
     buffer: String,
     held_keys: HashSet<crate::xkb::XkbKeycode>,
     current_modifier_mask: u32,
@@ -831,6 +937,7 @@ impl HyprlandCaptureSession {
             locked_num: false,
             keyboard_state_dirty: false,
             layout_uncertain: false,
+            sources: KeyboardSources::default(),
             buffer: String::new(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
@@ -1027,7 +1134,23 @@ impl HyprlandCaptureSession {
             let (caps, num) = crate::layers::hyprland::main_keyboard_lock_state(&devices_json);
             self.locked_caps = caps;
             self.locked_num = num;
+            let mut inventory = crate::layers::hyprland::keyboard_inventory(&devices_json);
+            // The configured layout's own name is the reference even when
+            // no physical keyboard is attached (headless sessions).
+            if let Some(name) = self
+                .keymap
+                .as_deref()
+                .and_then(|keymap| crate::layers::hyprland::keymap_layout_name(keymap, self.group))
+            {
+                inventory.reference_keymap = Some(name);
+            }
             self.layout_uncertain = false;
+            let detached = self.sources.on_inventory(inventory);
+            if detached {
+                // Pull in everything Hyprland wrote before the removal.
+                while matches!(self.read_incoming(), Ok(read) if read > 0) {}
+                self.sources.detached(self.buffer.len());
+            }
             return;
         }
         self.layout_uncertain = true;
@@ -1053,13 +1176,15 @@ impl HyprlandCaptureSession {
         while let Some(pos) = self.buffer.find('\n') {
             let line = self.buffer[..pos].to_string();
             self.buffer = self.buffer[pos + 1..].to_string();
+            self.sources.consumed(pos + 1);
             match parse_socket_line(&line) {
                 SocketMessage::ConfigReloaded => {
                     return Err(
                         "Hyprland configuration reloaded while listening; capture stopped".into(),
                     );
                 }
-                SocketMessage::ActiveLayout => {
+                SocketMessage::ActiveLayout { keyboard, layout } => {
+                    self.sources.on_active_layout(&keyboard, &layout);
                     self.keyboard_state_dirty = true;
                 }
                 SocketMessage::Key(event) if event.token == self.guard.token() => {
@@ -1083,11 +1208,14 @@ impl HyprlandCaptureSession {
                         self.keyboard_state_dirty = true;
                     }
 
-                    if self.keyboard_state_dirty {
+                    // While a virtual keyboard is attached, learn whether it
+                    // left, so events after its removal read normally again.
+                    if self.keyboard_state_dirty || self.sources.virtual_source.is_some() {
                         self.refresh_keyboard_state();
                     }
 
                     let observed = self.decode_event(&event);
+                    self.sources.settle();
 
                     if !events_all {
                         if observed.event_type != KeyEventType::Press {
@@ -1173,13 +1301,15 @@ impl HyprlandCaptureSession {
         while let Some(pos) = self.buffer.find('\n') {
             let line = self.buffer[..pos].to_string();
             self.buffer = self.buffer[pos + 1..].to_string();
+            self.sources.consumed(pos + 1);
             match parse_socket_line(&line) {
                 SocketMessage::ConfigReloaded => {
                     return Err(
                         "Hyprland configuration reloaded while listening; capture stopped".into(),
                     );
                 }
-                SocketMessage::ActiveLayout => {
+                SocketMessage::ActiveLayout { keyboard, layout } => {
+                    self.sources.on_active_layout(&keyboard, &layout);
                     self.keyboard_state_dirty = true;
                 }
                 SocketMessage::Key(event) if event.token == self.guard.token() => {
@@ -1237,7 +1367,17 @@ impl HyprlandCaptureSession {
             Some(own_mod) => effective_mask & !own_mod,
             None => effective_mask,
         };
-        let combo = KeyCombo::from_parts(combo_mods, &normalized_base);
+        // D-089: a key from a virtual keyboard with its own keymap has only a
+        // certain keycode. Name it `code:N` (what a Hyprland `code:` bind
+        // matches) instead of the main layout's reading, so it is never
+        // mistaken for Escape or Ctrl+C.
+        let virtual_source = self.sources.virtual_source.as_ref();
+        let combo = match virtual_source {
+            Some(_) => {
+                KeyCombo::from_parts(combo_mods, format!("CODE:{}", event.xkb_keycode.get()))
+            }
+            None => KeyCombo::from_parts(combo_mods, &normalized_base),
+        };
 
         // 4. Shifted / AltGr level symbol for alternate display evidence
         let xkb_state = crate::xkb::XkbState::from_modifier_mask(
@@ -1290,17 +1430,25 @@ impl HyprlandCaptureSession {
             devices: Vec::new(),
         };
 
-        let encoding = if self.layout_uncertain {
+        let encoding = if virtual_source.is_some() {
+            "Hyprland XKB key event (keysym unknown: a virtual keyboard with its own keymap may have sent it)".into()
+        } else if self.layout_uncertain {
             "Hyprland XKB key event (layout interpretation uncertain)".into()
         } else {
             "Hyprland XKB key event".into()
         };
 
-        let alternate_key = match shifted_keysym {
-            Some(sym) => Some(format!(
+        let alternate_key = match (virtual_source, shifted_keysym) {
+            (Some(source), _) => Some(format!(
+                "keycode {} may come from virtual keyboard {} with its own keymap ({}); the main layout reads it as {normalized_base}, which is also what Hyprland binds by keysym see, but the key it types is unknown",
+                event.xkb_keycode.get(),
+                source.name,
+                source.keymap
+            )),
+            (None, Some(sym)) => Some(format!(
                 "physical keycode {evdev_raw} ({normalized_base}); shifted keysym: {sym}"
             )),
-            None => Some(format!("physical keycode {evdev_raw} ({normalized_base})")),
+            (None, None) => Some(format!("physical keycode {evdev_raw} ({normalized_base})")),
         };
 
         let disposition = match self.policy {
@@ -1463,6 +1611,7 @@ pub(crate) fn decode_test_event(
         locked_num,
         keyboard_state_dirty: false,
         layout_uncertain: false,
+        sources: KeyboardSources::default(),
         buffer: String::new(),
         held_keys: HashSet::new(),
         current_modifier_mask: 0,
@@ -1561,7 +1710,10 @@ mod tests {
     fn ignore_unrelated_hyprland_events_and_events_from_another_token() {
         assert_eq!(
             parse_socket_line("activelayout>>keyboard,us"),
-            SocketMessage::ActiveLayout
+            SocketMessage::ActiveLayout {
+                keyboard: "keyboard".into(),
+                layout: "us".into()
+            }
         );
         assert_eq!(
             parse_socket_line("openwindow>>0x123,workspace,class,title"),
@@ -2070,6 +2222,7 @@ print("lease-ok")
             locked_num: false,
             keyboard_state_dirty: false,
             layout_uncertain: false,
+            sources: KeyboardSources::default(),
             buffer: "configreloaded>>\n".into(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
@@ -2096,6 +2249,7 @@ print("lease-ok")
             locked_num: false,
             keyboard_state_dirty: false,
             layout_uncertain: false,
+            sources: KeyboardSources::default(),
             buffer: "activelayout>>keyboard,English\n".into(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
@@ -2139,6 +2293,7 @@ print("lease-ok")
             locked_num: false,
             keyboard_state_dirty: false,
             layout_uncertain: false,
+            sources: KeyboardSources::default(),
             buffer: String::new(),
             held_keys: [crate::xkb::XkbKeycode::from(10)].into_iter().collect(),
             current_modifier_mask: 0,
@@ -2166,6 +2321,7 @@ print("lease-ok")
             locked_num: false,
             keyboard_state_dirty: false,
             layout_uncertain: false,
+            sources: KeyboardSources::default(),
             buffer: String::new(),
             held_keys: [crate::xkb::XkbKeycode::from(10)].into_iter().collect(),
             current_modifier_mask: 4,
@@ -2202,6 +2358,7 @@ print("lease-ok")
             locked_num: false,
             keyboard_state_dirty: false,
             layout_uncertain: false,
+            sources: KeyboardSources::default(),
             buffer: String::new(),
             held_keys: HashSet::new(),
             current_modifier_mask: 0,
@@ -2439,5 +2596,83 @@ print("lease-ok")
             unknown[stateless..].contains("original submap unknown; refusing recovery"),
             "recovery without a recorded original must refuse"
         );
+    }
+
+    /// D-089: wtype uploads a private keymap and types every key as
+    /// keycode 9, which the main layout reads as Escape.
+    #[test]
+    fn virtual_keyboard_keymaps_leave_only_the_keycode_certain() {
+        let inventory = |names: &[&str]| crate::layers::hyprland::KeyboardInventory {
+            reference_keymap: Some("English (US)".into()),
+            keyboards: names
+                .iter()
+                .map(|name| ((*name).to_owned(), String::new(), false))
+                .collect(),
+        };
+        let mut sources = KeyboardSources {
+            reference_keymap: Some("English (US)".into()),
+            virtual_source: None,
+        };
+        // A virtual keyboard with the main keyboard's keymap (lab vkbd.py)
+        // and a physical keyboard switching groups are read normally.
+        sources.on_active_layout("hl-virtual-keyboard-python3", "English (US)");
+        sources.on_active_layout("at-translated-set-2-keyboard", "German");
+        assert_eq!(sources.virtual_source, None);
+
+        sources.on_active_layout("hl-virtual-keyboard-wtype", "(unnamed)");
+        assert!(!sources.on_inventory(inventory(&["kbd", "hl-virtual-keyboard-wtype"])));
+        let session = HyprlandCaptureSession {
+            stream: UnixStream::pair().unwrap().0,
+            guard: HyprlandHookGuard::new_uninstalled("tok".into(), "default".into()),
+            policy: HyprlandCapturePolicy::Suppress,
+            saved_submap: "default".into(),
+            keymap: Some(
+                "xkb_keymap {\nxkb_keycodes \"evdev\" { <ESC> = 9; };\n\
+                 xkb_symbols \"pc\" { key <ESC> { [ Escape ] }; };\n};\n"
+                    .into(),
+            ),
+            group: 0,
+            locked_caps: false,
+            locked_num: false,
+            keyboard_state_dirty: false,
+            layout_uncertain: false,
+            sources: sources.clone(),
+            buffer: String::new(),
+            held_keys: HashSet::new(),
+            current_modifier_mask: 0,
+            state: CaptureState::Closed,
+        };
+        let observed = session.decode_event(&HyprlandKeyEvent {
+            token: "tok".into(),
+            xkb_keycode: crate::xkb::XkbKeycode::from(9),
+            event_type: KeyEventType::Press,
+            modifier_mask: 0,
+        });
+        assert_eq!(observed.combo.key(), "CODE:9");
+        let alternate = observed.alternate_key.unwrap();
+        assert!(
+            alternate.contains("hl-virtual-keyboard-wtype"),
+            "{alternate}"
+        );
+        assert!(alternate.contains("ESCAPE"), "{alternate}");
+
+        // Once detached, only the events already queued may still be its own.
+        assert!(sources.on_inventory(inventory(&["kbd"])));
+        sources.detached(10);
+        sources.consumed(6);
+        sources.settle();
+        assert!(sources.virtual_source.is_some());
+        sources.consumed(4);
+        sources.settle();
+        assert_eq!(sources.virtual_source, None);
+    }
+
+    #[test]
+    fn reads_layout_names_from_compiled_keymaps() {
+        let keymap = "xkb_types \"x\" { name[1]=\"Any\"; };\nxkb_symbols \"pc_us_de\" {\n\tname[1]=\"English (US)\";\n\tname[Group2]=\"German\";\n};\n";
+        let name = |group| crate::layers::hyprland::keymap_layout_name(keymap, group);
+        assert_eq!(name(0).as_deref(), Some("English (US)"));
+        assert_eq!(name(1).as_deref(), Some("German"));
+        assert_eq!(name(2), None);
     }
 }

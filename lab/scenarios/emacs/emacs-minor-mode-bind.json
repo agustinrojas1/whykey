@@ -1,0 +1,21 @@
+{
+  "id": "emacs-minor-mode-bind",
+  "description": "<f6> bound in a global minor mode's keymap runs lab-fire; the minor-mode map wins and consumes the key",
+  "tier": "observed",
+  "environment": "emacs",
+  "files": {
+    "/root/.emacs.d/init.el": [
+      "(defun lab-fire () (interactive) (write-region \"fired\\n\" nil \"/tmp/fired\"))",
+      "(define-minor-mode lab-mode \"Lab test mode.\" :global t :keymap (let ((map (make-sparse-keymap))) (define-key map (kbd \"<f6>\") #'lab-fire) map))",
+      "(lab-mode 1)"
+    ]
+  },
+  "actions": [{"type": "\\e[17~"}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "reached": {"keylog": "<f6>"}},
+  "emacs": {"key_binding": ["<f6>"]},
+  "whykey": {
+    "args": ["extension", "/w/extensions/whykey-emacs", "f6"],
+    "layer": "External extension",
+    "run": "direct"
+  }
+}

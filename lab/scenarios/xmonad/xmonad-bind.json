@@ -1,0 +1,36 @@
+{
+  "id": "xmonad-bind",
+  "description": "an xmonad.hs additionalKeys-style binding Mod4+t fires and xmonad consumes the key",
+  "tier": "observed",
+  "environment": "x11",
+  "files": {
+    "/root/.xmonad/xmonad.hs": [
+      "import XMonad",
+      "import qualified Data.Map as M",
+      "",
+      "main :: IO ()",
+      "main = xmonad def",
+      "  { modMask = mod4Mask",
+      "  , keys = \\c -> M.union (M.fromList [((mod4Mask, xK_t), spawn \"touch /tmp/fired\"), ((mod4Mask, xK_Return), spawn \"touch /tmp/ready\")]) (keys def c)",
+      "  }"
+    ]
+  },
+  "x11": {
+    "daemons": [
+      {
+        "argv": ["xmonad"],
+        "ready_grab": [64, 28],
+        "ready_timeout": 90
+      }
+    ]
+  },
+  "probe": "x11",
+  "actions": [{"xdotool": ["key", "Super_L+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "XMonad",
+    "env": {"XDG_SESSION_TYPE": "x11", "XDG_CURRENT_DESKTOP": "xmonad"},
+    "accept": ["handled-uncertain"]
+  }
+}

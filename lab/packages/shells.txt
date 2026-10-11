@@ -1,0 +1,6 @@
+# Shells and terminal multiplexers.
+bash
+zsh
+fish
+tmux
+screen

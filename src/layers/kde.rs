@@ -139,7 +139,16 @@ impl Kde {
             );
         };
         match runtime_matches(&codes) {
-            Ok(matches) => inspect_runtime(&matches),
+            Ok(matches) => {
+                let mut result = inspect_runtime(&matches);
+                if let Some(alias) = us_shifted_alias(key) {
+                    result.details.push(format!(
+                        "also asked for {} assuming a US layout: Qt records Shift+digit as the shifted symbol",
+                        alias.compact_display()
+                    ));
+                }
+                result
+            }
             Err(error) => inspect_file(key, &error),
         }
     }
@@ -277,11 +286,22 @@ fn inspect_file(key: &KeyCombo, runtime_error: &str) -> LayerResult {
     };
     let parsed = parse_config(&content);
     let mut details = vec![runtime_line, format!("config: {}", path.display())];
+    let alias = us_shifted_alias(key);
     let matches = parsed
         .bindings
         .iter()
-        .filter(|binding| binding.combo == *key)
+        .filter(|binding| binding.combo == *key || alias.as_ref() == Some(&binding.combo))
         .collect::<Vec<_>>();
+    if let Some(alias) = alias
+        .as_ref()
+        .filter(|alias| matches.iter().any(|binding| binding.combo == **alias))
+    {
+        details.push(format!(
+            "matched {} as {} assuming a US layout: Qt records Shift+digit as the shifted symbol",
+            alias.compact_display(),
+            key.compact_display()
+        ));
+    }
     let Some(first) = matches.first() else {
         details.push(
             "no configured shortcut uses this key; applications register theirs with kglobalaccel at runtime"
@@ -469,6 +489,22 @@ const QT_KEYS: &[(i32, &str, &[&str])] = &[
     (0x0100_0093, "XF86Standby", &["Standby"]),
     (0x0100_00a0, "XF86Mail", &["Launch Mail"]),
     (0x0100_00a1, "XF86AudioMedia", &["Launch Media"]),
+    (0x0100_00a2, "XF86Launch0", &["Launch (0)"]),
+    (0x0100_00a3, "XF86Launch1", &["Launch (1)"]),
+    (0x0100_00a4, "XF86Launch2", &["Launch (2)"]),
+    (0x0100_00a5, "XF86Launch3", &["Launch (3)"]),
+    (0x0100_00a6, "XF86Launch4", &["Launch (4)"]),
+    (0x0100_00a7, "XF86Launch5", &["Launch (5)"]),
+    (0x0100_00a8, "XF86Launch6", &["Launch (6)"]),
+    (0x0100_00a9, "XF86Launch7", &["Launch (7)"]),
+    (0x0100_00aa, "XF86Launch8", &["Launch (8)"]),
+    (0x0100_00ab, "XF86Launch9", &["Launch (9)"]),
+    (0x0100_00ac, "XF86LaunchA", &["Launch (A)"]),
+    (0x0100_00ad, "XF86LaunchB", &["Launch (B)"]),
+    (0x0100_00ae, "XF86LaunchC", &["Launch (C)"]),
+    (0x0100_00af, "XF86LaunchD", &["Launch (D)"]),
+    (0x0100_00b0, "XF86LaunchE", &["Launch (E)"]),
+    (0x0100_00b1, "XF86LaunchF", &["Launch (F)"]),
     (
         0x0100_00b2,
         "XF86MonBrightnessUp",
@@ -516,6 +552,45 @@ const QT_KEYS: &[(i32, &str, &[&str])] = &[
     (0x0102_0004, "XF86Sleep", &["Sleep"]),
 ];
 
+/// QKeySequence name of `Qt::Key_MediaTogglePlayPause`. No XKB keysym
+/// produces that key: Qt and KWin map XF86AudioPlay to `Key_MediaPlay`
+/// (qxkbcommon.cpp), so a shortcut on it cannot fire from a keyboard.
+const QT_NAME_MEDIA_TOGGLE_PLAY_PAUSE: &str = "Toggle Media Play/Pause";
+
+/// Keypad keysyms and the main key Qt reports for them together with
+/// `KeypadModifier` (`Num+` in portable text). Keypad Enter is a key of
+/// its own (`Key_Enter`) and is handled through [`QT_KEYS`].
+const QT_KEYPAD_KEYS: &[(&str, &str)] = &[
+    ("KP_0", "0"),
+    ("KP_1", "1"),
+    ("KP_2", "2"),
+    ("KP_3", "3"),
+    ("KP_4", "4"),
+    ("KP_5", "5"),
+    ("KP_6", "6"),
+    ("KP_7", "7"),
+    ("KP_8", "8"),
+    ("KP_9", "9"),
+    ("KP_DECIMAL", "."),
+    ("KP_SEPARATOR", ","),
+    ("KP_DIVIDE", "/"),
+    ("KP_MULTIPLY", "*"),
+    ("KP_SUBTRACT", "-"),
+    ("KP_ADD", "+"),
+    ("KP_EQUAL", "="),
+    ("KP_HOME", "HOME"),
+    ("KP_END", "END"),
+    ("KP_LEFT", "LEFT"),
+    ("KP_UP", "UP"),
+    ("KP_RIGHT", "RIGHT"),
+    ("KP_DOWN", "DOWN"),
+    ("KP_PAGE_UP", "PAGE_UP"),
+    ("KP_PAGE_DOWN", "PAGE_DOWN"),
+    ("KP_INSERT", "INSERT"),
+    ("KP_DELETE", "DELETE"),
+    ("KP_BEGIN", "CLEAR"),
+];
+
 fn modifier(name: &str) -> i32 {
     modifier_mask(name).map_or(0, |mask| mask as i32)
 }
@@ -537,7 +612,7 @@ fn decode_qt_key(code: i32) -> Option<KeyCombo> {
         }
     }
     let key = code & !QT_MODIFIERS;
-    let name = if key == QT_KEY_BACKTAB {
+    let mut name = if key == QT_KEY_BACKTAB {
         // Qt reports Shift+Tab as Backtab.
         mask |= modifier("shift");
         "Tab".to_owned()
@@ -551,7 +626,34 @@ fn decode_qt_key(code: i32) -> Option<KeyCombo> {
     } else {
         return None;
     };
+    if code & QT_KEYPAD != 0 {
+        let main = normalize_key_str(&name);
+        if let Some((keypad, _)) = QT_KEYPAD_KEYS.iter().find(|(_, key)| *key == main) {
+            name = (*keypad).to_owned();
+        }
+    }
     Some(KeyCombo::from_parts(u32::try_from(mask).ok()?, name))
+}
+
+/// The shortcut KDE records for a Shift+digit query on a US layout,
+/// `super+shift+1` → `super+!`: the shifted symbol, with Shift folded into
+/// it. Lab-verified with kglobalacceld 6.7.5 on X11: `Meta+!` fires for
+/// Super+Shift+1, `Meta+Shift+!` does not.
+fn us_shifted_alias(combo: &KeyCombo) -> Option<KeyCombo> {
+    let shift = modifier("shift") as u32;
+    if combo.modmask() & shift == 0 {
+        return None;
+    }
+    let mut characters = combo.key().chars();
+    let character = characters.next()?;
+    if characters.next().is_some() {
+        return None;
+    }
+    let shifted = crate::remapper::keys::us_shifted_symbol(character)?;
+    Some(KeyCombo::from_parts(
+        combo.modmask() & !shift,
+        shifted.to_string(),
+    ))
 }
 
 /// The QKeyCombination ints that represent `combo`, or `None` when Qt cannot
@@ -575,7 +677,11 @@ fn encode_qt_key(combo: &KeyCombo) -> Option<Vec<i32>> {
     if mask & !covered != 0 {
         return None;
     }
-    let key = combo.key();
+    let mut key = combo.key();
+    if let Some((_, main)) = QT_KEYPAD_KEYS.iter().find(|(keypad, _)| *keypad == key) {
+        flags |= QT_KEYPAD;
+        key = main;
+    }
     let mut codes = QT_KEYS
         .iter()
         .filter(|(_, keysym, _)| normalize_key_str(keysym) == key)
@@ -601,6 +707,10 @@ fn encode_qt_key(combo: &KeyCombo) -> Option<Vec<i32>> {
     // Qt reports keypad Enter as Key_Enter with or without KeypadModifier.
     if key == "KP_ENTER" {
         codes.push(flags | QT_KEYPAD | 0x0100_0005);
+    }
+    if let Some(alias) = us_shifted_alias(combo) {
+        let symbol = alias.key().chars().next()?;
+        codes.push((flags & !QT_SHIFT) | i32::try_from(u32::from(symbol)).ok()?);
     }
     Some(codes)
 }
@@ -676,9 +786,19 @@ fn parse_config(content: &str) -> ParsedConfig {
                     action: action.to_owned(),
                     description: description.clone(),
                 }),
-                None => parsed
-                    .unparsed
-                    .push(format!("not compared: [{group}] {action}={chord}")),
+                None => parsed.unparsed.push(
+                    if chord
+                        .rsplit('+')
+                        .next()
+                        .is_some_and(|key| key.eq_ignore_ascii_case(QT_NAME_MEDIA_TOGGLE_PLAY_PAUSE))
+                    {
+                        format!(
+                            "not compared: [{group}] {action}={chord}: no XKB keysym produces Qt's Toggle Media Play/Pause key (XF86AudioPlay is Media Play)"
+                        )
+                    } else {
+                        format!("not compared: [{group}] {action}={chord}")
+                    },
+                ),
             }
         }
     }
@@ -873,5 +993,38 @@ mod tests {
         assert_eq!(inspect_runtime(&[]).outcome, Outcome::Pass);
         assert_eq!(inspect_runtime(&[]).tier, Some(EvidenceTier::LiveQuery));
         assert_eq!(inactive.tier, Some(EvidenceTier::LiveQuery));
+    }
+
+    #[test]
+    fn maps_launch_media_keypad_and_shifted_digit_keys() {
+        assert_eq!(decode_qt_key(0x0100_00a2), Some(combo("xf86launch0")));
+        assert_eq!(decode_qt_key(0x0100_00ab), Some(combo("xf86launch9")));
+        assert_eq!(parse_portable("Launch (5)"), Some(combo("xf86launch5")));
+        assert_eq!(
+            encode_qt_key(&combo("super+xf86launch1")),
+            Some(vec![QT_META | 0x0100_00a3])
+        );
+        // Keypad keys carry KeypadModifier (`Num+` in portable text).
+        assert_eq!(parse_portable("Meta+Num+1"), Some(combo("super+kp_1")));
+        assert_eq!(parse_portable("Num+Home"), Some(combo("kp_home")));
+        assert_eq!(parse_portable("Num+-"), Some(combo("kp_subtract")));
+        assert_eq!(
+            encode_qt_key(&combo("super+kp_1")),
+            Some(vec![QT_META | QT_KEYPAD | 0x31])
+        );
+        assert_eq!(parse_portable("Meta+1"), Some(combo("super+1")));
+        // Shift+digit is recorded as the shifted symbol (US layout).
+        assert_eq!(
+            encode_qt_key(&combo("super+shift+1")),
+            Some(vec![QT_META | QT_SHIFT | 0x31, QT_META | 0x21])
+        );
+        assert_eq!(
+            us_shifted_alias(&combo("super+shift+1")),
+            parse_portable("Meta+!")
+        );
+        assert_eq!(us_shifted_alias(&combo("super+1")), None);
+        let parsed = parse_config("[mediacontrol]\nplaypause=Toggle Media Play/Pause,none,Play\n");
+        assert!(parsed.bindings.is_empty());
+        assert!(parsed.unparsed[0].contains("no XKB keysym"));
     }
 }

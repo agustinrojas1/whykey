@@ -1,0 +1,24 @@
+{
+  "id": "labwc-bind-consumed",
+  "description": "a rc.xml keybind W-t runs its command and labwc consumes the key",
+  "tier": "observed",
+  "environment": "labwc",
+  "files": {
+    "/root/.config/labwc/rc.xml": [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<labwc_config>",
+      "  <keyboard>",
+      "    <keybind key=\"W-t\"><action name=\"Execute\"><command>touch /tmp/fired</command></action></keybind>",
+      "  </keyboard>",
+      "</labwc_config>"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "labwc",
+    "env": {"XDG_CURRENT_DESKTOP": "labwc", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

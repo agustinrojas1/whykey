@@ -107,6 +107,75 @@ pub(crate) fn main_keyboard_active_layout_index(devices_json: &str) -> Option<us
         .and_then(|index| usize::try_from(index).ok())
 }
 
+/// Name prefix Hyprland gives virtual keyboards (`zwp_virtual_keyboard_v1`
+/// clients such as wtype): `hl-virtual-keyboard[-<process>]`
+/// (v0.56.2 src/protocols/VirtualKeyboard.cpp).
+pub(crate) const VIRTUAL_KEYBOARD_PREFIX: &str = "hl-virtual-keyboard";
+
+/// What `hyprctl devices -j` says about the keyboards a key event may come
+/// from: the active keymap name of the physical keyboard whose layout
+/// whykey decodes with, and the keyboards currently attached.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct KeyboardInventory {
+    pub(crate) reference_keymap: Option<String>,
+    /// `(name, active keymap, main)` per keyboard.
+    pub(crate) keyboards: Vec<(String, String, bool)>,
+}
+
+pub(crate) fn keyboard_inventory(devices_json: &str) -> KeyboardInventory {
+    let Ok(devices) = serde_json::from_str::<serde_json::Value>(devices_json) else {
+        return KeyboardInventory::default();
+    };
+    let keyboards = devices
+        .get("keyboards")
+        .and_then(serde_json::Value::as_array)
+        .map(|keyboards| {
+            keyboards
+                .iter()
+                .filter_map(|keyboard| {
+                    let text = |field: &str| keyboard.get(field)?.as_str().map(str::to_owned);
+                    Some((
+                        text("name")?,
+                        text("active_keymap").unwrap_or_default(),
+                        keyboard.get("main").and_then(serde_json::Value::as_bool) == Some(true),
+                    ))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let physical = |main: bool| {
+        keyboards
+            .iter()
+            .find(|(name, _, is_main)| {
+                *is_main == main && !name.starts_with(VIRTUAL_KEYBOARD_PREFIX)
+            })
+            .map(|(_, keymap, _)| keymap.clone())
+    };
+    KeyboardInventory {
+        reference_keymap: physical(true).or_else(|| physical(false)),
+        keyboards,
+    }
+}
+
+/// The name of layout `group` (0-based) in a compiled keymap's
+/// `xkb_symbols` (`name[1]="English (US)";`, or `name[Group1]=` from older
+/// libxkbcommon): the name Hyprland reports as a keyboard's active keymap.
+pub(crate) fn keymap_layout_name(keymap: &str, group: usize) -> Option<String> {
+    let symbols = &keymap[keymap.find("xkb_symbols")?..];
+    let wanted = group + 1;
+    symbols.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("name[")?;
+        let (index, value) = rest.split_once(']')?;
+        let index = index.strip_prefix("Group").unwrap_or(index);
+        if index.parse::<usize>().ok()? != wanted {
+            return None;
+        }
+        let value = value.trim().strip_prefix('=')?.trim();
+        let value = value.strip_suffix(';').unwrap_or(value).trim();
+        Some(value.strip_prefix('"')?.strip_suffix('"')?.to_owned())
+    })
+}
+
 pub(crate) fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
     let Ok(devices) = serde_json::from_str::<serde_json::Value>(devices_json) else {
         return None;

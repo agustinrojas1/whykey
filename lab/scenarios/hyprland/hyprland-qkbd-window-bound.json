@@ -1,0 +1,51 @@
+{
+  "id": "hyprland-qkbd-window-bound",
+  "description": "listen --window under Hyprland, keys from the VM kernel keyboard: a bound Super combo fires and never reaches whykey's probe window",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.conf": [
+      "bind = SUPER, Return, exec, sh -c 'echo x >> /tmp/fired'"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "qkbd": [
+        "super+return"
+      ]
+    },
+    {
+      "start_whykey": true
+    },
+    {
+      "qkbd": [
+        "super+return"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired",
+      "equals": "x\nx"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "listen",
+      "--window",
+      "--count",
+      "1",
+      "--timeout",
+      "10"
+    ],
+    "run": "background",
+    "ready": "window",
+    "observation": true,
+    "combo": {
+      "key": "",
+      "modifiers": 64
+    }
+  }
+}
