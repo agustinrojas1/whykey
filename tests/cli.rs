@@ -964,6 +964,66 @@ fn ime_runtime_query_reports_the_active_fcitx5_engine_without_changing_it() {
     let _ = fs::remove_dir_all(base);
 }
 
+#[cfg(unix)]
+#[test]
+fn fcitx5_without_a_focused_input_context_reads_the_closed_state() {
+    // Fcitx5 answers CurrentInputMethod with an empty string (blank under
+    // --print-reply=literal) when no input context is focused.
+    let base = temp_dir("doctor-ime-closed");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let dbus_send = bin.join("dbus-send");
+    fs::write(
+        &dbus_send,
+        "#!/bin/sh\ncase \"$5\" in\n  org.freedesktop.DBus.ListNames) printf '%s\\n' 'org.fcitx.Fcitx5' ;;\n  org.fcitx.Fcitx.Controller1.CurrentInputMethod) printf '   ' ;;\n  org.fcitx.Fcitx.Controller1.State) printf '%s\\n' 'int32 0' ;;\n  *) exit 1 ;;\nesac\nexit 0\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&dbus_send).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&dbus_send, permissions).unwrap();
+
+    let output = binary()
+        .args(["--json", "ctrl+a"])
+        .env("GTK_IM_MODULE", "fcitx")
+        .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/whykey-test-bus")
+        .env("PATH", &bin)
+        .env("HOME", &base)
+        .env("XDG_CURRENT_DESKTOP", "generic")
+        .env("XDG_SESSION_TYPE", "wayland")
+        .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+        .env_remove("SWAYSOCK")
+        .env_remove("I3SOCK")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_TTY")
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let ime_layer = value["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layer| layer["layer"] == "Input method")
+        .unwrap();
+    assert_eq!(ime_layer["status"], "NotHandled");
+    assert_eq!(ime_layer["propagation"], "Continues");
+    let details = ime_layer["details"].as_array().unwrap();
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail == "runtime state: closed (no focused input context)"),
+        "{details:?}"
+    );
+    assert!(
+        !details.iter().any(|detail| detail
+            .as_str()
+            .unwrap()
+            .starts_with("runtime query unavailable")),
+        "{details:?}"
+    );
+
+    let _ = fs::remove_dir_all(base);
+}
+
 #[test]
 fn inspection_includes_detected_remapper_as_conditional_evidence() {
     let base = temp_dir("inspect-keyd");

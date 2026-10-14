@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixes
+
+- With no input context focused, Fcitx5 answers `CurrentInputMethod`
+  with an empty string. The input-method layer used to stop there and
+  report the runtime query as unavailable; it now reads `State` and
+  reports Fcitx5 as closed (no focused input context), so keys pass
+  through. Found on a real Hyprland desktop. Test
+  `fcitx5_without_a_focused_input_context_reads_the_closed_state`.
+
 ## [2.2.0] - 2026-10-11
 
 The lab grows to 172 scenarios: 156 match exactly, 16 pass only as honest

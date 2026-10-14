@@ -186,7 +186,11 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             details.push(format!("active engine: {active_engine}"));
         }
         if let Some(state) = &detection.state {
-            details.push(format!("runtime state: {state}"));
+            if state == "closed" && detection.active_engine.is_none() {
+                details.push("runtime state: closed (no focused input context)".into());
+            } else {
+                details.push(format!("runtime state: {state}"));
+            }
         }
         if let Some(error) = &detection.query_error {
             details.push(format!("runtime query unavailable: {error}"));
@@ -338,8 +342,10 @@ fn query_fcitx5() -> RuntimeQuery {
     }
 
     let active_engine = match run_fcitx5_method("CurrentInputMethod") {
+        // Fcitx5 answers "" when no input context is focused; State then
+        // reports 0 (closed), so keep querying instead of giving up.
         Ok(output) => match parse_dbus_string(&output.stdout) {
-            Some(engine) => Some(engine),
+            Some(engine) => (!engine.is_empty()).then_some(engine),
             None => {
                 return RuntimeQuery {
                     error: Some("Fcitx5 CurrentInputMethod returned no D-Bus string value".into()),
@@ -467,7 +473,10 @@ fn nonempty_line(value: &str) -> Option<String> {
 
 fn parse_dbus_string(value: &[u8]) -> Option<String> {
     let value = String::from_utf8_lossy(value);
-    let line = value.lines().map(str::trim).find(|line| !line.is_empty())?;
+    // `--print-reply=literal` prints an empty string as blank output.
+    let Some(line) = value.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        return Some(String::new());
+    };
     let payload = if let Some(payload) = line.strip_prefix("string ") {
         payload.trim()
     } else {
@@ -500,8 +509,7 @@ fn parse_dbus_string(value: &[u8]) -> Option<String> {
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
         .unwrap_or(payload);
-    let value = inner.replace("\\\\", "\\").replace("\\\"", "\"");
-    (!value.is_empty()).then_some(value)
+    Some(inner.replace("\\\\", "\\").replace("\\\"", "\""))
 }
 
 fn parse_dbus_integer(value: &[u8]) -> Option<i32> {
@@ -738,7 +746,8 @@ mod tests {
             Some("keyboard-us".into())
         );
         assert_eq!(parse_dbus_string(b"int32 2\n"), None);
-        assert_eq!(parse_dbus_string(b"string \"\"\n"), None);
+        assert_eq!(parse_dbus_string(b"string \"\"\n"), Some(String::new()));
+        assert_eq!(parse_dbus_string(b"   "), Some(String::new()));
         assert_eq!(parse_dbus_integer(b"int32 2\n"), Some(2));
         assert_eq!(parse_dbus_integer(b"2\n"), Some(2));
         assert_eq!(parse_dbus_integer(b"reply 2\n"), None);
