@@ -1,3 +1,12 @@
+whykey (2.4.0) unstable; urgency=medium
+
+  * Reports lead with a two-line verdict and show every layer of the route
+    with a mark for what it does to the key; doctor, capabilities, listen
+    and CLI errors follow the same layout.
+  * whykey super --alone explains what a modifier does on its own.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Thu, 15 Oct 2026 20:00:00 -0300
+
 whykey (2.3.0) unstable; urgency=medium
 
   * Verify Vim, Helix, Kakoune, Micro, Zellij, Fcitx5, IBus, keyd, kanata,

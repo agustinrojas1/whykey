@@ -3,7 +3,7 @@
 %global __requires_exclude ^/usr/bin/python3$
 
 Name:           whykey
-Version:        2.3.0
+Version:        2.4.0
 Release:        1%{?dist}
 Summary:        Explain where a Linux key combination is handled
 License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3.0
@@ -68,6 +68,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %doc %{_docdir}/%{name}/support-matrix.json
 
 %changelog
+* Thu Oct 15 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.4.0-1
+- Reports lead with a verdict and show the whole route; whykey super --alone.
+
 * Thu Oct 15 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.3.0-1
 - Verify terminal editors, input methods, key remappers, GNOME Shell, KWin, Cinnamon and capture paths in the lab; fix 24 defects; faster sharded lab CI
 

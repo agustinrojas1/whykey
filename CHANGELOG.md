@@ -1,6 +1,13 @@
 # Changelog
 
-## [Unreleased]
+## [2.4.0] - 2026-10-15
+
+Reports are rewritten to be read at a glance. A report now opens with a
+two-line verdict (who takes the key and what it does, then what that means
+for the rest of the chain) and shows the whole route: the seven layers in
+order, each with a mark for what it does to the key. `whykey super --alone`
+answers what a modifier does on its own. JSON and NDJSON output (schema v1
+and v2) are unchanged, except for the additive `input.alone` field in v2.
 
 ### Added
 
@@ -10,9 +17,38 @@
   kanata and kmonad `tap-hold`, xremap `modmap` `held`/`alone`, GNOME
   `overlay-key`, KDE `kwinrc [ModifierOnlyShortcuts]`, Hyprland
   `bindr`/`bindrt` and Sway/i3 `bindsym --release`, and renders the usual
-  route table. Without `--alone`, a bare modifier is still an error, now
-  naming the flag. JSON schema v2 reports `input.alone`; v1 is unchanged.
+  route table. JSON schema v2 reports `input.alone`; v1 is unchanged.
   Tap-hold findings now say what a tap emits and what holding does.
+- `--ascii` keeps human output in ASCII. It is also the default when the
+  locale is not UTF-8.
+- README section "Reading a report", with an annotated report and the table
+  of route marks; the same table is in `whykey.1`.
+
+### Changed
+
+- Inspect and listen reports: a header with the session context
+  (compositor, session type, shell); a two-line verdict; a Route table with
+  every layer in order and a mark per layer (`✕` stops the key, `↓` passes
+  it on, `↪` rewrites it, `?` could not be verified, `·` not reached); a
+  "Bound in" block that puts the binding's file and line first; a
+  Confidence line that says where the answer came from and what would make
+  it stronger; at most two runnable next steps. The meaning never depends on
+  color alone.
+- `--verbose` groups evidence under binding, keyboard and layout, and policy
+  notes, and collapses the keyboard list to the main keyboard plus a count.
+- `whykey doctor` and `whykey capabilities`: a state column, titled groups,
+  one-line reasons, `fix` and `undo` commands on their own lines, and a
+  summary.
+- `whykey listen` shows one waiting line on stderr, erased when the key
+  arrives; `--dry-run` and `--explain-capture` use the same marks.
+- CLI errors explain themselves: modifiers without a main key
+  (`whykey ctrl+super`) say what whykey accepts, a single modifier also
+  names `--alone`, two main keys show how to ask for a sequence, and unknown
+  key names get suggestions.
+- Text wraps at the terminal's real width instead of 80 columns when
+  `COLUMNS` is not exported.
+- The README's key-path diagram is a generated SVG with light and dark
+  variants, and the demo image is rendered from real output.
 
 ## [2.3.0] - 2026-10-15
 
