@@ -17,5 +17,6 @@ Technical evidence
   configuration route (predicted):
     1. Hyprland [NotHandled; Continues]
        summary: no active binding found
-       evidence: active submap: default
+       binding
+         active submap: default
 

@@ -37,5 +37,6 @@ Technical evidence
   route evidence:
     1. Hyprland [NotHandled; Continues]
        summary: active binding found
-       evidence: binding: __lua 285; Herdr
+       binding
+         binding: __lua 285; Herdr
 
