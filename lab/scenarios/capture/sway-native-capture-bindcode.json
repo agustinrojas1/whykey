@@ -1,0 +1,19 @@
+{
+  "id": "sway-native-capture-bindcode",
+  "description": "listen (Sway native capture) of a bindcode Mod4+36 that fires: Sway's binding event has no keysym, so the key is named CODE:36 and the static Sway layer matches it; Sway consumes the key",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {"/root/.config/sway/config": ["bindcode Mod4+36 exec touch /tmp/fired"]},
+  "probe": "wayland",
+  "actions": [{"start_whykey": true}, {"vkbd": ["super+Return"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["listen", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Sway",
+    "combo": {"key": "CODE:36", "modifiers": 64},
+    "binding": "touch /tmp/fired",
+    "tty": true
+  }
+}

@@ -94,53 +94,95 @@ impl SwayCaptureSession {
             }
             let value: serde_json::Value = serde_json::from_slice(&payload)
                 .map_err(|error| format!("Sway binding event was invalid JSON: {error}"))?;
-            let binding = value.get("binding").unwrap_or(&value);
-            let symbol = binding
-                .get("symbol")
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| {
-                    binding
-                        .get("symbols")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|values| values.first())
-                        .and_then(serde_json::Value::as_str)
-                })
-                .ok_or_else(|| "Sway binding event omitted a key symbol".to_owned())?;
-            let mask = binding
-                .get("event_state_mask")
-                .and_then(crate::layers::tiling::event_state_mask)
-                .unwrap_or(0);
-            let combo = KeyCombo::from_parts(mask, symbol);
-            if !events_all && combo.modmask() == 0 && combo.key().is_empty() {
-                continue;
+            if let Some(observed) = observed_binding(&value, events_all, release_flag_of_config)? {
+                return Ok(Some(observed));
             }
-            let action = binding
-                .get("command")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Sway binding")
-                .to_owned();
-            return Ok(Some(ObservedKey {
-                disposition: CaptureDisposition::PassedThrough,
-                combo,
-                raw: Vec::new(),
-                raw_display: Some(format!("Sway binding event: {action}")),
-                modifier_state: None,
-                associated_text: None,
-                physical_keycode: binding
-                    .get("input_code")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|code| crate::xkb::EvdevKeycode::new(code as u16)),
-                encoding: "Sway IPC binding event".into(),
-                protocol_flags: None,
-                event_type: KeyEventType::Press,
-                alternate_keys: None,
-                alternate_key: Some(action),
-                source: CaptureSource::CompositorNative {
-                    backend: NativeBackendId::Sway.display().into(),
-                },
-            }));
         }
     }
+}
+
+/// Whether the running config binds this combo with `--release`; see
+/// [`crate::layers::tiling::release_flag`].
+fn release_flag_of_config(combo: &KeyCombo) -> Option<bool> {
+    crate::layers::sway::release_flag(combo)
+}
+
+/// Decode one Sway `binding` event. Sway runs a binding's command when the
+/// binding matches: a `--release` binding runs on release and a normal one on
+/// press, and the event payload carries no flag for that, so `release_flag`
+/// asks the running config. `Ok(None)` skips an event that is not reported (a
+/// bare modifier when `events_all` is off).
+fn observed_binding(
+    value: &serde_json::Value,
+    events_all: bool,
+    release_flag: impl Fn(&KeyCombo) -> Option<bool>,
+) -> Result<Option<ObservedKey>, String> {
+    let binding = value.get("binding").unwrap_or(value);
+    // `input_code` is the XKB keycode of a `bindcode` binding, and 0 for a
+    // `bindsym` binding, which names its key by symbol instead.
+    let input_code = binding
+        .get("input_code")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let symbol = binding
+        .get("symbol")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            binding
+                .get("symbols")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(serde_json::Value::as_str)
+        });
+    let key = match symbol {
+        Some(symbol) => symbol.to_owned(),
+        // A `bindcode` event has `symbol: null`; name the key by its keycode
+        // the way Sway's own bindcode matching does (`CODE:n`).
+        None if input_code != 0 => format!("CODE:{input_code}"),
+        None => return Err("Sway binding event omitted a key symbol".to_owned()),
+    };
+    let mask = binding
+        .get("event_state_mask")
+        .and_then(crate::layers::tiling::event_state_mask)
+        .unwrap_or(0);
+    let combo = KeyCombo::from_parts(mask, &key);
+    if !events_all && combo.modmask() == 0 && combo.key().is_empty() {
+        return Ok(None);
+    }
+    let event_type = if release_flag(&combo) == Some(true) {
+        KeyEventType::Release
+    } else {
+        KeyEventType::Press
+    };
+    let physical_keycode = if input_code == 0 {
+        None
+    } else {
+        u32::try_from(input_code)
+            .ok()
+            .and_then(|code| XkbKeycode::new(code).to_evdev())
+    };
+    let action = binding
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Sway binding")
+        .to_owned();
+    Ok(Some(ObservedKey {
+        disposition: CaptureDisposition::PassedThrough,
+        combo,
+        raw: Vec::new(),
+        raw_display: Some(format!("Sway binding event: {action}")),
+        modifier_state: None,
+        associated_text: None,
+        physical_keycode,
+        encoding: "Sway IPC binding event".into(),
+        protocol_flags: None,
+        event_type,
+        alternate_keys: None,
+        alternate_key: Some(action),
+        source: CaptureSource::CompositorNative {
+            backend: NativeBackendId::Sway.display().into(),
+        },
+    }))
 }
 
 impl CaptureBackend for SwayCaptureSession {
@@ -301,5 +343,71 @@ mod tests {
         assert_eq!(first.combo.compact_display(), "SHIFT+SUPER+H");
         let second = session.next_event(false).unwrap().unwrap();
         assert_eq!(second.combo.compact_display(), "CTRL+ALT+CAPS+Q");
+    }
+
+    fn decode(payload: &str, release: Option<bool>) -> Result<Option<ObservedKey>, String> {
+        let value: serde_json::Value = serde_json::from_str(payload).unwrap();
+        observed_binding(&value, false, |_| release)
+    }
+
+    #[test]
+    fn bindcode_event_without_a_symbol_is_named_by_its_keycode() {
+        // Sway sends `symbol: null` and `symbols: []` for `bindcode Mod4+36`.
+        // Before, this error aborted the whole listen session.
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let mut session = SwayCaptureSession {
+            stream,
+            buffer: Vec::new(),
+            policy: CapturePolicy::PassThrough,
+            closed: false,
+        };
+        session.buffer.extend(binding_frame(
+            br#"{"change":"run","binding":{"command":"exec touch /tmp/code","event_state_mask":["Mod4"],"input_codes":[36],"input_code":36,"symbols":[],"symbol":null,"input_type":"keyboard"}}"#,
+        ));
+        let observed = session.next_event(false).unwrap().unwrap();
+        assert_eq!(observed.combo.key(), "CODE:36");
+        assert_eq!(observed.combo.modmask(), 64);
+    }
+
+    #[test]
+    fn input_code_is_an_xkb_keycode_converted_to_evdev() {
+        // Sway's input_code for `bindcode 36` is the XKB keycode 36, which is
+        // evdev 28 (KEY_ENTER) plus 8.
+        let observed = decode(
+            r#"{"binding":{"command":"exec foot","event_state_mask":["Mod4"],"input_code":36,"symbol":"Return"}}"#,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            observed.physical_keycode,
+            Some(crate::xkb::EvdevKeycode::new(28))
+        );
+    }
+
+    #[test]
+    fn symbol_binding_has_no_physical_keycode() {
+        // `bindsym` events carry input_code 0: no keycode was bound, so none is
+        // reported (before, 0 was reported as evdev keycode 0).
+        let observed = decode(
+            r#"{"binding":{"command":"exec foot","event_state_mask":["Mod4"],"input_code":0,"symbol":"t"}}"#,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(observed.physical_keycode, None);
+    }
+
+    #[test]
+    fn release_binding_event_is_labelled_as_a_release() {
+        // Sway runs a `--release` binding on release, and its event does not say
+        // so; the running config supplies the flag.
+        let payload = r#"{"binding":{"command":"exec touch /tmp/rel","event_state_mask":["Mod4"],"input_code":0,"symbol":"u"}}"#;
+        let release = decode(payload, Some(true)).unwrap().unwrap();
+        assert_eq!(release.event_type, KeyEventType::Release);
+        let press = decode(payload, Some(false)).unwrap().unwrap();
+        assert_eq!(press.event_type, KeyEventType::Press);
+        let unknown = decode(payload, None).unwrap().unwrap();
+        assert_eq!(unknown.event_type, KeyEventType::Press);
     }
 }

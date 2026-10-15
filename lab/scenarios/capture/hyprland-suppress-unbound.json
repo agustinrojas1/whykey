@@ -1,0 +1,39 @@
+{
+  "id": "hyprland-suppress-unbound",
+  "description": "listen --suppress on the VM kernel keyboard with an unbound Super+X: the hook's catch-all holds the key during capture (no bind runs, the probe never gets it, the compositor saw it); after whykey exits the same key reaches the probe, so whykey must report the normal route (pass) and not mistake its own hold for a consumer",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"pgrep -f '[/]w/whykey listen' >/dev/null && echo during >> /tmp/fired || echo after >> /tmp/fired\"), { description = \"Lab fire\" })",
+      "hl.on(\"input.keyboard.key\", function(kc, ts, state) hl.dispatch(hl.dsp.exec_cmd(\"touch /tmp/reached\")) end)"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"sh": "rm -f /tmp/fired /tmp/reached; true"},
+    {"start_whykey": true},
+    {"sh": "rm -f /tmp/reached; true"},
+    {"qkbd": ["super+x"]},
+    {"wait_whykey": true},
+    {"mark_probe": true},
+    {"qkbd": ["super+x"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe",
+    "reached": {"file": "/tmp/reached"},
+    "restored": {"probe": "after_mark"}
+  },
+  "whykey": {
+    "args": ["listen", "--suppress", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Hyprland",
+    "suppress": "pass",
+    "detail": "--suppress held this key",
+    "combo": {"key": "X", "modifiers": 64},
+    "stderr": "temporary suppression",
+    "tty": true
+  }
+}

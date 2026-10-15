@@ -888,6 +888,45 @@ pub(crate) fn inventory(family: &Family) -> Result<Vec<BindingRecord>, String> {
         .collect())
 }
 
+/// Whether the running config binds `combo` with `--release` in the active
+/// mode. Sway's binding event carries no release flag, so capture asks this
+/// to label the event. `None` when the config cannot be read or no
+/// unconditional binding matches. A press binding wins over a release one for
+/// the same trigger, because the press event is the one that comes first.
+pub(crate) fn release_flag(family: &Family, combo: &KeyCombo) -> Option<bool> {
+    release_flag_in(&load(family).ok()?, combo)
+}
+
+fn release_flag_in(loaded: &LoadedConfig, combo: &KeyCombo) -> Option<bool> {
+    let mode = loaded.active_mode.as_deref().unwrap_or(DEFAULT_MODE);
+    let query_code = combo
+        .key()
+        .strip_prefix("CODE:")
+        .and_then(|value| value.parse::<u32>().ok());
+    let matches = loaded
+        .parsed
+        .bindings
+        .iter()
+        .filter(|binding| {
+            binding.mode == mode
+                && binding.condition().is_none()
+                && binding.mask == Some(combo.modmask())
+                && match (&binding.key, query_code) {
+                    (BindKey::Code(code), Some(query)) => *code == query,
+                    (BindKey::Sym(name), None) => name.eq_ignore_ascii_case(combo.key()),
+                    _ => false,
+                }
+        })
+        .collect::<Vec<_>>();
+    if matches.iter().any(|binding| !binding.release) {
+        Some(false)
+    } else if matches.is_empty() {
+        None
+    } else {
+        Some(true)
+    }
+}
+
 pub(crate) fn inspect(
     family: &Family,
     loaded: Result<LoadedConfig, String>,
@@ -1421,6 +1460,34 @@ bar {
         assert_eq!(i3.outcome, Outcome::Consumed);
         assert_eq!(i3.binding.and_then(|binding| binding.uncertainty), None);
         assert!(!i3.details.iter().any(|line| line.contains("not verified")));
+    }
+
+    #[test]
+    fn release_flag_follows_the_active_mode_and_the_trigger() {
+        const CONFIG: &str = r#"bindsym --release Print exec grim
+bindsym Mod4+t exec press
+bindsym --release Mod4+u exec release
+bindsym Mod4+p exec press
+bindsym --release Mod4+p exec release
+mode lab {
+    bindsym t exec in-lab
+    bindsym --release Mod4+x exec lab-release
+}
+"#;
+        let default = loaded(CONFIG, Some("default")).unwrap();
+        assert_eq!(release_flag_in(&default, &query("print")), Some(true));
+        assert_eq!(release_flag_in(&default, &query("super+t")), Some(false));
+        assert_eq!(release_flag_in(&default, &query("super+u")), Some(true));
+        // A press binding and a release binding on one trigger: the press
+        // event is the first one Sway sends, so the press wins.
+        assert_eq!(release_flag_in(&default, &query("super+p")), Some(false));
+        // `t` and `Mod4+x` exist only in the lab mode.
+        assert_eq!(release_flag_in(&default, &query("t")), None);
+        assert_eq!(release_flag_in(&default, &query("super+x")), None);
+        let lab = loaded(CONFIG, Some("lab")).unwrap();
+        assert_eq!(release_flag_in(&lab, &query("t")), Some(false));
+        assert_eq!(release_flag_in(&lab, &query("super+x")), Some(true));
+        assert_eq!(release_flag_in(&lab, &query("super+t")), None);
     }
 
     #[test]

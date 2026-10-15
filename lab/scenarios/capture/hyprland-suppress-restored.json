@@ -1,0 +1,36 @@
+{
+  "id": "hyprland-suppress-restored",
+  "description": "after listen --suppress reports and exits, the same Super+T runs the bind again and the submap is back to default; the bind wrote only `after`, so the press held during capture did not run it",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"pgrep -f '[/]w/whykey listen' >/dev/null && echo during >> /tmp/fired || echo after >> /tmp/fired\"), { description = \"Lab fire\" })",
+      "hl.on(\"input.keyboard.key\", function(kc, ts, state) hl.dispatch(hl.dsp.exec_cmd(\"touch /tmp/reached\")) end)"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"sh": "rm -f /tmp/fired /tmp/reached; true"},
+    {"start_whykey": true},
+    {"sh": "rm -f /tmp/reached; true"},
+    {"qkbd": ["super+t"]},
+    {"wait_whykey": true},
+    {"qkbd": ["super+t"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired", "equals": "after"},
+    "delivered": "probe",
+    "reached": {"file": "/tmp/reached"},
+    "restored": {"sh": "hyprctl submap | grep -qx default"}
+  },
+  "whykey": {
+    "args": ["listen", "--suppress", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Hyprland",
+    "combo": {"key": "T", "modifiers": 64},
+    "detail": "Lab fire",
+    "tty": true
+  }
+}

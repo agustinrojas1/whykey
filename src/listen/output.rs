@@ -218,6 +218,39 @@ pub(super) fn print_capture_explanation(
     ));
 }
 
+/// What the waiting message says the capture observes.
+pub(super) fn waiting_mode(
+    backend: &str,
+    policy: CapturePolicy,
+    physical_observation: bool,
+) -> &'static str {
+    if physical_observation {
+        "read-only physical observation; normal shortcut actions can still run"
+    } else if backend == CaptureBackendId::Window.display() {
+        "probe window observation; press the shortcut while the whykey probe window has focus; keys the desktop consumes never reach it"
+    } else if backend == CaptureBackendId::Terminal.display() {
+        "terminal observation; whykey reads the captured key, so its normal action does not run"
+    } else if policy == CapturePolicy::Suppress {
+        "temporary suppression; keys pressed while capture is armed are held from applications, and bound compositor actions do not run; universal bindings may still run"
+    } else if backend == crate::capture::NativeBackendId::Sway.display() {
+        // Sway IPC sends an event only when a binding runs: other keys are
+        // invisible to this backend, which would otherwise wait in silence.
+        "pass-through observation; Sway reports only keys that run a Sway binding, so other keys (Esc included) produce no report: use --window to see them"
+    } else {
+        "pass-through observation; normal shortcut actions can still run"
+    }
+}
+
+/// The keys the waiting message names as the exit. Esc reaches native Sway
+/// capture only when it is bound, so Ctrl+C is the exit there.
+pub(super) fn exit_keys(backend: &str) -> &'static str {
+    if backend == crate::capture::NativeBackendId::Sway.display() {
+        "Ctrl+C"
+    } else {
+        "Esc or Ctrl+C"
+    }
+}
+
 fn print_waiting_message(
     backend: &str,
     policy: CapturePolicy,
@@ -226,20 +259,11 @@ fn print_waiting_message(
     color: crate::style::ColorChoice,
     physical_observation: bool,
 ) {
-    let mode = if physical_observation {
-        "read-only physical observation; normal shortcut actions can still run"
-    } else if backend == CaptureBackendId::Window.display() {
-        "probe window observation; press the shortcut while the whykey probe window has focus; keys the desktop consumes never reach it"
-    } else if backend == CaptureBackendId::Terminal.display() {
-        "terminal observation; whykey reads the captured key, so its normal action does not run"
-    } else if policy == CapturePolicy::Suppress {
-        "temporary suppression; compositor actions are held where the hook can intercept them; universal bindings may still run"
-    } else {
-        "pass-through observation; normal shortcut actions can still run"
-    };
+    let mode = waiting_mode(backend, policy, physical_observation);
+    let exit_keys = exit_keys(backend);
     if json {
         eprintln!(
-            "whykey listen: capturing via {backend} ({mode}); Waiting for input. Esc or Ctrl+C exits"
+            "whykey listen: capturing via {backend} ({mode}); Waiting for input. {exit_keys} exits"
         );
         return;
     }
@@ -250,7 +274,7 @@ fn print_waiting_message(
         println!("  Repeat mode keeps each report in scrollback.");
     }
     println!("  Waiting for input.");
-    println!("  Press Esc or Ctrl+C to exit.");
+    println!("  Press {exit_keys} to exit.");
 }
 
 #[cfg(target_os = "linux")]
@@ -774,6 +798,10 @@ pub(super) fn inspect_with_session(
         }
     };
 
+    if observed.disposition == CaptureDisposition::Suppressed {
+        note_suppressed_hold(&mut results);
+    }
+
     if observed.source.proves_compositor_delivery() {
         confirm_window_delivery(&mut results);
         return results;
@@ -825,6 +853,24 @@ pub(super) fn inspect_with_session(
     }
 
     results
+}
+
+/// `--suppress` holds every key pressed while capture is armed, not only the
+/// bound ones: the hook's catch-all consumes whatever is pressed (the lab's
+/// `hyprland-suppress-unbound` scenario). That hold is the capture's own
+/// doing, so a Hyprland layer with no binding keeps its normal-route verdict
+/// (the key continues once whykey exits) and only gains a detail saying the
+/// application did not receive it this time.
+pub(super) fn note_suppressed_hold(results: &mut [LayerResult]) {
+    if let Some(result) = results.iter_mut().find(|result| {
+        result.id == LayerId::Compositor
+            && result.layer == "Hyprland"
+            && result.outcome == Outcome::Pass
+    }) {
+        result.details.push(
+            "--suppress held this key while capture was armed (Hyprland catch-all), so the application did not receive it this time; without whykey it continues as shown".into(),
+        );
+    }
 }
 
 /// The key reached whykey's focused probe window, so every layer that sits

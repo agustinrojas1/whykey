@@ -1,0 +1,18 @@
+{
+  "id": "sway-native-capture-unbound",
+  "description": "listen (Sway native capture) on a key with no Sway binding: the key reaches the probe, Sway sends no binding event, so whykey reports nothing and times out",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {"/root/.config/sway/config": ["bindsym Mod4+Return exec touch /tmp/other"]},
+  "probe": "wayland",
+  "actions": [{"start_whykey": true}, {"vkbd": ["super+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["listen", "--count", "1", "--timeout", "8"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "silent": true,
+    "stderr": "capture timed out",
+    "tty": true
+  }
+}

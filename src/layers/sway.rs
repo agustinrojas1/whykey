@@ -72,6 +72,12 @@ pub fn ipc_available() -> bool {
     super::tiling::version_available(&FAMILY)
 }
 
+/// Whether the running config binds `combo` with `--release`, or `None` when
+/// that cannot be told. Native capture uses it to label a binding event.
+pub(crate) fn release_flag(combo: &KeyCombo) -> Option<bool> {
+    super::tiling::release_flag(&FAMILY, combo)
+}
+
 /// Return Sway bindings, parsed from the running config, for the global
 /// listing.
 pub fn binding_inventory() -> Result<Vec<super::BindingRecord>, String> {
