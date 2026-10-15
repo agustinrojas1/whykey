@@ -19,16 +19,49 @@ const LAYER: &str = "GNOME";
 const MEDIA_KEYS_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys";
 const CUSTOM_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding";
 
+/// Well-known bus name of gnome-settings-daemon's media-keys plugin, which
+/// grabs the custom shortcuts. The lab's `gnome-shell` scenarios show that a
+/// configured custom shortcut is not grabbed while this name has no owner.
+const MEDIA_KEYS_OWNER: &str = "org.gnome.SettingsDaemon.MediaKeys";
+/// Bus name GNOME Shell owns; it grabs the `org.gnome.shell.keybindings` keys.
+const SHELL_OWNER: &str = "org.gnome.Shell";
+
+/// A keybinding schema, the component that grabs its keys, and the bus name
+/// that component owns while it runs (`None` for mutter, which is the
+/// compositor this layer only runs under).
+struct Source {
+    schema: &'static str,
+    component: &'static str,
+    owner: Option<&'static str>,
+}
+
 /// Keybinding schemas and the component that grabs their keys.
-const SCHEMAS: &[(&str, &str)] = &[
-    ("org.gnome.desktop.wm.keybindings", "mutter"),
-    ("org.gnome.mutter.keybindings", "mutter"),
-    (
-        "org.gnome.mutter.wayland.keybindings",
-        "mutter, Wayland sessions",
-    ),
-    ("org.gnome.shell.keybindings", "GNOME Shell"),
-    (MEDIA_KEYS_SCHEMA, "gnome-settings-daemon"),
+const SCHEMAS: &[Source] = &[
+    Source {
+        schema: "org.gnome.desktop.wm.keybindings",
+        component: "mutter",
+        owner: None,
+    },
+    Source {
+        schema: "org.gnome.mutter.keybindings",
+        component: "mutter",
+        owner: None,
+    },
+    Source {
+        schema: "org.gnome.mutter.wayland.keybindings",
+        component: "mutter, Wayland sessions",
+        owner: None,
+    },
+    Source {
+        schema: "org.gnome.shell.keybindings",
+        component: "GNOME Shell",
+        owner: Some(SHELL_OWNER),
+    },
+    Source {
+        schema: MEDIA_KEYS_SCHEMA,
+        component: "gnome-settings-daemon",
+        owner: Some(MEDIA_KEYS_OWNER),
+    },
 ];
 
 /// XKB keycode of the key above Tab (`TLDE`) on evdev keyboards; mutter
@@ -61,9 +94,9 @@ pub fn ipc_available() -> bool {
 /// Whether GSettings serves the session's keybindings; the error explains
 /// why not.
 pub(crate) fn runtime_reachable() -> Result<(), String> {
-    match list_recursively(SCHEMAS[0].0) {
+    match list_recursively(SCHEMAS[0].schema) {
         Ok(_) => Ok(()),
-        Err(ListError::NoSchema) => Err(format!("schema {} is not installed", SCHEMAS[0].0)),
+        Err(ListError::NoSchema) => Err(format!("schema {} is not installed", SCHEMAS[0].schema)),
         Err(ListError::Failed(error)) => Err(error),
     }
 }
@@ -91,7 +124,7 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
 
 impl Gnome {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
-        inspect(load(), key)
+        inspect(load(), key, owner_running)
     }
 }
 
@@ -102,6 +135,8 @@ struct Binding {
     accelerator: String,
     schema: String,
     component: &'static str,
+    /// Bus name whose owner grabs this key, when the component is a daemon.
+    owner: Option<&'static str>,
     action: String,
     command: Option<String>,
 }
@@ -114,7 +149,11 @@ struct Loaded {
     notes: Vec<String>,
 }
 
-fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
+fn inspect(
+    loaded: Result<Loaded, String>,
+    key: &KeyCombo,
+    owner_running: impl Fn(&str) -> Result<bool, String>,
+) -> LayerResult {
     let loaded = match loaded {
         Ok(loaded) => loaded,
         Err(error) => {
@@ -134,7 +173,7 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
         .iter()
         .filter(|binding| binding.combo == *key)
         .collect::<Vec<_>>();
-    let Some(first) = matches.first() else {
+    if matches.is_empty() {
         details.extend(loaded.notes);
         return LayerResult::pass(
             LAYER,
@@ -143,10 +182,39 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
             details,
         )
         .with_tier(EvidenceTier::LiveQuery);
-    };
+    }
+    // A daemon-owned binding grabs the key only while its daemon owns its bus
+    // name; a configured shortcut whose daemon is not running does nothing.
+    let mut grabbed = Vec::new();
+    let mut idle_owners = Vec::new();
     for binding in &matches {
+        let Some(owner) = binding.owner else {
+            grabbed.push(*binding);
+            continue;
+        };
+        match owner_running(owner) {
+            Ok(true) => grabbed.push(*binding),
+            Ok(false) => {
+                if !idle_owners.contains(&owner) {
+                    idle_owners.push(owner);
+                }
+            }
+            Err(error) => {
+                details.push(format!(
+                    "could not check whether {owner} runs ({error}); assuming it grabs the key"
+                ));
+                grabbed.push(*binding);
+            }
+        }
+    }
+    for binding in &matches {
+        let idle = binding
+            .owner
+            .filter(|owner| idle_owners.contains(owner))
+            .map(|owner| format!(" — {owner} is not running, so nothing grabs this key"))
+            .unwrap_or_default();
         details.push(format!(
-            "binding: {} {} = '{}' ({}){}",
+            "binding: {} {} = '{}' ({}){}{}",
             binding.schema,
             binding.action,
             binding.accelerator,
@@ -155,7 +223,8 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
                 .command
                 .as_deref()
                 .map(|command| format!(" — command: {command}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            idle
         ));
         if binding.accelerator.contains("Above_Tab") {
             details.push(
@@ -163,6 +232,16 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
             );
         }
     }
+    let Some(first) = grabbed.first() else {
+        details.extend(loaded.notes);
+        return LayerResult::pass(
+            LAYER,
+            LayerId::Compositor,
+            "GNOME shortcut is configured but its daemon is not running",
+            details,
+        )
+        .with_tier(EvidenceTier::LiveQuery);
+    };
     details.push(
         "not active while the focused window holds a keyboard-shortcuts inhibitor that the user allowed"
             .into(),
@@ -192,11 +271,42 @@ fn inspect(loaded: Result<Loaded, String>, key: &KeyCombo) -> LayerResult {
     .with_tier(EvidenceTier::LiveQuery)
 }
 
+/// Whether a bus name has an owner on the session bus.
+fn owner_running(name: &str) -> Result<bool, String> {
+    let mut gdbus = Command::new("gdbus");
+    gdbus.args([
+        "call",
+        "--session",
+        "--dest",
+        "org.freedesktop.DBus",
+        "--object-path",
+        "/org/freedesktop/DBus",
+        "--method",
+        "org.freedesktop.DBus.NameHasOwner",
+        name,
+    ]);
+    let output = command::output(&mut gdbus).map_err(|error| format!("gdbus: {error}"))?;
+    if !output.status.success() {
+        return Err(super::gsettings::command_error(
+            "gdbus",
+            output.status,
+            &output.stderr,
+        ));
+    }
+    let reply = String::from_utf8_lossy(&output.stdout);
+    match reply.trim() {
+        "(true,)" => Ok(true),
+        "(false,)" => Ok(false),
+        other => Err(format!("unexpected NameHasOwner reply: {other}")),
+    }
+}
+
 fn load() -> Result<Loaded, String> {
     let mut loaded = Loaded::default();
     let mut custom_paths = Vec::new();
     let mut read_any = false;
-    for (schema, component) in SCHEMAS {
+    for source in SCHEMAS {
+        let (schema, component, owner) = (source.schema, source.component, source.owner);
         let output = match list_recursively(schema) {
             Ok(output) => output,
             Err(ListError::NoSchema) => {
@@ -209,7 +319,7 @@ fn load() -> Result<Loaded, String> {
         };
         read_any = true;
         for (key, value) in schema_entries(&output, schema) {
-            if *schema == MEDIA_KEYS_SCHEMA && key == "custom-keybindings" {
+            if schema == MEDIA_KEYS_SCHEMA && key == "custom-keybindings" {
                 custom_paths.extend(
                     string_values(value)
                         .into_iter()
@@ -223,6 +333,7 @@ fn load() -> Result<Loaded, String> {
                     accelerator,
                     schema.to_string(),
                     component,
+                    owner,
                     key.to_owned(),
                     None,
                 );
@@ -262,6 +373,7 @@ fn load() -> Result<Loaded, String> {
                 binding,
                 schema,
                 "gnome-settings-daemon custom shortcut",
+                Some(MEDIA_KEYS_OWNER),
                 name.unwrap_or_else(|| "custom shortcut".into()),
                 command,
             );
@@ -275,6 +387,7 @@ fn push_accelerator(
     accelerator: String,
     schema: String,
     component: &'static str,
+    owner: Option<&'static str>,
     action: String,
     command: Option<String>,
 ) {
@@ -294,6 +407,7 @@ fn push_accelerator(
             accelerator: accelerator.clone(),
             schema: schema.clone(),
             component,
+            owner,
             action: action.clone(),
             command: command.clone(),
         });
@@ -504,23 +618,27 @@ mod tests {
                     accelerator,
                     "org.gnome.desktop.wm.keybindings".into(),
                     "mutter",
+                    None,
                     key.into(),
                     None,
                 );
             }
         }
-        let hit = inspect(Ok(loaded), &"super+q".parse().unwrap());
+        let hit = inspect(Ok(loaded), &"super+q".parse().unwrap(), |_| Ok(true));
         assert_eq!(hit.outcome, Outcome::Consumed);
         assert!(
             hit.details
                 .iter()
                 .any(|line| line.contains("close = '<Super>q'"))
         );
-        let miss = inspect(Ok(Loaded::default()), &"super+q".parse().unwrap());
+        let miss = inspect(Ok(Loaded::default()), &"super+q".parse().unwrap(), |_| {
+            Ok(true)
+        });
         assert_eq!(miss.outcome, Outcome::Pass);
         let unavailable = inspect(
             Err("gsettings: not found".into()),
             &"super+q".parse().unwrap(),
+            |_| Ok(true),
         );
         assert_eq!(unavailable.outcome, Outcome::Unavailable);
         // Live GSettings answers both ways; an unreachable store answers
@@ -528,5 +646,87 @@ mod tests {
         assert_eq!(hit.tier, Some(EvidenceTier::LiveQuery));
         assert_eq!(miss.tier, Some(EvidenceTier::LiveQuery));
         assert_eq!(unavailable.tier, None);
+    }
+    /// Loaded bindings for one schema entry owned by `owner`.
+    fn owned(
+        schema: &str,
+        owner: Option<&'static str>,
+        component: &'static str,
+        accelerator: &str,
+        action: &str,
+    ) -> Loaded {
+        let mut loaded = Loaded::default();
+        push_accelerator(
+            &mut loaded,
+            accelerator.into(),
+            schema.into(),
+            component,
+            owner,
+            action.into(),
+            Some("touch /tmp/fired".into()),
+        );
+        loaded
+    }
+
+    #[test]
+    fn custom_shortcut_is_not_grabbed_while_its_daemon_is_down() {
+        let key = "super+t".parse().unwrap();
+        let loaded = || {
+            owned(
+                "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/custom0/",
+                Some(MEDIA_KEYS_OWNER),
+                "gnome-settings-daemon custom shortcut",
+                "<Super>t",
+                "Lab fire",
+            )
+        };
+        // Owner absent: nothing grabs the key, so the key goes on.
+        let idle = inspect(Ok(loaded()), &key, |name| {
+            assert_eq!(name, MEDIA_KEYS_OWNER);
+            Ok(false)
+        });
+        assert_eq!(idle.outcome, Outcome::Pass);
+        assert_eq!(
+            idle.summary,
+            "GNOME shortcut is configured but its daemon is not running"
+        );
+        assert!(
+            idle.details
+                .iter()
+                .any(|line| line.contains("org.gnome.SettingsDaemon.MediaKeys is not running"))
+        );
+        // Owner present: the shortcut consumes the key as before.
+        let running = inspect(Ok(loaded()), &key, |_| Ok(true));
+        assert_eq!(running.outcome, Outcome::Consumed);
+        // The owner cannot be asked: keep the configured verdict, say so.
+        let unknown = inspect(Ok(loaded()), &key, |_| Err("gdbus: not found".into()));
+        assert_eq!(unknown.outcome, Outcome::Consumed);
+        assert!(unknown.details.iter().any(|line| {
+            line.contains("could not check whether org.gnome.SettingsDaemon.MediaKeys runs")
+        }));
+    }
+
+    #[test]
+    fn shell_binding_is_not_grabbed_without_gnome_shell() {
+        let key = "super+q".parse().unwrap();
+        let shell = owned(
+            "org.gnome.shell.keybindings",
+            Some(SHELL_OWNER),
+            "GNOME Shell",
+            "<Super>q",
+            "toggle-overview",
+        );
+        let idle = inspect(Ok(shell), &key, |_| Ok(false));
+        assert_eq!(idle.outcome, Outcome::Pass);
+        // mutter owns its own bindings whatever the shell's state.
+        let mutter = owned(
+            "org.gnome.desktop.wm.keybindings",
+            None,
+            "mutter",
+            "<Super>q",
+            "close",
+        );
+        let kept = inspect(Ok(mutter), &key, |_| Ok(false));
+        assert_eq!(kept.outcome, Outcome::Consumed);
     }
 }

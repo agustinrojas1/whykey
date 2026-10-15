@@ -1,0 +1,2 @@
+# KWin 6.7 (kwin_wayland with its in-process global shortcuts); pulls Plasma's KF6 libraries.
+kwin
