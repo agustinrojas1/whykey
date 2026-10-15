@@ -1626,10 +1626,10 @@ xkb_symbols "pc" {
     }
 
     #[test]
-    fn suppressed_hook_holds_a_key_that_no_binding_matched() {
-        // The Hyprland catch-all holds every key while armed, so a key with no
-        // binding is consumed by the hook, not passed on, and the layers below
-        // the compositor never see it.
+    fn suppressed_hold_keeps_the_normal_route_of_an_unbound_key() {
+        // The Hyprland catch-all holds every key while armed, but that hold is
+        // whykey's own: an unbound key keeps its pass verdict and the layers
+        // below, and only gains a detail about the hold.
         let mut results = vec![
             LayerResult::new(
                 "Hyprland",
@@ -1646,31 +1646,26 @@ xkb_symbols "pc" {
                 vec![],
             ),
         ];
-        super::output::confirm_suppressed_withheld(&mut results);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].outcome, Outcome::Consumed);
-        assert!(results[0].summary.contains("held the key"));
+        super::output::note_suppressed_hold(&mut results);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].outcome, Outcome::Pass);
+        assert!(
+            results[0]
+                .details
+                .iter()
+                .any(|detail| detail.contains("--suppress held"))
+        );
 
-        // A bound key is already consumed by its binding and is left alone.
-        let mut bound = vec![
-            LayerResult::new(
-                "Hyprland",
-                LayerId::Compositor,
-                Outcome::Consumed,
-                "active binding found",
-                vec![],
-            ),
-            LayerResult::new(
-                "Ghostty",
-                LayerId::Terminal,
-                Outcome::Pass,
-                "not applicable to the current terminal",
-                vec![],
-            ),
-        ];
-        super::output::confirm_suppressed_withheld(&mut bound);
-        assert_eq!(bound.len(), 2);
-        assert_eq!(bound[0].summary, "active binding found");
+        // A bound key is consumed by its binding and is left alone.
+        let mut bound = vec![LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "active binding found",
+            vec![],
+        )];
+        super::output::note_suppressed_hold(&mut bound);
+        assert!(bound[0].details.is_empty());
     }
 
     #[test]

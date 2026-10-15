@@ -1,6 +1,6 @@
 {
   "id": "hyprland-suppress-unbound",
-  "description": "listen --suppress on the VM kernel keyboard with an unbound Super+X: the hook's catch-all holds the key (no bind runs, the probe never gets it, the compositor saw it), so whykey must report it as consumed by the held capture rather than passed on",
+  "description": "listen --suppress on the VM kernel keyboard with an unbound Super+X: the hook's catch-all holds the key during capture (no bind runs, the probe never gets it, the compositor saw it); after whykey exits the same key reaches the probe, so whykey must report the normal route (pass) and not mistake its own hold for a consumer",
   "tier": "observed",
   "environment": "hyprland",
   "files": {
@@ -15,20 +15,23 @@
     {"start_whykey": true},
     {"sh": "rm -f /tmp/reached; true"},
     {"qkbd": ["super+x"]},
-    {"wait_whykey": true}
+    {"wait_whykey": true},
+    {"mark_probe": true},
+    {"qkbd": ["super+x"]}
   ],
   "ground_truth": {
     "fired": {"file": "/tmp/fired"},
     "delivered": "probe",
     "reached": {"file": "/tmp/reached"},
-    "restored": {"sh": "hyprctl submap | grep -qx default"}
+    "restored": {"probe": "after_mark"}
   },
   "whykey": {
     "args": ["listen", "--suppress", "--count", "1", "--timeout", "15"],
     "run": "background",
     "ready": {"stderr": "Waiting for input"},
     "layer": "Hyprland",
-    "suppress": true,
+    "suppress": "pass",
+    "detail": "--suppress held this key",
     "combo": {"key": "X", "modifiers": 64},
     "stderr": "temporary suppression",
     "tty": true

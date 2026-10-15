@@ -799,8 +799,7 @@ pub(super) fn inspect_with_session(
     };
 
     if observed.disposition == CaptureDisposition::Suppressed {
-        confirm_suppressed_withheld(&mut results);
-        return results;
+        note_suppressed_hold(&mut results);
     }
 
     if observed.source.proves_compositor_delivery() {
@@ -856,27 +855,22 @@ pub(super) fn inspect_with_session(
     results
 }
 
-/// `--suppress` holds every key the capture hook does not match, not only
-/// the bound ones: the hook's catch-all consumes whatever is pressed while it
-/// is armed (the lab's `hyprland-suppress-unbound` scenario). So a Hyprland
-/// layer with no binding does not "pass" the key on: the hook stopped it.
-/// The layers below the compositor never saw it and are dropped.
-pub(super) fn confirm_suppressed_withheld(results: &mut Vec<LayerResult>) {
-    let Some(index) = results.iter().position(|result| {
+/// `--suppress` holds every key pressed while capture is armed, not only the
+/// bound ones: the hook's catch-all consumes whatever is pressed (the lab's
+/// `hyprland-suppress-unbound` scenario). That hold is the capture's own
+/// doing, so a Hyprland layer with no binding keeps its normal-route verdict
+/// (the key continues once whykey exits) and only gains a detail saying the
+/// application did not receive it this time.
+pub(super) fn note_suppressed_hold(results: &mut [LayerResult]) {
+    if let Some(result) = results.iter_mut().find(|result| {
         result.id == LayerId::Compositor
             && result.layer == "Hyprland"
             && result.outcome == Outcome::Pass
-    }) else {
-        return;
-    };
-    let result = &mut results[index];
-    result.outcome = Outcome::Consumed;
-    result.summary =
-        "no binding matched; the --suppress capture held the key from the application".into();
-    result.details.push(
-        "--suppress holds every key pressed while capture is armed (Hyprland catch-all); nothing past the compositor received it".into(),
-    );
-    results.truncate(index + 1);
+    }) {
+        result.details.push(
+            "--suppress held this key while capture was armed (Hyprland catch-all), so the application did not receive it this time; without whykey it continues as shown".into(),
+        );
+    }
 }
 
 /// The key reached whykey's focused probe window, so every layer that sits

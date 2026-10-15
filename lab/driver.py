@@ -92,6 +92,10 @@ class Lab:
         self.probe: str | None = None
         self.steps: list[str] = []
         self.settle = INPUT_SETTLE
+        # Probe keys seen at a {"mark_probe": true} action: "delivered": "probe"
+        # then counts only keys before the mark, and the {"probe": "after_mark"}
+        # check only keys after it.
+        self.probe_mark: int | None = None
 
     # -- process helpers -------------------------------------------------
     def spawn(self, name: str, argv: list[str], env: dict | None = None) -> subprocess.Popen:
@@ -270,6 +274,10 @@ class Lab:
         if "start_whykey" in action:
             self.start_whykey_background()
             return
+        if "mark_probe" in action:
+            self.probe_mark = len(self.probe_keys())
+            self.steps.append(f"probe marked after {self.probe_mark} key(s)")
+            return
         if "wait_whykey" in action:
             # The background whykey ends by its own --count/--timeout (or a
             # cancel key); keys sent after this one go to the restored session.
@@ -324,6 +332,11 @@ class Lab:
         if spec.get("probe") == "any":
             events = self.probe_events()
             return bool(events), f"{self.probe} probe received key events {events or 'none'}"
+        if spec.get("probe") == "after_mark":
+            if self.probe_mark is None:
+                raise LabError('{"probe": "after_mark"} needs a {"mark_probe": true} action')
+            keys = self.probe_keys()[self.probe_mark:]
+            return bool(keys), f"{self.probe} probe received {keys or 'no key'} after the mark"
         checks = getattr(self.plugin, "CHECKS", {})
         for key in spec:
             if key in checks:
@@ -338,6 +351,8 @@ class Lab:
         delivered_spec = truth_spec.get("delivered")
         if delivered_spec == "probe":
             keys = self.probe_keys()
+            if self.probe_mark is not None:
+                keys = keys[:self.probe_mark]
             truth["delivered"] = bool(keys)
             truth["delivered_evidence"] = f"{self.probe} probe received {keys or 'no key'}"
         elif isinstance(delivered_spec, dict):

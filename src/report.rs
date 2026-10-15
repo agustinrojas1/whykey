@@ -554,16 +554,16 @@ fn render_inner(
     output
 }
 
-const WITHHELD_TEXT: &str = "No binding matched. --suppress held the key while it was captured, so the application did not receive it.";
+const HELD_UNBOUND_TEXT: &str = "No compositor binding matched, so normally the key continues as shown below. --suppress held it during this capture, so the application did not receive it this time.";
 
-/// The compositor layer is the `--suppress` hook's own catch-all: it handled
-/// a key that no binding matched (see `listen::output::confirm_suppressed_withheld`).
-fn suppressed_withheld(layers: &[LayerResult]) -> bool {
-    layers.iter().any(|layer| {
-        layer.id == LayerId::Compositor
-            && layer.status() == LayerStatus::Handled
-            && layer.binding.is_none()
-    })
+/// Under `--suppress` the hook's catch-all holds every key, but a compositor
+/// layer that passes still describes the normal route (see
+/// `listen::output::note_suppressed_hold`).
+fn suppressed_unbound(layers: &[LayerResult]) -> bool {
+    layers
+        .iter()
+        .find(|layer| layer.id == LayerId::Compositor)
+        .is_some_and(|layer| layer.outcome == Outcome::Pass)
 }
 
 fn diagnosis_text(
@@ -583,8 +583,8 @@ fn diagnosis_text(
             observation.disposition,
             crate::listen::CaptureDisposition::Suppressed
         ) {
-            if suppressed_withheld(layers) {
-                return WITHHELD_TEXT.into();
+            if suppressed_unbound(layers) {
+                return HELD_UNBOUND_TEXT.into();
             }
             if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Compositor) {
                 if layer
@@ -720,9 +720,6 @@ fn diagnosis_text(
         Conclusion::EndpointUnbound { layer, .. } => format!(
             "{layer} reads the key last and has no binding for it; nothing downstream receives it."
         ),
-        Conclusion::SuppressedHandled {
-            handled: SuppressedHandledOutcome::Withheld { .. },
-        } => WITHHELD_TEXT.into(),
         Conclusion::SuppressedHandled { .. } => {
             "A matching compositor binding was captured for inspection; its runtime effect is configuration-only.".into()
         }
@@ -784,8 +781,8 @@ fn effect_text(
     if let Some(observation) = observation {
         match observation.disposition {
             crate::listen::CaptureDisposition::Suppressed => {
-                if suppressed_withheld(layers) {
-                    return "Whykey held the key while --suppress captured it: no binding ran, and the application did not receive the key.".into();
+                if suppressed_unbound(layers) {
+                    return "Whykey held the key while --suppress captured it, so the application did not receive it this time; the layers below show where it goes without whykey.".into();
                 }
                 return "Whykey temporarily intercepted the compositor event to inspect its configuration. That does not prove the configured action ran.".into();
             }
@@ -1759,11 +1756,6 @@ pub enum ApplicationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuppressedHandledOutcome {
-    /// No binding matched: the capture hook held the key from the
-    /// application while it was captured.
-    Withheld {
-        layer: &'static str,
-    },
     IndeterminatePropagation {
         action: Option<String>,
     },
@@ -1823,11 +1815,7 @@ pub fn evaluate_conclusion(
                             .or_else(|| binding.action.clone())
                     });
                     let opaque = evidence.is_some_and(BindingEvidence::is_opaque);
-                    let handled = if evidence.is_none() {
-                        // The hook held a key no binding matched (see
-                        // `listen::output::confirm_suppressed_withheld`).
-                        SuppressedHandledOutcome::Withheld { layer: layer.layer }
-                    } else if layer.propagation() == Propagation::Indeterminate {
+                    let handled = if layer.propagation() == Propagation::Indeterminate {
                         SuppressedHandledOutcome::IndeterminatePropagation { action }
                     } else if universal_match {
                         SuppressedHandledOutcome::Universal {
@@ -2682,9 +2670,9 @@ mod tests {
     }
 
     #[test]
-    fn suppressed_key_without_a_binding_is_reported_as_withheld() {
-        // Before, the catch-all hold was reported as "no binding; the key
-        // can continue", which is false: the key never reached the client.
+    fn suppressed_key_without_a_binding_keeps_its_route_and_names_the_hold() {
+        // The catch-all held the key during capture, but without whykey it
+        // continues: the report says both.
         let key: KeyCombo = "super+x".parse().unwrap();
         let observed = ObservedKey {
             combo: key.clone(),
@@ -2706,8 +2694,8 @@ mod tests {
         let layers = [LayerResult::new(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Consumed,
-            "no binding matched; the --suppress capture held the key from the application",
+            Outcome::Pass,
+            "no active binding found",
             vec![],
         )];
 
@@ -2716,12 +2704,11 @@ mod tests {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(output.contains("No binding matched. --suppress held the key"));
-        assert!(output.contains("the application did not receive"));
+        assert!(output.contains("normally the key continues"), "{output}");
+        assert!(output.contains("--suppress held it during this capture"));
         assert!(!output.contains("temporarily intercepted"));
-        assert!(!output.contains("can continue"));
         assert!(!output.contains("configured to consume"));
-        assert!(!output.contains("matching binding"));
+        assert!(output.contains("No matching binding"));
     }
 
     #[test]

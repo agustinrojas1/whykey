@@ -26,7 +26,7 @@
     "run": "background",
     "ready": {"stderr": "Waiting for input"},
     "layer": "Hyprland",
-    "suppress": true,
+    "suppress": "consumed",
     "combo": {"key": "T", "modifiers": 64},
     "detail": "Lab fire",
     "stderr": "temporary suppression",

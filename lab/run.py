@@ -37,6 +37,10 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   {"sh": "cmd"}  {"sleep": seconds}  {"wait_quiet": seconds}
                   {"start_whykey": true}  start a "run": "background" whykey
                   here instead of before the first action
+                  {"wait_whykey": true}  wait for the background whykey to
+                  exit; later keys go to the restored session
+                  {"mark_probe": true}  "delivered": "probe" counts only the
+                  keys the probe received before this point
                   {key: ...} for a key in the environment's ACTIONS
                   ("type" accepts \\xNN, \\e, \\r escapes; optional "settle")
     ground_truth  {"fired": CHECK, "delivered": "probe" | CHECK,
@@ -45,6 +49,8 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                         | {"sh": "cmd"} (exit 0 = true)
                         | {"probe": "any"} (the probe received any key
                           press, modifiers included)
+                        | {"probe": "after_mark"} (the probe received a
+                          non-modifier key after the mark_probe action)
                         | {key: ...} for a key in the environment's CHECKS
                   "fired": did the layer under test act on the key.
                   "delivered": did the key continue past it ("probe": the
@@ -68,10 +74,13 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   is no report at all: whykey exits non-zero with the "stderr"
                   text (its capture timed out). Needs an unfired ground truth
                   that still reached the session, so the key is not lost.
-                  "suppress": the key was held by `listen --suppress`: the
-                  bind must not have run (ground truth fired false) and the
-                  key must not have reached the client; whykey must name the
-                  binding that consumes it ("consumed").
+                  "suppress": "consumed" | "pass": the key was held by
+                  `listen --suppress` (fired false, not delivered, reached),
+                  and whykey must report this normal-route verdict, which
+                  the hold does not change. "pass" also needs a "restored"
+                  check proving the key reaches the client after whykey
+                  exits; "consumed" is backed by the same bind firing after
+                  exit (hyprland-suppress-restored).
                   ground_truth "restored" (optional CHECK, evaluated after a
                   `wait_whykey` action) must hold: e.g. the compositor submap
                   is back to its original state.
@@ -213,15 +222,22 @@ def expected_verdicts(truth: dict) -> tuple[str, set[str]]:
     raise PositiveControlFailed("the key neither fired nor was delivered past the layer")
 
 
-def suppressed_verdicts(truth: dict) -> tuple[str, set[str]]:
+def suppressed_verdicts(truth: dict, expected: str) -> tuple[str, set[str]]:
     """`whykey.suppress`: the capture held the key (`listen --suppress`). The
-    bind must not have run and the key must not have reached the client; the
-    verdict is then "consumed", the binding whykey would have run. A bind that
-    ran anyway is a mismatch, never a tolerated uncertainty."""
+    bind must not have run and the key must not have reached the client;
+    whykey must then report the normal route the scenario declares
+    (`expected`), because the hold is whykey's own doing. "pass" is only
+    earned when a "restored" check shows the key reaching the client after
+    whykey exits. A bind that ran anyway is a mismatch, never a tolerated
+    uncertainty."""
+    if expected not in ("consumed", "pass"):
+        raise ValueError(f'whykey.suppress must be "consumed" or "pass", not {expected!r}')
     if truth["fired"]:
         return "bind ran despite suppression", set()
+    if expected == "pass" and truth.get("restored") is None:
+        raise PositiveControlFailed('suppress "pass" needs a "restored" check after whykey exits')
     if truth["delivered"] is False and truth.get("reached"):
-        return "held by suppression", {"consumed"}
+        return f"held by suppression; normally {expected}", {expected}
     return expected_verdicts(truth)
 
 
@@ -410,7 +426,7 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         else:
             label, accepted = expected_verdicts(truth)
             if scenario["whykey"].get("suppress"):
-                label, accepted = suppressed_verdicts(truth)
+                label, accepted = suppressed_verdicts(truth, scenario["whykey"]["suppress"])
     except PositiveControlFailed as failure:
         record.update(ground_truth={"label": "no positive control", **truth}, expected=None, whykey_verdict="lab-error")
         record["pass"] = False
