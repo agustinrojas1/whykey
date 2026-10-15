@@ -345,28 +345,46 @@ pub fn render_text_with_options(
     all: bool,
     options: RenderOptions,
 ) -> String {
-    let mut output = format!("{}\n\n", options.accent("whykey capabilities"));
-    for capability in capabilities
+    let shown: Vec<&Capability> = capabilities
         .iter()
         .filter(|capability| all || capability.availability == "available")
-    {
-        let marker = if !capability.implemented {
-            options.muted("PLANNED")
+        .collect();
+    let width = shown
+        .iter()
+        .map(|capability| capability.id.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut output = format!("{}\n", options.bold("whykey capabilities"));
+    let mut counts = [0usize; 3];
+    for capability in shown {
+        let (word, index) = if !capability.implemented {
+            (options.off("planned"), 2)
         } else if capability.availability == "available" {
-            options.success("AVAILABLE")
+            (options.pass("available"), 0)
         } else {
-            options.uncertain("UNAVAILABLE")
+            (options.stop("unavailable"), 1)
         };
+        counts[index] += 1;
         output.push_str(&format!(
-            "{marker} {} [{}; {}]\n",
-            capability.id, capability.area, capability.availability
+            "\n  {}  {}{}\n",
+            options.accent(&capability.id),
+            " ".repeat(width - capability.id.chars().count()),
+            word
         ));
-        for line in crate::style::wrap_hanging(&capability.evidence, options.width, "  ", "  ") {
-            output.push_str(&line);
+        for line in crate::style::wrap_hanging(&capability.evidence, options.width, "    ", "    ")
+        {
+            output.push_str(&options.muted(line));
             output.push('\n');
         }
     }
-    output
+    output.push_str(&format!(
+        "\n{}  {} available, {} unavailable, {} planned\n",
+        options.bold("Summary"),
+        counts[0],
+        counts[1],
+        counts[2]
+    ));
+    options.fold(output)
 }
 
 pub fn render_json(capabilities: &[Capability], schema_version: u8) -> String {
@@ -567,6 +585,28 @@ mod tests {
 
         assert_eq!(value["schema_version"], 1);
         assert!(value["capabilities"].is_array());
+    }
+
+    #[test]
+    fn text_names_each_status_once() {
+        let capability = |id: &str, implemented, availability| Capability {
+            id: id.into(),
+            area: "cli",
+            implemented,
+            availability,
+            evidence: format!("{id} evidence"),
+        };
+        let output = render_text_with_options(
+            &[
+                capability("cli.one", true, "available"),
+                capability("desktop.two", true, "unavailable"),
+                capability("future.three", false, "unavailable"),
+            ],
+            true,
+            RenderOptions::plain(false),
+        );
+        crate::style::assert_golden("capabilities_text_names_each_status_once", &output);
+        assert!(!output.contains('['));
     }
 
     #[test]

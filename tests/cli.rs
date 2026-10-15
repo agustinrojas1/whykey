@@ -896,11 +896,11 @@ fn doctor_lists_observation_taps_and_layer_sources() {
 
     let human = binary().arg("doctor").output().unwrap();
     let stdout = String::from_utf8_lossy(&human.stdout);
-    assert!(stdout.contains("Observation taps (what whykey can watch now)"));
-    assert!(
-        stdout.contains("FAIL probe window: no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY")
-    );
-    assert!(stdout.contains("Layer sources (live query, config file, or none)"));
+    assert!(stdout.contains("\nCapture\n"));
+    assert!(stdout.contains("probe window"));
+    assert!(stdout.contains("no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY"));
+    assert!(stdout.contains("Where each layer's answer comes from"));
+    assert!(stdout.contains("\nSummary  "));
 }
 
 #[test]

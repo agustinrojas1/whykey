@@ -61,6 +61,30 @@ impl Mark {
     }
 }
 
+/// The state of one `doctor` or `capabilities` row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    Ok,
+    Fail,
+    /// Not applicable in this session.
+    Skip,
+    Unknown,
+}
+
+impl Check {
+    pub const fn glyph(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (Self::Ok, false) => "\u{2713}",
+            (Self::Ok, true) => "+",
+            (Self::Fail, false) => "\u{2717}",
+            (Self::Fail, true) => "x",
+            (Self::Skip, false) => "\u{2013}",
+            (Self::Skip, true) => "-",
+            (Self::Unknown, _) => "?",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ColorChoice {
     #[default]
@@ -215,6 +239,17 @@ impl RenderOptions {
             Mark::Remap => self.remap(glyph),
             Mark::Unsure => self.unsure(glyph),
             Mark::Off => self.off(glyph),
+        }
+    }
+
+    /// The colored glyph of a doctor row state.
+    pub fn check(self, check: Check) -> String {
+        let glyph = check.glyph(self.ascii);
+        match check {
+            Check::Ok => self.pass(glyph),
+            Check::Fail => self.stop(glyph),
+            Check::Skip => self.off(glyph),
+            Check::Unknown => self.unsure(glyph),
         }
     }
 

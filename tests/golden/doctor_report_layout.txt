@@ -1,0 +1,18 @@
+whykey doctor                                          Hyprland - Wayland - bash
+
+Capture
+  +  Hyprland native capture
+  x  controlling TTY          run whykey inside a terminal
+  x  evdev keyboards          no read access to 2 devices
+       fix  sudo setfacl -m u:"$USER":r '/dev/input/event2'
+       undo sudo setfacl -x u:"$USER" '/dev/input/event2'
+       /dev/input/event2 - kbd (Permission denied)
+
+Live readers
+  -  kglobalaccel             not running
+  ?  portal                   malformed answer
+
+Layer sources
+     shell                    config file - bash
+
+Summary  1 ok | 2 unavailable | 1 unknown | 1 not applicable

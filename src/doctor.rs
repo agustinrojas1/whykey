@@ -124,6 +124,14 @@ impl EvdevScan {
 /// Device nodes live on devtmpfs, so the ACL disappears when the device is
 /// replugged or the system reboots. `None` when no keyboard is unreadable.
 pub fn evdev_acl_command(devices: &[crate::listen::EvdevDeviceInfo]) -> Option<String> {
+    let (grant, undo) = evdev_acl_commands(devices)?;
+    Some(format!(
+        "for temporary read access to the detected keyboards run `{grant}`; the grant is lost when the device is replugged or the system reboots (undo it sooner with `{undo}`)"
+    ))
+}
+
+/// The grant and its undo as two runnable commands, for human output.
+pub fn evdev_acl_commands(devices: &[crate::listen::EvdevDeviceInfo]) -> Option<(String, String)> {
     let nodes = devices
         .iter()
         .filter(|device| device.keyboard == Some(true) && !device.readable)
@@ -133,8 +141,9 @@ pub fn evdev_acl_command(devices: &[crate::listen::EvdevDeviceInfo]) -> Option<S
         return None;
     }
     let nodes = nodes.join(" ");
-    Some(format!(
-        "for temporary read access to the detected keyboards run `sudo setfacl -m u:\"$USER\":r {nodes}`; the grant is lost when the device is replugged or the system reboots (undo it sooner with `sudo setfacl -x u:\"$USER\" {nodes}`)"
+    Some((
+        format!("sudo setfacl -m u:\"$USER\":r {nodes}"),
+        format!("sudo setfacl -x u:\"$USER\" {nodes}"),
     ))
 }
 
@@ -327,6 +336,166 @@ pub fn desktop_source(id: &str, reachable: bool) -> SourceKind {
     }
 }
 
+/// One row of the human `doctor` report.
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub state: Option<crate::style::Check>,
+    pub name: String,
+    /// One-line reason; wrapped under the name column when it is long.
+    pub reason: String,
+    /// A command that fixes the row, on its own line.
+    pub fix: Option<String>,
+    /// A command that reverts `fix`, on its own line.
+    pub undo: Option<String>,
+    /// Extra detail, dimmed, under the row.
+    pub notes: Vec<String>,
+}
+
+impl Row {
+    pub fn new(state: crate::style::Check, name: impl Into<String>) -> Self {
+        Self {
+            state: Some(state),
+            name: name.into(),
+            reason: String::new(),
+            fix: None,
+            undo: None,
+            notes: Vec::new(),
+        }
+    }
+
+    /// A row with no state glyph (layer sources).
+    pub fn plain(name: impl Into<String>) -> Self {
+        Self {
+            state: None,
+            ..Self::new(crate::style::Check::Ok, name)
+        }
+    }
+
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = reason.into();
+        self
+    }
+
+    pub fn fix(mut self, fix: impl Into<String>) -> Self {
+        self.fix = Some(fix.into());
+        self
+    }
+
+    pub fn undo(mut self, undo: impl Into<String>) -> Self {
+        self.undo = Some(undo.into());
+        self
+    }
+
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.notes.push(note.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Group {
+    pub title: String,
+    pub rows: Vec<Row>,
+}
+
+impl Group {
+    pub fn new(title: impl Into<String>, rows: Vec<Row>) -> Self {
+        Self {
+            title: title.into(),
+            rows,
+        }
+    }
+}
+
+/// Render the `doctor` report: a header with the session context on the
+/// right, titled groups of state/name/reason rows, `fix` and `undo` on their
+/// own lines, and a one-line summary of the states.
+pub fn render_report(
+    context: &str,
+    groups: &[Group],
+    options: crate::style::RenderOptions,
+) -> String {
+    use crate::style::{Check, display_width, wrap_hanging};
+
+    let panel = options.width.min(80);
+    let mut output = String::new();
+    let title = "whykey doctor";
+    let left = display_width(title);
+    let right = display_width(context);
+    output.push_str(&options.bold(title));
+    if !context.is_empty() && left + 2 + right <= panel {
+        output.push_str(&" ".repeat(panel - left - right));
+        output.push_str(&options.muted(context));
+    }
+    output.push('\n');
+
+    let name_width = groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .map(|row| display_width(&row.name))
+        .max()
+        .unwrap_or(0)
+        .min(32);
+    let mut counts = [0usize; 4];
+    for group in groups.iter().filter(|group| !group.rows.is_empty()) {
+        output.push('\n');
+        output.push_str(&options.heading(&group.title));
+        output.push('\n');
+        for row in &group.rows {
+            if let Some(state) = row.state {
+                counts[state as usize] += 1;
+            }
+            let glyph = row
+                .state
+                .map_or_else(|| " ".to_owned(), |state| options.check(state));
+            let name_pad = " ".repeat((name_width + 2).saturating_sub(display_width(&row.name)));
+            let prefix = format!("  {glyph}  {}{name_pad}", row.name);
+            let prefix_width = 5 + name_width + 2;
+            let indent = " ".repeat(prefix_width);
+            let limit = panel.saturating_sub(prefix_width).max(20);
+            let reason = wrap_hanging(&row.reason, limit, "", "");
+            if row.reason.trim().is_empty() {
+                output.push_str(prefix.trim_end());
+                output.push('\n');
+            }
+            for (index, line) in reason
+                .iter()
+                .enumerate()
+                .filter(|_| !row.reason.trim().is_empty())
+            {
+                if index == 0 {
+                    output.push_str(&format!("{prefix}{line}\n"));
+                } else {
+                    output.push_str(&format!("{indent}{line}\n"));
+                }
+            }
+            let sub = " ".repeat(prefix_width.min(7));
+            for (label, command) in [("fix ", &row.fix), ("undo", &row.undo)] {
+                if let Some(command) = command {
+                    output.push_str(&format!("{sub}{} {command}\n", options.accent(label)));
+                }
+            }
+            for note in &row.notes {
+                output.push_str(&format!("{sub}{}\n", options.muted(note)));
+            }
+        }
+    }
+    let total = |check: Check| counts[check as usize];
+    let mut parts = vec![format!("{} ok", total(Check::Ok))];
+    parts.push(format!("{} unavailable", total(Check::Fail)));
+    if total(Check::Unknown) > 0 {
+        parts.push(format!("{} unknown", total(Check::Unknown)));
+    }
+    parts.push(format!("{} not applicable", total(Check::Skip)));
+    let separator = if options.ascii { " | " } else { " \u{b7} " };
+    output.push_str(&format!(
+        "\n{}  {}\n",
+        options.bold("Summary"),
+        parts.join(separator)
+    ));
+    options.fold(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +638,41 @@ mod tests {
         assert_eq!(desktop_source("kde", false), SourceKind::ConfigFile);
         assert_eq!(desktop_source("openbox", true), SourceKind::ConfigFile);
         assert_eq!(desktop_source("openbox", false), SourceKind::None);
+    }
+
+    #[test]
+    fn doctor_report_aligns_states_and_puts_fix_and_undo_on_their_own_lines() {
+        use crate::style::{Check, RenderOptions};
+        let groups = vec![
+            Group::new(
+                "Capture",
+                vec![
+                    Row::new(Check::Ok, "Hyprland native capture"),
+                    Row::new(Check::Fail, "controlling TTY").reason("run whykey inside a terminal"),
+                    Row::new(Check::Fail, "evdev keyboards")
+                        .reason("no read access to 2 devices")
+                        .fix("sudo setfacl -m u:\"$USER\":r '/dev/input/event2'")
+                        .undo("sudo setfacl -x u:\"$USER\" '/dev/input/event2'")
+                        .note("/dev/input/event2 - kbd (Permission denied)"),
+                ],
+            ),
+            Group::new(
+                "Live readers",
+                vec![
+                    Row::new(Check::Skip, "kglobalaccel").reason("not running"),
+                    Row::new(Check::Unknown, "portal").reason("malformed answer"),
+                ],
+            ),
+            Group::new(
+                "Layer sources",
+                vec![Row::plain("shell").reason("config file - bash")],
+            ),
+        ];
+        let output = render_report(
+            "Hyprland - Wayland - bash",
+            &groups,
+            RenderOptions::plain(false),
+        );
+        crate::style::assert_golden("doctor_report_layout", &output);
     }
 }

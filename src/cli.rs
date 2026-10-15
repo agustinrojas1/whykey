@@ -809,32 +809,11 @@ pub(crate) mod doctor_support {
         }
         None
     }
-
-    pub(crate) fn print_check_with_options(
-        name: &str,
-        ok: bool,
-        hint: &str,
-        options: whykey::style::RenderOptions,
-    ) {
-        let text = if ok {
-            format!("OK  {name}")
-        } else {
-            format!("FAIL  {name} ({hint})")
-        };
-        for line in whykey::style::wrap_hanging(&text, options.width, "", "  ") {
-            if ok {
-                println!("{}", options.success(line));
-            } else {
-                println!("{}", options.failure(line));
-            }
-        }
-    }
 }
 
 pub(crate) use doctor_support::{
     DoctorState, command_program_available, command_succeeds, detect_extension, detect_nvim_server,
-    detected_terminal_program, doctor_next_steps, print_check_with_options,
-    shell_snapshot_available,
+    detected_terminal_program, doctor_next_steps, shell_snapshot_available,
 };
 
 pub(crate) mod help {
