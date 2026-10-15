@@ -506,7 +506,7 @@ fn invalid_combinations_have_a_cli_error_status() {
     let output = binary().arg("ctrl+shift").output().unwrap();
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("non-modifier key"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("has no main key"));
 }
 
 #[cfg(unix)]

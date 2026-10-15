@@ -115,14 +115,16 @@ impl FromStr for KeySequence {
             .enumerate()
             .map(|(index, token)| {
                 KeyCombo::parse_query(token).map_err(|error| {
-                    ParseKeySequenceError(if steps == 1 {
-                        format!("invalid key combination '{}': {error}", abbreviate(token))
-                    } else {
-                        format!(
+                    ParseKeySequenceError(match (&error.help, steps) {
+                        (Some(_), 1) => error.to_string(),
+                        (_, 1) => {
+                            format!("invalid key combination '{}': {error}", abbreviate(token))
+                        }
+                        _ => format!(
                             "invalid key combination at step {} ('{}'): {error}",
                             index + 1,
                             abbreviate(token)
-                        )
+                        ),
                     })
                 })
             })
@@ -143,12 +145,38 @@ impl fmt::Display for KeySequence {
     }
 }
 
+/// Why a combination was rejected: a one-line `message`, and for the
+/// mistakes people actually make, a `help` paragraph that shows what to type
+/// instead. Errors with help read as a whole without the sequence prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseKeyComboError(String);
+pub struct ParseKeyComboError {
+    message: String,
+    help: Option<String>,
+}
+
+impl ParseKeyComboError {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            help: None,
+        }
+    }
+
+    fn with_help(message: impl Into<String>, help: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            help: Some(help.into()),
+        }
+    }
+}
 
 impl fmt::Display for ParseKeyComboError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.message)?;
+        if let Some(help) = &self.help {
+            write!(formatter, "\n\n{help}")?;
+        }
+        Ok(())
     }
 }
 
@@ -190,7 +218,7 @@ pub fn abbreviate(text: &str) -> std::borrow::Cow<'_, str> {
 fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComboError> {
     let input = input.trim();
     if input.is_empty() {
-        return Err(ParseKeyComboError("key combination is empty".into()));
+        return Err(ParseKeyComboError::plain("key combination is empty"));
     }
 
     let mut modifiers = 0;
@@ -202,7 +230,7 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
         }
         if let Some(mask) = modifier_mask(part) {
             if modifiers & mask != 0 {
-                return Err(ParseKeyComboError(format!(
+                return Err(ParseKeyComboError::plain(format!(
                     "modifier '{}' appears more than once",
                     abbreviate(part)
                 )));
@@ -215,15 +243,8 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
     }
 
     let remainder = remainder.trim();
-    if remainder.is_empty() {
-        return Err(ParseKeyComboError(
-            "a combination must contain a non-modifier key".into(),
-        ));
-    }
-    if modifier_mask(remainder).is_some() {
-        return Err(ParseKeyComboError(
-            "a combination must contain a non-modifier key".into(),
-        ));
+    if remainder.is_empty() || modifier_mask(remainder).is_some() {
+        return Err(modifier_only_error(input));
     }
     if remainder.contains('+') && remainder != "+" {
         let segments: Vec<&str> = remainder.split('+').map(str::trim).collect();
@@ -254,10 +275,12 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
             ));
             found
         };
-        return Err(ParseKeyComboError(format!(
-            "a combination must contain exactly one non-modifier key, but found {found} \
-             (modifiers: ctrl, alt, shift, super, hyper, altgr, caps, num, mod2, mod3, mod5)"
-        )));
+        return Err(ParseKeyComboError::with_help(
+            format!("a combination must contain exactly one non-modifier key, but found {found}"),
+            "  modifiers: ctrl, alt, shift, super, hyper, altgr, caps, num, mod2, mod3, mod5\n  \
+             To ask about a sequence, separate the steps with spaces:\n    \
+             whykey inspect ctrl+x ctrl+s",
+        ));
     }
     let key = normalize_key(remainder)?;
     if validate_key && !is_known_key(&key) {
@@ -375,7 +398,7 @@ pub(crate) fn normalize_key_str(value: &str) -> String {
 
 fn normalize_key(value: &str) -> Result<String, ParseKeyComboError> {
     if value.chars().any(char::is_whitespace) {
-        return Err(ParseKeyComboError(format!(
+        return Err(ParseKeyComboError::plain(format!(
             "key '{}' contains whitespace",
             abbreviate(value)
         )));
@@ -384,7 +407,7 @@ fn normalize_key(value: &str) -> Result<String, ParseKeyComboError> {
     if value.to_ascii_lowercase().starts_with("code:") {
         let code = value.split_at(5).1;
         if code.is_empty() || !code.chars().all(|character| character.is_ascii_digit()) {
-            return Err(ParseKeyComboError(format!(
+            return Err(ParseKeyComboError::plain(format!(
                 "invalid keycode '{}'",
                 abbreviate(value)
             )));
@@ -536,11 +559,58 @@ const SUGGESTED_ALIASES: &[&str] = &[
     "bracketright",
 ];
 
+/// `ctrl+super` → "Ctrl+Super has no main key", with what whykey accepts.
+fn modifier_only_error(input: &str) -> ParseKeyComboError {
+    let typed = abbreviate(input)
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            characters
+                .next()
+                .map(|first| {
+                    first
+                        .to_uppercase()
+                        .chain(characters.flat_map(char::to_lowercase))
+                })
+                .map(|folded| folded.collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join("+");
+    ParseKeyComboError::with_help(
+        format!("{typed} has no main key."),
+        "  whykey inspects a combination with one main key, like `whykey super+return`\n  \
+         or `whykey ctrl+shift+c`. A modifier on its own is not a combination.",
+    )
+}
+
+/// Keysym inventory entries a query can be matched against: the lowercased
+/// keysym name and what to suggest for it, which is the name itself when the
+/// parser accepts it and otherwise the single character the keysym types
+/// (`eacute` → `é`).
+fn inventory_candidates() -> impl Iterator<Item = (String, String)> {
+    include_str!("xkb_keysyms.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once(' '))
+        .filter_map(|(name, value)| {
+            let lowered = name.to_ascii_lowercase();
+            if normalize_key(&lowered).is_ok_and(|key| is_known_key(&key)) {
+                return Some((lowered.clone(), lowered));
+            }
+            let character = char::from_u32(u32::from_str_radix(value, 16).ok()?)?;
+            (!character.is_control() && !character.is_whitespace())
+                .then(|| (lowered, character.to_string()))
+        })
+}
+
 fn unknown_key_error(raw: &str) -> ParseKeyComboError {
     let shown = abbreviate(raw);
     if raw.chars().nth(ECHO_LIMIT).is_some() {
         // No real key name is this long; a suggestion would only cost time.
-        return ParseKeyComboError(format!("unknown key '{shown}'"));
+        return ParseKeyComboError::plain(format!("unknown key '{shown}'"));
     }
     let lowered = raw.to_lowercase();
     let function_keys = (1..=35).map(|number| format!("f{number}"));
@@ -549,15 +619,17 @@ fn unknown_key_error(raw: &str) -> ParseKeyComboError {
         .map(|name| name.to_ascii_lowercase())
         .chain(function_keys)
         .chain(SUGGESTED_ALIASES.iter().map(|alias| (*alias).to_owned()))
-        .map(|candidate| (edit_distance(&lowered, &candidate), candidate))
+        .map(|candidate| (candidate.clone(), candidate))
+        .chain(inventory_candidates())
+        .map(|(matched, shown)| (edit_distance(&lowered, &matched), shown))
         .min_by_key(|(distance, _)| *distance)
         .filter(|(distance, _)| *distance <= (lowered.chars().count() / 2).max(1));
     let hint = "use a single character, a named key such as return, left, or f1, an XF86 media key, or code:N";
     match suggestion {
-        Some((_, candidate)) => ParseKeyComboError(format!(
+        Some((_, candidate)) => ParseKeyComboError::plain(format!(
             "unknown key '{shown}'; did you mean '{candidate}'? ({hint})"
         )),
-        None => ParseKeyComboError(format!("unknown key '{shown}'; {hint}")),
+        None => ParseKeyComboError::plain(format!("unknown key '{shown}'; {hint}")),
     }
 }
 
@@ -647,10 +719,12 @@ mod tests {
     fn rejects_modifier_without_key() {
         let error = "ctrl+shift".parse::<KeyCombo>().unwrap_err();
 
-        assert_eq!(
-            error.to_string(),
-            "a combination must contain a non-modifier key"
+        assert!(
+            error.to_string().starts_with("Ctrl+Shift has no main key."),
+            "{error}"
         );
+        assert!(error.to_string().contains("whykey super+return"), "{error}");
+        assert!(!error.to_string().contains("--alone"), "{error}");
     }
 
     #[test]
@@ -749,6 +823,21 @@ mod tests {
     }
 
     #[test]
+    fn two_main_keys_show_how_to_ask_for_a_sequence() {
+        let error = KeyCombo::parse_query("ctrl+a+b").unwrap_err();
+        assert!(
+            error.to_string().contains("whykey inspect ctrl+x ctrl+s"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unknown_keys_suggest_keysym_inventory_names() {
+        let error = KeyCombo::parse_query("ctrl+eacut").unwrap_err();
+        assert!(error.to_string().contains("did you mean 'É'?"), "{error}");
+    }
+
+    #[test]
     fn accepts_plus_as_the_key() {
         let combo: KeyCombo = "ctrl++".parse().unwrap();
         assert_eq!(combo.to_string(), "CTRL + +");
@@ -789,9 +878,11 @@ mod tests {
     #[test]
     fn identifies_the_invalid_sequence_step() {
         let error = "ctrl+x ctrl+shift".parse::<KeySequence>().unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "invalid key combination at step 2 ('ctrl+shift'): a combination must contain a non-modifier key"
+        assert!(
+            error.to_string().starts_with(
+                "invalid key combination at step 2 ('ctrl+shift'): Ctrl+Shift has no main key."
+            ),
+            "{error}"
         );
     }
 
