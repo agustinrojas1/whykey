@@ -1,0 +1,24 @@
+{
+  "id": "wayfire-default-bind-consumed",
+  "description": "no wayfire.ini line binds Super+Q, but Wayfire's built-in core default close_top_view is <super> KEY_Q; it closes the probe window and consumes the key",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = ipc ipc-rules command",
+      "",
+      "[command]",
+      "binding_terminal = <super> KEY_T",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+q"]}],
+  "ground_truth": {"fired": {"sh": "! pgrep -f '^python3 /lab/keylog.py'"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+q"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

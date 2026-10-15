@@ -1,0 +1,24 @@
+{
+  "id": "wayfire-bind-modifiers",
+  "description": "a [command] binding Super+Shift+T runs its command and Wayfire consumes the key; the binding needs both modifiers",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = ipc ipc-rules command",
+      "",
+      "[command]",
+      "binding_terminal = <super> <shift> KEY_T",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+shift+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+shift+t"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

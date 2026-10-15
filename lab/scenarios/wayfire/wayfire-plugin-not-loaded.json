@@ -1,0 +1,24 @@
+{
+  "id": "wayfire-plugin-not-loaded",
+  "description": "a [command] binding Super+T is written, but the command plugin is not in core/plugins, so the binding is inert and the probe client receives Super+T",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = ipc ipc-rules",
+      "",
+      "[command]",
+      "binding_terminal = <super> KEY_T",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}
