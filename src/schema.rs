@@ -4,8 +4,6 @@
 //! selects v2 per command with `--schema-version 2`; the version travels
 //! through command options and request context, never global mutable state.
 
-use std::env;
-
 use serde_json::{Value, json};
 
 use crate::layers::LayerResult;
@@ -21,19 +19,19 @@ pub fn context() -> Value {
 
 pub fn context_for_environment(environment: &crate::environment::Environment) -> Value {
     json!({
-        "desktop": env::var("XDG_CURRENT_DESKTOP").ok(),
-        "session_desktop": env::var("XDG_SESSION_DESKTOP").ok(),
-        "session_type": env::var("XDG_SESSION_TYPE").ok(),
-        "display_server": if env::var_os("WAYLAND_DISPLAY").is_some() {
+        "desktop": crate::recording::env_var("XDG_CURRENT_DESKTOP").ok(),
+        "session_desktop": crate::recording::env_var("XDG_SESSION_DESKTOP").ok(),
+        "session_type": crate::recording::env_var("XDG_SESSION_TYPE").ok(),
+        "display_server": if crate::recording::env_var_os("WAYLAND_DISPLAY").is_some() {
             Some("Wayland")
-        } else if env::var_os("DISPLAY").is_some() {
+        } else if crate::recording::env_var_os("DISPLAY").is_some() {
             Some("X11")
         } else {
             None
         },
         "terminal": crate::layers::terminal_identity(),
         "shell": (!environment.shell.is_empty()).then(|| environment.shell.clone()),
-        "ssh": env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some(),
+        "ssh": crate::recording::env_var_os("SSH_CONNECTION").is_some() || crate::recording::env_var_os("SSH_TTY").is_some(),
         "compositor_candidates": environment.compositor_candidates.iter().map(|candidate| json!({
             "id": candidate.id,
             "applicable": candidate.applicable,

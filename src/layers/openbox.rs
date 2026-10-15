@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
@@ -12,7 +11,7 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
     let path = config_path().ok_or_else(|| {
         "Openbox: Openbox rc.xml was not found; runtime keybind state remains unknown".to_owned()
     })?;
-    let content = fs::read_to_string(&path)
+    let content = crate::recording::read_to_string(&path)
         .map_err(|error| format!("Openbox: config: {}: {error}", path.display()))?;
     Ok(parse_bindings(&content)
         .into_iter()
@@ -32,10 +31,10 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
@@ -59,7 +58,7 @@ impl Openbox {
                 vec!["set OPENBOX_CONFIG or provide ~/.config/openbox/rc.xml".into()],
             );
         };
-        let content = match fs::read_to_string(&path) {
+        let content = match crate::recording::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult::new(
@@ -112,15 +111,15 @@ pub(crate) struct Binding {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("OPENBOX_CONFIG") {
+    if let Some(path) = crate::recording::env_var_os("OPENBOX_CONFIG") {
         let path = PathBuf::from(path);
-        if path.is_file() {
+        if path.recorded_is_file() {
             return Some(path);
         }
     }
     let base = crate::util::config_base()?;
     let path = base.join("openbox/rc.xml");
-    path.is_file().then_some(path)
+    path.recorded_is_file().then_some(path)
 }
 
 pub(crate) fn parse_bindings(content: &str) -> Vec<Binding> {

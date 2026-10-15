@@ -1,5 +1,3 @@
-use std::env;
-
 use serde::Serialize;
 
 use crate::listen;
@@ -41,9 +39,9 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
     let shell = (!environment.shell.is_empty()).then(|| environment.shell.clone());
     let shell_name = environment.shell_name.as_str();
     let shell_snapshot = match shell_name {
-        "bash" => env::var_os("WHYKEY_READLINE_BINDINGS").is_some(),
-        "zsh" => env::var_os("WHYKEY_ZLE_BINDINGS").is_some(),
-        "fish" => env::var_os("WHYKEY_FISH_BINDINGS").is_some(),
+        "bash" => crate::recording::env_var_os("WHYKEY_READLINE_BINDINGS").is_some(),
+        "zsh" => crate::recording::env_var_os("WHYKEY_ZLE_BINDINGS").is_some(),
+        "fish" => crate::recording::env_var_os("WHYKEY_FISH_BINDINGS").is_some(),
         _ => false,
     };
     let native_compositor = native_capture_available_for_doctor();
@@ -292,10 +290,10 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
         available(
             "session.multiplexers",
             "session",
-            env::var_os("TMUX").is_some()
-                || env::var_os("STY").is_some()
-                || env::var_os("ZELLIJ").is_some()
-                || env::var_os("ZELLIJ_SESSION_NAME").is_some(),
+            crate::recording::env_var_os("TMUX").is_some()
+                || crate::recording::env_var_os("STY").is_some()
+                || crate::recording::env_var_os("ZELLIJ").is_some()
+                || crate::recording::env_var_os("ZELLIJ_SESSION_NAME").is_some(),
             "tmux, GNU Screen, and Zellij adapters are available when their session markers are present",
         ),
         implemented(

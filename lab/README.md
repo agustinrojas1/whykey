@@ -55,6 +55,7 @@ job; see [Continuous integration](#continuous-integration).
 | `--group IMAGE` | Only the scenarios that run in this group image: `base`, `wayland`, `tty`, `x11`, `gnome` or `vm` (the `kde` scenarios of `x11` run in `vm`). |
 | `--shard I/N` | Only shard I of N of the selected scenarios, sorted by id and dealt round-robin. `tools/lab_select.py` plans the CI shards with the same split. |
 | `--merge FILE...` | Runs nothing: merges results files, prints the combined table, writes `--results` and exits 1 on any failure. The CI summary job uses it. |
+| `--record DIR` | Store the recording of each passing scenario in `DIR/<scenario>.json`: every answer whykey read while it ran. A recording is kept only when replaying it on this host reproduces the verdict; other scenarios are reported as not replayable. `cargo test --test lab_replay` replays them. See [docs/lab-replay.md](../docs/lab-replay.md). |
 
 To add a run's results to the support matrix, run
 `python3 tools/generate_support_matrix.py` (it reads `lab/results.json`) or

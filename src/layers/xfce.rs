@@ -1,4 +1,3 @@
-use std::env;
 use std::process::Command;
 
 use crate::command;
@@ -14,16 +13,16 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| matches!(name.trim().to_ascii_lowercase().as_str(), "xfce" | "xfce4"))
         })
-        || env::var_os("XFCE_DESKTOP_SESSION").is_some()
+        || crate::recording::env_var_os("XFCE_DESKTOP_SESSION").is_some()
 }
 
 pub fn ipc_available() -> bool {

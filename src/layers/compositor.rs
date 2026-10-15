@@ -1,5 +1,3 @@
-use std::env;
-
 use crate::layers::{LayerId, LayerResult, Outcome};
 
 /// Environment-only context for a Linux display session that does not have a
@@ -19,7 +17,7 @@ pub fn applicable() -> bool {
     }
     if ["HYPRLAND_INSTANCE_SIGNATURE", "SWAYSOCK", "I3SOCK"]
         .into_iter()
-        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty()))
+        .any(|name| crate::recording::env_var_os(name).is_some_and(|value| !value.is_empty()))
     {
         return false;
     }
@@ -37,16 +35,17 @@ pub fn applicable() -> bool {
 /// Shared session boundary used by adapters that must not query a local
 /// compositor while the diagnostic itself is running over SSH.
 pub(crate) fn remote_session() -> bool {
-    env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some()
+    crate::recording::env_var_os("SSH_CONNECTION").is_some()
+        || crate::recording::env_var_os("SSH_TTY").is_some()
 }
 
 pub fn current_context() -> Context {
     context_from(
-        env::var("XDG_CURRENT_DESKTOP").ok(),
-        env::var("XDG_SESSION_DESKTOP").ok(),
-        env::var("XDG_SESSION_TYPE").ok(),
-        env::var("WAYLAND_DISPLAY").ok(),
-        env::var("DISPLAY").ok(),
+        crate::recording::env_var("XDG_CURRENT_DESKTOP").ok(),
+        crate::recording::env_var("XDG_SESSION_DESKTOP").ok(),
+        crate::recording::env_var("XDG_SESSION_TYPE").ok(),
+        crate::recording::env_var("WAYLAND_DISPLAY").ok(),
+        crate::recording::env_var("DISPLAY").ok(),
     )
 }
 

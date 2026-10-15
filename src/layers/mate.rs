@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::env;
 
 use crate::key::KeyCombo;
 use crate::layers::gsettings::{self, GsettingsBinding, GsettingsMeta};
@@ -37,16 +36,16 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| name.trim().eq_ignore_ascii_case("mate"))
         })
-        || env::var_os("MATE_DESKTOP_SESSION_ID").is_some()
+        || crate::recording::env_var_os("MATE_DESKTOP_SESSION_ID").is_some()
 }
 
 pub fn ipc_available() -> bool {

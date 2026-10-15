@@ -169,7 +169,7 @@ pub fn with_deadline<T>(duration: Duration, operation: impl FnOnce() -> T) -> T 
 }
 
 pub fn configured_diagnostic_timeout() -> Duration {
-    std::env::var("WHYKEY_DIAGNOSTIC_TIMEOUT_MS")
+    crate::recording::env_var("WHYKEY_DIAGNOSTIC_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -201,7 +201,7 @@ pub fn query_budget() -> Option<Duration> {
 }
 
 fn configured_timeout() -> Duration {
-    std::env::var("WHYKEY_COMMAND_TIMEOUT_MS")
+    crate::recording::env_var("WHYKEY_COMMAND_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
@@ -210,7 +210,7 @@ fn configured_timeout() -> Duration {
 }
 
 fn configured_max_output() -> usize {
-    std::env::var("WHYKEY_COMMAND_MAX_OUTPUT")
+    crate::recording::env_var("WHYKEY_COMMAND_MAX_OUTPUT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
@@ -243,6 +243,19 @@ pub fn output_with_input(command: &mut Command, input: &[u8]) -> Result<Output, 
 }
 
 fn output_with_limits_and_input(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    timeout: Duration,
+    max_output: usize,
+) -> Result<Output, CommandError> {
+    // Every child process whykey runs goes through here, so the recording sees
+    // each one. A replay answers it from the recording and never starts it.
+    crate::recording::command_output(command, input, |command| {
+        run_with_limits(command, input, timeout, max_output)
+    })
+}
+
+fn run_with_limits(
     command: &mut Command,
     input: Option<&[u8]>,
     timeout: Duration,

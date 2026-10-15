@@ -24,6 +24,7 @@ pub mod key;
 pub mod layers;
 pub mod listen;
 pub mod probe;
+pub mod recording;
 pub mod registry;
 pub mod remapper;
 pub mod replay;

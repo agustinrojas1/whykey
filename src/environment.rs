@@ -82,11 +82,10 @@ pub struct ExtensionCandidate {
 
 fn explicit_environment_hint(id: &str) -> bool {
     match id {
-        "hyprland" => {
-            std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|value| !value.is_empty())
-        }
-        "sway" => std::env::var_os("SWAYSOCK").is_some_and(|value| !value.is_empty()),
-        "i3" => std::env::var_os("I3SOCK").is_some_and(|value| !value.is_empty()),
+        "hyprland" => crate::recording::env_var_os("HYPRLAND_INSTANCE_SIGNATURE")
+            .is_some_and(|value| !value.is_empty()),
+        "sway" => crate::recording::env_var_os("SWAYSOCK").is_some_and(|value| !value.is_empty()),
+        "i3" => crate::recording::env_var_os("I3SOCK").is_some_and(|value| !value.is_empty()),
         _ => false,
     }
 }
@@ -160,30 +159,29 @@ impl Environment {
             .collect::<Vec<_>>();
         compositor_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
         let selected_compositor = compositor_candidates.first().map(|candidate| candidate.id);
-        let mut extension_candidates =
-            extension_adapters
-                .iter()
-                .filter_map(|adapter| {
-                    let applicable = crate::extension_adapters::applicable_with_context(
-                        adapter,
-                        &compositor_context,
-                    );
-                    applicable.then(|| ExtensionCandidate {
-                        id: adapter.id.clone(),
-                        display: adapter.display.clone(),
-                        applicable,
-                        ipc: false,
-                        score: u8::from(adapter.applicable_env.iter().any(|name| {
-                            std::env::var_os(name).is_some_and(|value| !value.is_empty())
-                        })) * 2
-                            + u8::from(desktop_hint(
-                                &adapter.id,
-                                &adapter.display,
-                                &compositor_context,
-                            )),
-                    })
+        let mut extension_candidates = extension_adapters
+            .iter()
+            .filter_map(|adapter| {
+                let applicable = crate::extension_adapters::applicable_with_context(
+                    adapter,
+                    &compositor_context,
+                );
+                applicable.then(|| ExtensionCandidate {
+                    id: adapter.id.clone(),
+                    display: adapter.display.clone(),
+                    applicable,
+                    ipc: false,
+                    score: u8::from(adapter.applicable_env.iter().any(|name| {
+                        crate::recording::env_var_os(name).is_some_and(|value| !value.is_empty())
+                    })) * 2
+                        + u8::from(desktop_hint(
+                            &adapter.id,
+                            &adapter.display,
+                            &compositor_context,
+                        )),
                 })
-                .collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
         extension_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.score));
         let selected_extension = extension_candidates
             .first()
@@ -198,12 +196,12 @@ impl Environment {
         let shell = running
             .and_then(|shell| shell.exe)
             .map(|exe| exe.to_string_lossy().into_owned())
-            .or_else(|| std::env::var("SHELL").ok())
+            .or_else(|| crate::recording::env_var("SHELL").ok())
             .unwrap_or_default();
-        let tmux = std::env::var_os("TMUX").is_some();
-        let screen = std::env::var_os("STY").is_some();
-        let zellij = std::env::var_os("ZELLIJ").is_some()
-            || std::env::var_os("ZELLIJ_SESSION_NAME").is_some();
+        let tmux = crate::recording::env_var_os("TMUX").is_some();
+        let screen = crate::recording::env_var_os("STY").is_some();
+        let zellij = crate::recording::env_var_os("ZELLIJ").is_some()
+            || crate::recording::env_var_os("ZELLIJ_SESSION_NAME").is_some();
         let mut names = Vec::new();
         if tmux {
             names.push("tmux");
@@ -221,9 +219,9 @@ impl Environment {
         };
 
         Self {
-            ssh: std::env::var_os("SSH_CONNECTION").is_some()
-                || std::env::var_os("SSH_TTY").is_some(),
-            tty_available: std::fs::File::open("/dev/tty").is_ok(),
+            ssh: crate::recording::env_var_os("SSH_CONNECTION").is_some()
+                || crate::recording::env_var_os("SSH_TTY").is_some(),
+            tty_available: crate::recording::can_open("/dev/tty"),
             shell,
             shell_name,
             terminal: terminal_app::detected_name().or_else(|| {
@@ -237,11 +235,11 @@ impl Environment {
             tmux,
             screen,
             zellij,
-            term_program: std::env::var("TERM_PROGRAM").ok(),
-            tmux_pane: std::env::var("TMUX_PANE").ok(),
-            screen_session: std::env::var("STY").ok(),
-            zellij_pane: std::env::var("ZELLIJ_PANE_ID").ok(),
-            zellij_session: std::env::var("ZELLIJ_SESSION_NAME").ok(),
+            term_program: crate::recording::env_var("TERM_PROGRAM").ok(),
+            tmux_pane: crate::recording::env_var("TMUX_PANE").ok(),
+            screen_session: crate::recording::env_var("STY").ok(),
+            zellij_pane: crate::recording::env_var("ZELLIJ_PANE_ID").ok(),
+            zellij_session: crate::recording::env_var("ZELLIJ_SESSION_NAME").ok(),
             compositor_context,
             remappers: remapper::detect_with_snapshot(&snapshot),
             hyprland_probe,

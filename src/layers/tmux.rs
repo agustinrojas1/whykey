@@ -23,7 +23,7 @@ pub fn inspect_with_byte_status(
     let active_table = tmux_active_table();
     let prefixes = tmux_prefixes();
     let mut details = Vec::new();
-    if let Some(pane) = std::env::var_os("TMUX_PANE") {
+    if let Some(pane) = crate::recording::env_var_os("TMUX_PANE") {
         details.push(format!("client pane: {}", pane.to_string_lossy()));
     }
     let mut cache = HashMap::new();
@@ -282,7 +282,7 @@ fn list_keys(table: &str) -> Result<Vec<u8>, String> {
 
 fn tmux_active_table() -> Option<String> {
     let mut command = Command::new("tmux");
-    if let Some(pane) = std::env::var_os("TMUX_PANE") {
+    if let Some(pane) = crate::recording::env_var_os("TMUX_PANE") {
         let pane = pane.to_string_lossy().into_owned();
         command.args(["display-message", "-p", "-t", &pane, "#{client_key_table}"]);
     } else {

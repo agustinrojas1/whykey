@@ -6,23 +6,26 @@
 //! Dynamic configuration languages are never evaluated; unsupported forms
 //! produce conditional results in the calling adapter.
 
-use std::env;
-use std::fs;
 use std::path::PathBuf;
 
 /// Base directory for user configuration (`XDG_CONFIG_HOME` or
 /// `HOME/.config`).
 pub fn config_base() -> Option<PathBuf> {
-    env::var_os("XDG_CONFIG_HOME")
+    crate::recording::env_var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .or_else(|| {
+            crate::recording::env_var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
+        })
 }
 
 /// Base directory for user data (`XDG_DATA_HOME` or `HOME/.local/share`).
 pub fn data_base() -> Option<PathBuf> {
-    env::var_os("XDG_DATA_HOME")
+    crate::recording::env_var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
+        .or_else(|| {
+            crate::recording::env_var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".local/share"))
+        })
 }
 /// User configuration file for a path relative to the config base.
 pub fn config_file(relative: &str) -> Option<PathBuf> {
@@ -32,19 +35,9 @@ pub fn config_file(relative: &str) -> Option<PathBuf> {
 /// Bounded text read for a configuration file. Files larger than `limit`
 /// bytes are rejected so a runaway file cannot fill memory.
 pub fn read_bounded(path: &std::path::Path, limit: usize) -> Option<String> {
-    use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    // O_NONBLOCK so opening a FIFO cannot block; only regular files are read.
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    file.take(limit as u64 + 1).read_to_end(&mut bytes).ok()?;
+    // Only regular files are read, and a FIFO is never waited on (see
+    // `recording::read_regular_prefix`).
+    let bytes = crate::recording::read_regular_prefix(path, limit)?;
     if bytes.len() > limit {
         return None;
     }
@@ -87,7 +80,7 @@ impl ProcessSnapshot {
     /// remapper and IME detectors) rather than walking `/proc` per detector.
     pub fn collect() -> Self {
         let mut entries = Vec::new();
-        let Ok(dir_entries) = fs::read_dir("/proc") else {
+        let Ok(dir_entries) = crate::recording::read_dir("/proc") else {
             return Self { entries };
         };
         for entry in dir_entries.flatten() {
@@ -101,11 +94,11 @@ impl ProcessSnapshot {
             else {
                 continue;
             };
-            let comm = fs::read_to_string(entry.path().join("comm"))
+            let comm = crate::recording::read_to_string(entry.path().join("comm"))
                 .ok()
                 .map(|value| value.trim().to_owned())
                 .unwrap_or_default();
-            let cmdline_name = fs::read(entry.path().join("cmdline"))
+            let cmdline_name = crate::recording::read(entry.path().join("cmdline"))
                 .ok()
                 .and_then(|value| {
                     value
@@ -186,7 +179,7 @@ pub fn ancestor_pids(start: u32) -> Vec<u32> {
     let mut pid = start;
     for _ in 0..16 {
         pids.push(pid);
-        let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) else {
+        let Ok(status) = crate::recording::read_to_string(format!("/proc/{pid}/status")) else {
             break;
         };
         let Some(ppid) = status
@@ -206,6 +199,7 @@ pub fn ancestor_pids(start: u32) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn unquotes_one_double_quoted_pair() {

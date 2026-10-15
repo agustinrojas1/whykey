@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::{Path, PathBuf};
 
 use crate::layers::{
@@ -560,7 +559,9 @@ struct Keymap {
 
 impl Keymap {
     fn load() -> Self {
-        let var = |name: &str| env::var_os(name).map(|value| value.to_string_lossy().into_owned());
+        let var = |name: &str| {
+            crate::recording::env_var_os(name).map(|value| value.to_string_lossy().into_owned())
+        };
         match var("WHYKEY_READLINE_BINDINGS") {
             Some(bindings) => Self::from_snapshot(
                 &bindings,
@@ -821,7 +822,7 @@ fn readline_notation(bytes: &[u8]) -> String {
 }
 
 fn readline_mode_is_emacs() -> bool {
-    if let Some(snapshot) = env::var_os("WHYKEY_READLINE_VARIABLES") {
+    if let Some(snapshot) = crate::recording::env_var_os("WHYKEY_READLINE_VARIABLES") {
         let snapshot = snapshot.to_string_lossy().to_ascii_lowercase();
         return !snapshot.contains("editing-mode is set to `vi'")
             && !snapshot.contains("editing-mode is set to 'vi'")
@@ -830,7 +831,7 @@ fn readline_mode_is_emacs() -> bool {
     }
 
     for path in inputrc_paths() {
-        let Ok(content) = fs::read_to_string(path) else {
+        let Ok(content) = crate::recording::read_to_string(path) else {
             continue;
         };
         if let Some(is_emacs) = inputrc_editing_mode_is_emacs(&content) {
@@ -853,7 +854,7 @@ fn inputrc_editing_mode_is_emacs(content: &str) -> Option<bool> {
 }
 
 fn active_keymap() -> Option<String> {
-    let snapshot = env::var_os("WHYKEY_READLINE_VARIABLES")?
+    let snapshot = crate::recording::env_var_os("WHYKEY_READLINE_VARIABLES")?
         .to_string_lossy()
         .into_owned();
     snapshot.lines().find_map(|line| {
@@ -864,7 +865,7 @@ fn active_keymap() -> Option<String> {
 }
 
 fn append_mode_detail(details: &mut Vec<String>) {
-    if let Some(snapshot) = env::var_os("WHYKEY_READLINE_VARIABLES") {
+    if let Some(snapshot) = crate::recording::env_var_os("WHYKEY_READLINE_VARIABLES") {
         let snapshot = snapshot.to_string_lossy();
         if let Some(line) = snapshot.lines().find(|line| {
             line.to_ascii_lowercase()
@@ -885,7 +886,10 @@ fn append_mode_detail(details: &mut Vec<String>) {
 /// order (includes expanded in place).
 fn inputrc_entries() -> Vec<Entry> {
     let mut entries = Vec::new();
-    if let Some(path) = inputrc_paths().into_iter().find(|path| path.is_file()) {
+    if let Some(path) = inputrc_paths()
+        .into_iter()
+        .find(|path| path.recorded_is_file())
+    {
         inputrc_entries_in_path(&path, 0, &mut entries);
     }
     entries
@@ -896,7 +900,7 @@ fn inputrc_entries_in_path(path: &Path, depth: usize, entries: &mut Vec<Entry>) 
     if depth > MAX_INCLUDE_DEPTH {
         return;
     }
-    let Ok(content) = fs::read_to_string(path) else {
+    let Ok(content) = crate::recording::read_to_string(path) else {
         return;
     };
     let base = path.parent().unwrap_or_else(|| Path::new("."));
@@ -978,7 +982,7 @@ impl Bashrc {
             ..Self::default()
         };
         for path in bashrc_paths() {
-            if let Ok(text) = fs::read_to_string(&path) {
+            if let Ok(text) = crate::recording::read_to_string(&path) {
                 bashrc.apply_script(&text, &path);
             }
         }
@@ -1088,7 +1092,7 @@ impl Bashrc {
 /// (Debian builds read /etc/bash.bashrc) and ~/.bashrc.
 fn bashrc_paths() -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("/etc/bash.bashrc")];
-    if let Some(home) = env::var_os("HOME").filter(|home| !home.is_empty()) {
+    if let Some(home) = crate::recording::env_var_os("HOME").filter(|home| !home.is_empty()) {
         paths.push(PathBuf::from(home).join(".bashrc"));
     }
     paths
@@ -1096,7 +1100,7 @@ fn bashrc_paths() -> Vec<PathBuf> {
 
 fn resolve_inputrc_include(raw: &str, base: &Path) -> PathBuf {
     let raw = raw.trim().trim_matches(['"', '\'']);
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         let home = PathBuf::from(home);
         if raw == "~" {
             return home;
@@ -1121,7 +1125,9 @@ fn inputrc_condition(condition: &str) -> bool {
         return true;
     }
     if let Some(term) = condition.strip_prefix("term=") {
-        let current = env::var("TERM").unwrap_or_default().to_ascii_lowercase();
+        let current = crate::recording::env_var("TERM")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         return if let Some(prefix) = term.strip_suffix('*') {
             current.starts_with(prefix)
         } else {
@@ -1137,12 +1143,12 @@ fn inputrc_condition(condition: &str) -> bool {
 }
 
 fn inputrc_paths() -> Vec<PathBuf> {
-    if let Some(path) = env::var_os("INPUTRC") {
+    if let Some(path) = crate::recording::env_var_os("INPUTRC") {
         return vec![PathBuf::from(path)];
     }
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         let user = PathBuf::from(home).join(".inputrc");
-        if user.is_file() {
+        if user.recorded_is_file() {
             return vec![user];
         }
     }
@@ -1231,6 +1237,7 @@ fn decode_sequence(sequence: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     const LIVE_BIND_P: &str = r#""\C-g": abort
 "\C-x\C-g": abort

@@ -1,8 +1,7 @@
+use crate::recording::PathInputs;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
@@ -154,7 +153,7 @@ fn ipc_uncertain_result(message: String) -> LayerResult {
     let mut details = vec![message];
     if let Some(config) = hyprland_config_paths()
         .into_iter()
-        .find(|path| path.is_file())
+        .find(|path| path.recorded_is_file())
     {
         details.push(format!(
             "static Hyprland configuration found at {}; active IPC state could not be verified",
@@ -175,7 +174,8 @@ fn ipc_uncertain_result(message: String) -> LayerResult {
 
 pub(crate) fn remote_session_without_compositor() -> bool {
     remote_session_without_compositor_state(
-        env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some(),
+        crate::recording::env_var_os("SSH_CONNECTION").is_some()
+            || crate::recording::env_var_os("SSH_TTY").is_some(),
         instance_override().is_some() || has_hyprland_signature(),
     )
 }
@@ -218,6 +218,7 @@ mod tests {
     };
     use super::matching::{inspect_json, inspect_json_with_keycode};
     use super::*;
+    use std::fs;
 
     #[test]
     fn treats_ssh_without_a_compositor_signature_as_not_applicable() {

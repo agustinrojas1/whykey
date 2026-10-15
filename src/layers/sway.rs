@@ -1,4 +1,3 @@
-use std::env;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
@@ -29,8 +28,8 @@ const FAMILY: Family = Family {
 /// The search order of sway's `get_config_path` (sway/main.c), used to find
 /// which file `GET_CONFIG` returned so relative includes resolve.
 fn config_candidates() -> Vec<PathBuf> {
-    let home = env::var_os("HOME").map(PathBuf::from);
-    let config_home = env::var_os("XDG_CONFIG_HOME")
+    let home = crate::recording::env_var_os("HOME").map(PathBuf::from);
+    let config_home = crate::recording::env_var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| home.as_ref().map(|home| home.join(".config")));
@@ -56,11 +55,11 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var_os("SWAYSOCK").is_some_and(|value| !value.is_empty())
-        || env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var_os("SWAYSOCK").is_some_and(|value| !value.is_empty())
+        || crate::recording::env_var("XDG_CURRENT_DESKTOP")
             .ok()
             .into_iter()
-            .chain(env::var("XDG_SESSION_DESKTOP").ok())
+            .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
             .any(|desktop| {
                 desktop
                     .split(':')

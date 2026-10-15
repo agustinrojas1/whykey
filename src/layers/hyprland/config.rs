@@ -1,5 +1,6 @@
 use super::matching::BindingKey;
 use super::*;
+use crate::recording::PathInputs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfigBindHint {
@@ -42,7 +43,7 @@ pub(super) static CONFIG_HINTS: LazyLock<ConfigHints> = LazyLock::new(|| ConfigH
 fn declarative_config_hints() -> Vec<ConfigBindHint> {
     let Some(root) = hyprland_config_paths()
         .into_iter()
-        .find(|path| path.is_file())
+        .find(|path| path.recorded_is_file())
     else {
         return Vec::new();
     };
@@ -55,7 +56,7 @@ fn declarative_config_hints() -> Vec<ConfigBindHint> {
 
 pub(super) fn hyprland_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = env::var_os("HYPRLAND_CONFIG") {
+    if let Some(path) = crate::recording::env_var_os("HYPRLAND_CONFIG") {
         paths.push(PathBuf::from(path));
     }
     if let Some(base) = crate::util::config_base() {
@@ -74,7 +75,7 @@ fn lua_config_bindings() -> Vec<LuaBindHint> {
     // normal Omarchy require order so the final matching hint is the useful
     // one when a user overrides a default binding.
     roots.push(PathBuf::from("/usr/share/omarchy/default/hypr"));
-    if let Some(omarchy) = env::var_os("OMARCHY_PATH") {
+    if let Some(omarchy) = crate::recording::env_var_os("OMARCHY_PATH") {
         roots.push(PathBuf::from(omarchy).join("default/hypr"));
     }
     if let Some(base) = crate::util::config_base() {
@@ -290,17 +291,17 @@ fn collect_lua_files(
     // child could otherwise make a config scan unexpectedly walk an unrelated
     // tree (or a whole filesystem hierarchy).
     if depth > 0
-        && fs::symlink_metadata(path)
-            .map(|metadata| metadata.file_type().is_symlink())
+        && crate::recording::symlink_metadata(path)
+            .map(|metadata| metadata.is_symlink())
             .unwrap_or(false)
     {
         return;
     }
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let canonical = crate::recording::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     if !seen.insert(canonical.clone()) {
         return;
     }
-    let Ok(metadata) = fs::metadata(&canonical) else {
+    let Ok(metadata) = crate::recording::metadata(&canonical) else {
         return;
     };
     if metadata.is_file() {
@@ -309,7 +310,7 @@ fn collect_lua_files(
         }
         return;
     }
-    let Ok(entries) = fs::read_dir(&canonical) else {
+    let Ok(entries) = crate::recording::read_dir(&canonical) else {
         return;
     };
     let mut entries = entries.flatten().collect::<Vec<_>>();
@@ -587,7 +588,7 @@ pub(super) fn collect_config_hints(
     if depth > MAX_CONFIG_DEPTH {
         return;
     }
-    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let canonical = crate::recording::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     if !visited.insert(canonical.clone()) {
         return;
     }
@@ -663,7 +664,7 @@ fn expand_config_glob(path: &Path) -> Vec<PathBuf> {
         }
         let mut expanded = Vec::new();
         for directory in &matches {
-            let Ok(entries) = fs::read_dir(directory) else {
+            let Ok(entries) = crate::recording::read_dir(directory) else {
                 continue;
             };
             expanded.extend(
@@ -833,13 +834,16 @@ pub(super) fn resolve_config_path(
             .map(|offset| start + 1 + offset)
             .unwrap_or(value.len());
         let name = &value[start + 1..end];
-        let replacement = variables.get(name).cloned().or_else(|| env::var(name).ok());
+        let replacement = variables
+            .get(name)
+            .cloned()
+            .or_else(|| crate::recording::env_var(name).ok());
         let Some(replacement) = replacement else {
             break;
         };
         value.replace_range(start..end, &replacement);
     }
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         let home = PathBuf::from(home);
         if value == "~" {
             return home;
@@ -946,6 +950,7 @@ pub(super) fn resolve_inline_variables(raw: &str, variables: &HashMap<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn variable_values_expand_earlier_variables_for_bind_and_unbind() {

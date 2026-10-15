@@ -65,7 +65,7 @@ impl EvdevSession {
         let paths = if let Some(path) = requested {
             vec![path.to_owned()]
         } else {
-            let mut paths = std::fs::read_dir("/dev/input")
+            let mut paths = crate::recording::read_dir("/dev/input")
                 .map_err(|error| {
                     ListenError::Message(format!(
                         "cannot enumerate /dev/input: {error}; evdev capture may require the input group"
@@ -355,7 +355,7 @@ impl EvdevSession {
             return;
         }
         self.last_hotplug_scan = Instant::now();
-        let Ok(entries) = std::fs::read_dir("/dev/input") else {
+        let Ok(entries) = crate::recording::read_dir("/dev/input") else {
             return;
         };
         let mut paths = entries
@@ -475,7 +475,7 @@ pub(super) fn evdev_device_name(path: &Path) -> String {
     let Some(event_name) = path.file_name().and_then(|value| value.to_str()) else {
         return fallback;
     };
-    std::fs::read_to_string(format!("/sys/class/input/{event_name}/device/name"))
+    crate::recording::read_to_string(format!("/sys/class/input/{event_name}/device/name"))
         .ok()
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
@@ -485,7 +485,7 @@ pub(super) fn evdev_device_name(path: &Path) -> String {
 #[cfg(target_os = "linux")]
 pub(super) fn evdev_keyboard_capability(path: &Path) -> Option<bool> {
     let event_name = path.file_name()?.to_str()?;
-    let contents = std::fs::read_to_string(format!(
+    let contents = crate::recording::read_to_string(format!(
         "/sys/class/input/{event_name}/device/capabilities/key"
     ))
     .ok()?;

@@ -6,6 +6,7 @@
 //! layers, and a `default_layout`. Bindings in other layers are reported
 //! only when their activation would change the answer.
 
+use crate::recording::PathInputs;
 use std::path::{Path, PathBuf};
 
 use super::keys::{self, ALT, ALTGR, CTRL, Press, SHIFT, SUPER};
@@ -633,7 +634,7 @@ fn include_path(config: &Path, name: &str) -> Option<PathBuf> {
         .map(|dir| dir.join(name))
         .into_iter()
         .chain([Path::new("/usr/share/keyd").join(name)])
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| candidate.recorded_is_file())
 }
 
 /// `keyd-application-mapper` bindings: `[class]` sections of

@@ -4,7 +4,6 @@
 //! GSettings and rebind as soon as a value changes, so `gsettings
 //! list-recursively` reports the configuration the running session uses.
 
-use std::env;
 use std::process::Command;
 
 use crate::command;
@@ -75,16 +74,16 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| name.trim().eq_ignore_ascii_case("gnome"))
         })
-        || env::var_os("GNOME_DESKTOP_SESSION_ID").is_some()
+        || crate::recording::env_var_os("GNOME_DESKTOP_SESSION_ID").is_some()
 }
 
 pub fn ipc_available() -> bool {

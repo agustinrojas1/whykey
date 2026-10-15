@@ -1,7 +1,7 @@
 //! Temporary Hyprland compositor key capture via runtime Lua event hooks.
 
+use crate::recording::PathInputs;
 use std::collections::HashSet;
-use std::env;
 use std::io::{self, Read};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -18,24 +18,24 @@ use crate::command;
 use crate::key::KeyCombo;
 use crate::listen::{CaptureDisposition, CaptureSource, KeyEventType, ModifierState, ObservedKey};
 pub fn hyprland_instance_signature() -> Option<String> {
-    env::var_os("HYPRLAND_INSTANCE_SIGNATURE")
+    crate::recording::env_var_os("HYPRLAND_INSTANCE_SIGNATURE")
         .filter(|sig| !sig.is_empty())
         .and_then(|sig| sig.into_string().ok())
 }
 
 pub fn socket2_path(signature: &str) -> Option<PathBuf> {
-    let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
+    let runtime_dir = crate::recording::env_var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
     let candidate = runtime_dir
         .join("hypr")
         .join(signature)
         .join(".socket2.sock");
-    if candidate.exists() {
+    if candidate.recorded_exists() {
         return Some(candidate);
     }
     let tmp_candidate = PathBuf::from(format!("/tmp/hypr/{signature}/.socket2.sock"));
-    if tmp_candidate.exists() {
+    if tmp_candidate.recorded_exists() {
         return Some(tmp_candidate);
     }
     None
@@ -78,7 +78,7 @@ pub(crate) fn lua_hook_supported() -> Result<(), String> {
 pub fn generate_token() -> String {
     format!(
         "wk_{}_{}",
-        std::process::id(),
+        crate::recording::process_id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos())
@@ -2168,7 +2168,7 @@ print("lease-ok")
         .replace("@LEASE@", &CAPTURE_LEASE_MS.to_string());
         let path = std::env::temp_dir().join(format!(
             "whykey-lease-{}-{}.lua",
-            std::process::id(),
+            crate::recording::process_id(),
             std::thread::current().name().unwrap_or("test")
         ));
         std::fs::write(&path, script).unwrap();

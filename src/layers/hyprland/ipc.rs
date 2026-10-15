@@ -440,7 +440,9 @@ pub fn applicable() -> bool {
     if instance_override().is_some() {
         return true;
     }
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if crate::recording::env_var_os("SSH_CONNECTION").is_some()
+        || crate::recording::env_var_os("SSH_TTY").is_some()
+    {
         return has_hyprland_signature();
     }
     if has_hyprland_signature() || desktop_hint_is_hyprland() {
@@ -664,7 +666,7 @@ fn discover_hyprland_instance() -> Option<String> {
     if let Some(instance) = instance_override() {
         return Some(instance);
     }
-    if let Some(signature) = env::var_os("HYPRLAND_INSTANCE_SIGNATURE") {
+    if let Some(signature) = crate::recording::env_var_os("HYPRLAND_INSTANCE_SIGNATURE") {
         if !signature.is_empty() {
             return signature.into_string().ok();
         }
@@ -679,7 +681,10 @@ fn discover_hyprland_instance() -> Option<String> {
             return None;
         }
         let instances = parse_hyprland_instances(&output.stdout)?;
-        select_hyprland_instance(&instances, env::var("WAYLAND_DISPLAY").ok().as_deref())
+        select_hyprland_instance(
+            &instances,
+            crate::recording::env_var("WAYLAND_DISPLAY").ok().as_deref(),
+        )
     });
     DISCOVERED.clone()
 }
@@ -699,7 +704,8 @@ pub(super) fn parse_hyprland_instances(bytes: &[u8]) -> Option<Vec<HyprlandInsta
 }
 
 pub(super) fn has_hyprland_signature() -> bool {
-    env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some_and(|value| !value.is_empty())
+    crate::recording::env_var_os("HYPRLAND_INSTANCE_SIGNATURE")
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn desktop_hint_is_hyprland() -> bool {
@@ -720,19 +726,19 @@ fn desktop_hint_is_other_desktop() -> bool {
 }
 
 fn desktop_hint() -> Option<String> {
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            env::var("XDG_SESSION_DESKTOP")
+            crate::recording::env_var("XDG_SESSION_DESKTOP")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
 }
 
 fn wayland_session_evidence() -> bool {
-    env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
-        || env::var("XDG_SESSION_TYPE")
+    crate::recording::env_var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
+        || crate::recording::env_var("XDG_SESSION_TYPE")
             .ok()
             .is_some_and(|value| value.eq_ignore_ascii_case("wayland"))
 }

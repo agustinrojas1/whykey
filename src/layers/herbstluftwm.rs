@@ -4,7 +4,6 @@
 //! adapter keeps that query bounded and treats the returned command text as
 //! evidence only. It never executes the binding action or mutates the WM.
 
-use std::env;
 use std::process::Command;
 
 use crate::command;
@@ -19,11 +18,11 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var_os("HERBSTLUFTWM_SOCKET").is_some_and(|value| !value.is_empty())
-        || env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var_os("HERBSTLUFTWM_SOCKET").is_some_and(|value| !value.is_empty())
+        || crate::recording::env_var("XDG_CURRENT_DESKTOP")
             .ok()
             .into_iter()
-            .chain(env::var("XDG_SESSION_DESKTOP").ok())
+            .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
             .any(|desktop| {
                 desktop
                     .split(':')

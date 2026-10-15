@@ -1658,7 +1658,7 @@ fn candidate_detection_possible() -> bool {
         "XDG_SESSION_DESKTOP",
     ]
     .into_iter()
-    .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    .any(|name| crate::recording::env_var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

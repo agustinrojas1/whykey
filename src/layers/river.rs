@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -33,20 +32,20 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| name.trim().eq_ignore_ascii_case("river"))
         })
-        || config_path().is_some_and(|path| path.is_file())
+        || config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 pub fn ipc_available() -> bool {
-    config_path().is_some_and(|path| path.is_file())
+    config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 impl River {
@@ -112,7 +111,8 @@ fn load_bindings() -> Result<Vec<Binding>, String> {
         ));
     }
     let path = config_path().ok_or_else(|| "River init script was not found".to_owned())?;
-    let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let bytes =
+        crate::recording::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     if bytes.len() > MAX_CONFIG_BYTES {
         return Err(format!(
             "{} exceeds the {MAX_CONFIG_BYTES}-byte config limit",
@@ -125,7 +125,7 @@ fn load_bindings() -> Result<Vec<Binding>, String> {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("RIVER_INIT") {
+    if let Some(path) = crate::recording::env_var_os("RIVER_INIT") {
         return Some(PathBuf::from(path));
     }
     let base = crate::util::config_base()?;

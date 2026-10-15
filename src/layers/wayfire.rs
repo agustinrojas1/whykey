@@ -1,6 +1,5 @@
+use crate::recording::PathInputs;
 use std::collections::BTreeSet;
-use std::env;
-use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -70,23 +69,23 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| name.trim().eq_ignore_ascii_case("wayfire"))
         })
-        || config_path().is_some_and(|path| path.is_file())
+        || config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 /// The config file is readable. This keeps the file-based meaning that the
 /// status and capability reports have always used; the live query is only
 /// used by [`Wayfire::inspect`].
 pub fn ipc_available() -> bool {
-    config_path().is_some_and(|path| path.is_file())
+    config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 impl Wayfire {
@@ -126,7 +125,8 @@ struct FileConfig {
 
 fn load_file() -> Result<FileConfig, String> {
     let path = config_path().ok_or_else(|| "Wayfire config was not found".to_owned())?;
-    let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let bytes =
+        crate::recording::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     if bytes.len() > MAX_CONFIG_BYTES {
         return Err(format!(
             "{} exceeds the {MAX_CONFIG_BYTES}-byte config limit",
@@ -140,7 +140,7 @@ fn load_file() -> Result<FileConfig, String> {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("WAYFIRE_CONFIG_FILE") {
+    if let Some(path) = crate::recording::env_var_os("WAYFIRE_CONFIG_FILE") {
         return Some(PathBuf::from(path));
     }
     let base = crate::util::config_base()?;
@@ -334,7 +334,7 @@ fn metadata_decls_or_empty() -> Vec<OptionDecl> {
 /// when no directory is readable.
 fn metadata_decls(dirs: &[PathBuf]) -> Option<Vec<OptionDecl>> {
     for dir in dirs {
-        let Ok(entries) = fs::read_dir(dir) else {
+        let Ok(entries) = crate::recording::read_dir(dir) else {
             continue;
         };
         let mut paths = entries
@@ -360,7 +360,8 @@ fn metadata_decls(dirs: &[PathBuf]) -> Option<Vec<OptionDecl>> {
 }
 
 fn read_limited(path: &Path, limit: usize) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let bytes =
+        crate::recording::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
     if bytes.len() > limit {
         return Err(format!("{} exceeds {limit} bytes", path.display()));
     }
@@ -631,11 +632,13 @@ fn parse_modifier(value: &str) -> Option<&'static str> {
 /// exports it, otherwise the one `wayfire-*.socket` in `XDG_RUNTIME_DIR`
 /// (preferring the one named after `WAYLAND_DISPLAY`).
 fn live_socket() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("_WAYFIRE_SOCKET").filter(|value| !value.is_empty()) {
+    if let Some(path) =
+        crate::recording::env_var_os("_WAYFIRE_SOCKET").filter(|value| !value.is_empty())
+    {
         return Some(PathBuf::from(path));
     }
-    let runtime = env::var_os("XDG_RUNTIME_DIR")?;
-    let mut sockets = fs::read_dir(runtime)
+    let runtime = crate::recording::env_var_os("XDG_RUNTIME_DIR")?;
+    let mut sockets = crate::recording::read_dir(runtime)
         .ok()?
         .flatten()
         .map(|entry| entry.path())
@@ -646,7 +649,7 @@ fn live_socket() -> Option<PathBuf> {
         })
         .collect::<Vec<_>>();
     sockets.sort();
-    if let Ok(display) = env::var("WAYLAND_DISPLAY") {
+    if let Ok(display) = crate::recording::env_var("WAYLAND_DISPLAY") {
         let matching = sockets
             .iter()
             .filter(|path| path.to_string_lossy().contains(display.as_str()))
@@ -935,7 +938,7 @@ fn record_hit(
 /// one.
 fn wayfire_pid() -> Option<u32> {
     let mut found = Vec::new();
-    for entry in fs::read_dir("/proc").ok()?.flatten() {
+    for entry in crate::recording::read_dir("/proc").ok()?.flatten() {
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -943,7 +946,7 @@ fn wayfire_pid() -> Option<u32> {
         else {
             continue;
         };
-        if fs::read_to_string(entry.path().join("comm"))
+        if crate::recording::read_to_string(entry.path().join("comm"))
             .is_ok_and(|comm| comm.trim_end() == "wayfire")
         {
             found.push(pid);
@@ -954,7 +957,7 @@ fn wayfire_pid() -> Option<u32> {
 
 /// Plugin names whose shared object is mapped into `pid`.
 fn loaded_plugins(pid: u32) -> Result<BTreeSet<String>, String> {
-    let maps = fs::read_to_string(format!("/proc/{pid}/maps"))
+    let maps = crate::recording::read_to_string(format!("/proc/{pid}/maps"))
         .map_err(|error| format!("/proc/{pid}/maps: {error}"))?;
     Ok(maps
         .lines()
@@ -968,6 +971,7 @@ fn loaded_plugins(pid: u32) -> Result<BTreeSet<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn combo(text: &str) -> KeyCombo {
         text.parse().unwrap()

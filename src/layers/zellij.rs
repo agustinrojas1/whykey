@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 
 use crate::command;
@@ -10,7 +9,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     // `zellij setup --dump-config` prints the defaults built into the
     // installed binary, not the running session's state.
     let (source, content, complete, tier) = match config_path() {
-        Some(path) => match fs::read_to_string(&path) {
+        Some(path) => match crate::recording::read_to_string(&path) {
             Ok(content) if config_clears_defaults(&content) => (
                 format!("config: {} (clear-defaults)", path.display()),
                 content,
@@ -50,8 +49,12 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             }
         },
     };
-    let (mode, mode_source, mode_known) =
-        resolve_mode(env::var("WHYKEY_ZELLIJ_MODE").ok().as_deref(), &content);
+    let (mode, mode_source, mode_known) = resolve_mode(
+        crate::recording::env_var("WHYKEY_ZELLIJ_MODE")
+            .ok()
+            .as_deref(),
+        &content,
+    );
     let mut details = vec![source, format!("mode: {mode} ({mode_source})")];
     if let Some(binding) = find_binding(&content, key, &mode) {
         details.push(format!("binding: {}", binding));
@@ -165,17 +168,17 @@ fn unavailable(message: String) -> LayerResult {
 
 fn config_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(path) = env::var_os("ZELLIJ_CONFIG_FILE") {
+    if let Some(path) = crate::recording::env_var_os("ZELLIJ_CONFIG_FILE") {
         candidates.push(PathBuf::from(path));
     }
-    if let Some(directory) = env::var_os("ZELLIJ_CONFIG_DIR") {
+    if let Some(directory) = crate::recording::env_var_os("ZELLIJ_CONFIG_DIR") {
         candidates.push(PathBuf::from(directory).join("config.kdl"));
     }
     if let Some(base) = crate::util::config_base() {
         candidates.push(base.join("zellij/config.kdl"));
     }
     candidates.push(PathBuf::from("/etc/zellij/config.kdl"));
-    candidates.into_iter().find(|path| path.is_file())
+    candidates.into_iter().find(|path| path.recorded_is_file())
 }
 
 fn dump_default_config() -> Option<String> {

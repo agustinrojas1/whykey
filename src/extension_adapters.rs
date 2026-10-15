@@ -5,7 +5,6 @@
 //! manifest has passed validation.
 
 use std::collections::HashSet;
-use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,7 +56,7 @@ impl InventoryResult {
 
 /// Find and validate all user-owned compositor manifests.
 pub fn discover() -> (Vec<ExtensionAdapter>, Vec<ManifestWarning>) {
-    let directory = env::var_os("WHYKEY_ADAPTER_DIR")
+    let directory = crate::recording::env_var_os("WHYKEY_ADAPTER_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| util::config_base().map(|base| base.join("whykey/adapters")));
@@ -66,7 +65,7 @@ pub fn discover() -> (Vec<ExtensionAdapter>, Vec<ManifestWarning>) {
 
 pub fn discover_in(directory: &Path) -> (Vec<ExtensionAdapter>, Vec<ManifestWarning>) {
     let mut warnings = Vec::new();
-    let Ok(entries) = std::fs::read_dir(directory) else {
+    let Ok(entries) = crate::recording::read_dir(directory) else {
         return (Vec::new(), warnings);
     };
     let mut paths = entries
@@ -144,7 +143,7 @@ pub fn applicable_with_context(adapter: &ExtensionAdapter, context: &compositor:
     let env_match = adapter
         .applicable_env
         .iter()
-        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty()));
+        .any(|name| crate::recording::env_var_os(name).is_some_and(|value| !value.is_empty()));
     let desktop_match = context.desktop.as_deref().is_some_and(|desktop| {
         desktop.split(':').any(|value| {
             adapter

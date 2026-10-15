@@ -50,6 +50,10 @@ RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
 WHYKEY = "/w/whykey"
 VM_RESULT_DIR = "/tmp/vm-result"
 VM_TIMEOUT = 150
+# Recording (lab/run.py --record): whykey appends every answer it takes from
+# outside to RECORD_FILE (src/recording.rs), and the result carries them back.
+RECORD_FILE = "/tmp/whykey-record.ndjson"
+RECORD_VARIABLE = "WHYKEY_RECORD"
 # VM spec "keyboard": the guest's only keyboard is a QEMU virtio-keyboard-pci;
 # the PC's i8042 PS/2 controller is off, so no second keyboard exists. lab/qkbd.py
 # in the guest writes QMP command lines to the virtio-serial port whykey.keyboard;
@@ -373,6 +377,18 @@ class Lab:
         return truth
 
     # -- whykey ----------------------------------------------------------
+    def recording_in_shell(self) -> tuple[str, str]:
+        """Shell text that exports the recording variable around one whykey run in the
+        scenario's shell, or two empty strings. It must be exported, not set on an `env`
+        command: shell-init defines `whykey` as a shell function that exports the readline
+        snapshot and then runs the binary, and `env` would run the binary directly."""
+        if not recording_enabled():
+            return "", ""
+        parts = [os.path.basename(str(part)) for part in self.scenario.get("pty", {}).get("command", [])]
+        if "fish" in parts:
+            return f"set -gx {RECORD_VARIABLE} {shlex.quote(RECORD_FILE)}; ", f"; set -e {RECORD_VARIABLE}"
+        return f"export {RECORD_VARIABLE}={shlex.quote(RECORD_FILE)}; ", f"; unset {RECORD_VARIABLE}"
+
     def wait_whykey_exit(self, timeout: float) -> None:
         """Wait for the background whykey to exit on its own; its output is
         collected later by run_whykey, so this does not judge its exit code."""
@@ -439,6 +455,8 @@ class Lab:
         spec = self.scenario["whykey"]
         args = [*spec["args"], "--json", "--schema-version", "2"]
         mode = spec.get("run", "direct")
+        if recording_enabled() and os.path.exists(RECORD_FILE):
+            os.remove(RECORD_FILE)
         if mode == "background":
             try:
                 exit_code = self.whykey_process.wait(timeout=20)
@@ -457,9 +475,10 @@ class Lab:
             for path in ("/tmp/whykey.out", "/tmp/whykey.err", "/tmp/whykey.done"):
                 if os.path.exists(path):
                     os.remove(path)
+            record_on, record_off = self.recording_in_shell()
             command = (
-                f"{spec.get('command', 'whykey')} {shlex.join(args)}"
-                " >/tmp/whykey.out 2>/tmp/whykey.err; touch /tmp/whykey.done\r"
+                f"{record_on}{spec.get('command', 'whykey')} {shlex.join(args)}"
+                f" >/tmp/whykey.out 2>/tmp/whykey.err{record_off}; touch /tmp/whykey.done\r"
             )
             self.pty.wait_quiet()
             self.pty.type(command.encode())
@@ -472,6 +491,8 @@ class Lab:
         else:
             env = dict(self.env)
             env.update(spec.get("env", {}))
+            if recording_enabled():
+                env[RECORD_VARIABLE] = RECORD_FILE
             completed = subprocess.run(
                 [WHYKEY, *args],
                 stdin=subprocess.DEVNULL,
@@ -487,7 +508,11 @@ class Lab:
             report = json.loads(stdout)
         except json.JSONDecodeError:
             report = None
-        return {"exit_code": exit_code, "report": report, "stdout": stdout if report is None else None, "stderr": stderr}
+        result = {"exit_code": exit_code, "report": report, "stdout": stdout if report is None else None, "stderr": stderr}
+        # A background run (listen) reads live input and is never recorded.
+        if recording_enabled() and mode != "background":
+            result["recording"] = read_recording()
+        return result
 
     # -- lifecycle -------------------------------------------------------
     def execute(self) -> dict:
@@ -589,6 +614,19 @@ def keyboard_relay(done: threading.Event) -> None:
         return  # QEMU is gone
 
 
+def recording_enabled() -> bool:
+    return os.environ.get("WHYKEY_LAB_RECORD") == "1"
+
+
+def read_recording() -> list:
+    """The answers whykey recorded, one JSON object per line, or [] when none were taken."""
+    try:
+        with open(RECORD_FILE, encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
 def run_in_vm(scenario_path: str, environment: str, vm: dict) -> dict:
     """Boot the image's kernel with this container as root filesystem and run
     the scenario there (see the module docstring). `vm` is the environment's
@@ -600,7 +638,8 @@ def run_in_vm(scenario_path: str, environment: str, vm: dict) -> dict:
     result_path = os.path.join(VM_RESULT_DIR, "result.json")
     if os.path.exists(result_path):
         os.remove(result_path)
-    inner = f"env WHYKEY_LAB_VM=1 python3 /lab/driver.py {shlex.quote(scenario_path)}"
+    record = "WHYKEY_LAB_RECORD=1 " if recording_enabled() else ""
+    inner = f"env WHYKEY_LAB_VM=1 {record}python3 /lab/driver.py {shlex.quote(scenario_path)}"
     argv = [
         "vng", "--run", kernels[-1], "--rw", "--force-9p", "--disable-microvm",
         "--memory", str(vm.get("memory", "2G")), "--cpus", str(vm.get("cpus", 2)),
