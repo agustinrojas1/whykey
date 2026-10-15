@@ -141,7 +141,8 @@ impl Kde {
         match runtime_matches(&codes) {
             Ok(matches) => {
                 let owner = wayland_owner_missing_keys();
-                let mut result = inspect_runtime(&matches, owner.as_deref());
+                let inhibitable = inhibitable(env::var("XDG_SESSION_TYPE").ok().as_deref(), key);
+                let mut result = inspect_runtime(&matches, owner.as_deref(), inhibitable);
                 if let Some(alias) = us_shifted_alias(key) {
                     result.details.push(format!(
                         "also asked for {} assuming a US layout: Qt records Shift+digit as the shifted symbol",
@@ -208,7 +209,11 @@ fn runtime_matches(codes: &[i32]) -> Result<Vec<RuntimeMatch>, String> {
     Ok(matches)
 }
 
-fn inspect_runtime(matches: &[RuntimeMatch], wayland_owner: Option<&str>) -> LayerResult {
+fn inspect_runtime(
+    matches: &[RuntimeMatch],
+    wayland_owner: Option<&str>,
+    inhibitable: bool,
+) -> LayerResult {
     let mut details = vec![format!(
         "source: live kglobalaccel D-Bus ({SERVICE} globalShortcutsByKey)"
     )];
@@ -257,6 +262,12 @@ fn inspect_runtime(matches: &[RuntimeMatch], wayland_owner: Option<&str>) -> Lay
         "kglobalaccel reports activity per component (isActive); a single action its application released while others stay registered still looks active"
             .into(),
     );
+    if inhibitable {
+        details.push(
+            "not active while the focused window holds a keyboard-shortcuts inhibitor (KWin grants one without asking) or an Xwayland keyboard grab"
+                .into(),
+        );
+    }
     let evidence = BindingEvidence::action(
         active.info.action_name.clone(),
         BindingScope::Universal,
@@ -408,6 +419,16 @@ fn owner_process_name() -> Option<String> {
 fn busctl_pid(stdout: &[u8]) -> Option<u64> {
     let reply: serde_json::Value = serde_json::from_slice(stdout).ok()?;
     reply.get("data")?.get(0)?.as_u64()
+}
+
+/// Whether a focused client can suspend a KWin shortcut on this key. On
+/// Wayland, KWin's GlobalShortcutFilter skips global shortcuts while the
+/// focused surface holds a keyboard-shortcuts inhibitor or an Xwayland
+/// keyboard grab (`WaylandServer::isKeyboardShortcutsInhibited`); only the
+/// power key is handled before that check (kwin src/input.cpp). No KWin
+/// interface reports the inhibitor, so whykey can only say that it may apply.
+fn inhibitable(session_type: Option<&str>, key: &KeyCombo) -> bool {
+    session_type == Some("wayland") && key.key() != normalize_key_str("XF86PowerOff")
 }
 
 fn component_active(path: &str) -> Result<bool, String> {
@@ -1045,6 +1066,7 @@ mod tests {
                 active: true,
             }],
             None,
+            false,
         );
         assert_eq!(active.outcome, Outcome::Consumed);
         let inactive = inspect_runtime(
@@ -1053,6 +1075,7 @@ mod tests {
                 active: false,
             }],
             None,
+            false,
         );
         assert_eq!(inactive.outcome, Outcome::Pass);
         assert!(
@@ -1061,9 +1084,9 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("inactive"))
         );
-        assert_eq!(inspect_runtime(&[], None).outcome, Outcome::Pass);
+        assert_eq!(inspect_runtime(&[], None, false).outcome, Outcome::Pass);
         assert_eq!(
-            inspect_runtime(&[], None).tier,
+            inspect_runtime(&[], None, false).tier,
             Some(EvidenceTier::LiveQuery)
         );
         assert_eq!(inactive.tier, Some(EvidenceTier::LiveQuery));
@@ -1088,7 +1111,7 @@ mod tests {
             keys: vec![QT_ALT | 0x0100_0034],
         };
         let active = [RuntimeMatch { info, active: true }];
-        let owned = inspect_runtime(&active, Some("kglobalacceld"));
+        let owned = inspect_runtime(&active, Some("kglobalacceld"), true);
         assert_eq!(owned.outcome, Outcome::Pass);
         assert_eq!(owned.tier, Some(EvidenceTier::LiveQuery));
         assert!(
@@ -1100,7 +1123,60 @@ mod tests {
         assert_eq!(busctl_pid(br#"{"type":"u","data":[1059]}"#), Some(1059));
         assert_eq!(busctl_pid(br#"{"type":"u","data":1059}"#), None);
         // The same shortcut owned by KWin still consumes the key.
-        assert_eq!(inspect_runtime(&active, None).outcome, Outcome::Consumed);
+        assert_eq!(
+            inspect_runtime(&active, None, false).outcome,
+            Outcome::Consumed
+        );
+    }
+
+    #[test]
+    fn wayland_shortcuts_note_that_an_inhibitor_suspends_them() {
+        // KWin skips global shortcuts while the focused surface holds a
+        // keyboard-shortcuts inhibitor or an Xwayland keyboard grab, except
+        // for the power key; on X11 there is no inhibitor.
+        assert!(inhibitable(Some("wayland"), &combo("alt+f4")));
+        assert!(!inhibitable(Some("wayland"), &combo("xf86poweroff")));
+        assert!(!inhibitable(Some("x11"), &combo("alt+f4")));
+        assert!(!inhibitable(None, &combo("alt+f4")));
+
+        let info = ShortcutInfo {
+            action: "Window Close".into(),
+            action_name: "Close Window".into(),
+            component: "kwin".into(),
+            component_name: "KWin".into(),
+            keys: vec![QT_ALT | 0x0100_0034],
+        };
+        let mentions_inhibitor = |result: &LayerResult| {
+            result
+                .details
+                .iter()
+                .any(|line| line.contains("keyboard-shortcuts inhibitor"))
+        };
+        let active = [RuntimeMatch {
+            info: info.clone(),
+            active: true,
+        }];
+        // The key is still consumed: whykey cannot see the inhibitor.
+        let wayland = inspect_runtime(&active, None, true);
+        assert_eq!(wayland.outcome, Outcome::Consumed);
+        assert!(mentions_inhibitor(&wayland));
+        assert!(!mentions_inhibitor(&inspect_runtime(&active, None, false)));
+        // Nothing to suspend when no active shortcut consumes the key.
+        let inactive = inspect_runtime(
+            &[RuntimeMatch {
+                info,
+                active: false,
+            }],
+            None,
+            true,
+        );
+        assert_eq!(inactive.outcome, Outcome::Pass);
+        assert!(!mentions_inhibitor(&inactive));
+        assert!(!mentions_inhibitor(&inspect_runtime(
+            &active,
+            Some("kglobalacceld"),
+            true
+        )));
     }
 
     #[test]
