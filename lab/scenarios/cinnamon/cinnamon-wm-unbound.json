@@ -1,0 +1,24 @@
+{
+  "id": "cinnamon-wm-unbound",
+  "description": "with muffin's toggle-maximized bound to Super+q, Super+y has no binding: the window is not maximized and the key reaches the X11 probe",
+  "tier": "observed",
+  "environment": "cinnamon",
+  "session_setup": [
+    "gsettings set org.cinnamon.desktop.keybindings.wm toggle-maximized \"['<Super>q']\""
+  ],
+  "probe": "x11",
+  "actions": [
+    {"wait_grab": {"keysym": "q", "modmask": 64}},
+    {"xdotool": ["keydown", "Super_L", "keydown", "y", "keyup", "y", "keyup", "Super_L"]}
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "xprop -name whykey-probe _NET_WM_STATE | grep -q MAXIMIZED_VERT"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "Cinnamon"
+  }
+}

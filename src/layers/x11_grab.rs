@@ -1,17 +1,22 @@
-//! Observed X11 passive key grabs on the root window.
+//! Observed X11 passive key grabs on the root window and on the path key
+//! presses take to the focused window.
 //!
 //! X11 window managers and hotkey daemons claim a global shortcut with a
 //! passive grab on the root window, and the X server refuses a second
 //! client's grab on the same window, key and modifiers with `BadAccess`.
-//! Asking the server to grab the combination on the root window therefore
-//! observes whether some client owns it there, independent of which program
-//! that is or where its configuration lives. A grab an application holds on
-//! its own window is invisible to this probe. In an X11 session that
-//! observation decides the compositor-tier outcome unless the adapter knows
-//! the grab's owner passes the key on (a replaying grab looks the same to
-//! the probe); the selected desktop adapter keeps its identity (binding,
-//! command, mode) when it names the grab's owner, and a configured binding
-//! without a root-window grab is reported as inactive.
+//! Some window managers keep a window's own bindings (Cinnamon's muffin:
+//! maximize, close, ...) on the frame around the focused client instead. The
+//! X server searches passive grabs from the root down the window path to the
+//! focused window, so the probe asks about every window on that path: the
+//! root, then each window down to the focused one. Asking the server to grab
+//! the combination there observes whether some client owns it, independent
+//! of which program that is or where its configuration lives. A grab an
+//! application holds on a window off that path is invisible to this probe. In
+//! an X11 session that observation decides the compositor-tier outcome unless
+//! the adapter knows the grab's owner passes the key on (a replaying grab
+//! looks the same to the probe); the selected desktop adapter keeps its
+//! identity (binding, command, mode) when it names the grab's owner, and a
+//! configured binding without such a grab is reported as inactive.
 //!
 //! tools/generate_support_matrix.py recognises a verdict this probe decided
 //! by the `observed:` evidence lines `evidence` writes; keep their prefixes.
@@ -31,9 +36,8 @@ use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
 use crate::probe::x11::{Connection, GrabCheck, GrabStatus};
 
 const LAYER: &str = "X11 key grab";
-const GRABBED: &str =
-    "an X11 client holds a grab on this shortcut on the root window (WM or hotkey daemon)";
-const FREE: &str = "no grab on the root window (WMs and hotkey daemons grab there)";
+const GRABBED: &str = "an X11 client holds a grab on this shortcut on the root window or on the focused window's path (WM or hotkey daemon)";
+const FREE: &str = "no grab on the root window or on the focused window's path (WMs and hotkey daemons grab there)";
 
 /// Which display server the grab probe would talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,9 +172,16 @@ fn probe(key: &KeyCombo) -> Observation {
             return Ok(Observation::NoKeycode);
         }
         let modmask = u16::try_from(key.modmask() & 0xff).unwrap_or_default();
-        let mut checks = Vec::with_capacity(targets.len());
+        let path = connection.key_event_path()?;
+        let mut checks = Vec::with_capacity(targets.len() * path.len());
         for target in targets {
-            checks.push(connection.check_grab(target.keycode, modmask | target.level_modifiers)?);
+            for &window in &path {
+                checks.push(connection.check_grab_on(
+                    window,
+                    target.keycode,
+                    modmask | target.level_modifiers,
+                )?);
+            }
         }
         Ok(Observation::Checked(checks))
     };
@@ -212,35 +223,64 @@ fn masks(masks: &[u16]) -> String {
         .join(", ")
 }
 
-/// Observed evidence lines for each checked keycode.
+/// Where a check's grab was tried: the root window, or a window on the path
+/// to the focused window.
+fn scope(check: &GrabCheck) -> String {
+    if check.root {
+        "the root window".into()
+    } else {
+        format!("window {:#x} on the focused window's path", check.window)
+    }
+}
+
+/// Observed evidence lines for each checked keycode. A key whose whole path
+/// is free gets one line, not one per window.
 fn evidence(checks: &[GrabCheck]) -> Vec<String> {
-    let mut details = Vec::new();
+    const NO_XI2: &str =
+        "XInput2 is unavailable on this server; only core-protocol grabs were checked";
+    let mut details: Vec<String> = Vec::new();
     for check in checks {
         let target = format!(
             "keycode {} with {}",
             check.keycode,
             modifier_names(check.modmask)
         );
+        let scope = scope(check);
         if !check.core_conflicts.is_empty() {
             details.push(format!(
-                "observed: the X server refused a core GrabKey on the root window for {target} (BadAccess) for {}",
+                "observed: the X server refused a core GrabKey on {scope} for {target} (BadAccess) for {}",
                 masks(&check.core_conflicts)
             ));
         }
         match &check.xi2_conflicts {
             Some(conflicts) if !conflicts.is_empty() => details.push(format!(
-                "observed: the X server refused an XInput2 passive grab on the root window for {target} (BadAccess) for {}",
+                "observed: the X server refused an XInput2 passive grab on {scope} for {target} (BadAccess) for {}",
                 masks(conflicts)
             )),
             Some(_) => {}
-            None => details.push(
-                "XInput2 is unavailable on this server; only core-protocol grabs were checked"
-                    .into(),
-            ),
+            None => {
+                if !details.iter().any(|detail| detail.as_str() == NO_XI2) {
+                    details.push(NO_XI2.into());
+                }
+            }
         }
-        if check.status() == GrabStatus::Free {
+    }
+    let mut targets: Vec<(u8, u16)> = Vec::new();
+    for check in checks {
+        if !targets.contains(&(check.keycode, check.modmask)) {
+            targets.push((check.keycode, check.modmask));
+        }
+    }
+    for (keycode, modmask) in targets {
+        let group: Vec<&GrabCheck> = checks
+            .iter()
+            .filter(|check| check.keycode == keycode && check.modmask == modmask)
+            .collect();
+        if group.iter().all(|check| check.status() == GrabStatus::Free) {
             details.push(format!(
-                "observed: root-window grabs on {target} (also with Lock/NumLock) succeeded and were released; a grab an application holds on its own window is not visible here"
+                "observed: root-window grabs on keycode {keycode} with {} (also with Lock/NumLock) succeeded on the root window and on the {} windows of the focused window's path, and were released; a grab an application holds on a window off that path is not visible here",
+                modifier_names(modmask),
+                group.len()
             ));
         }
     }
@@ -319,7 +359,7 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
         (false, claimed) => {
             if claimed {
                 details.push(format!(
-                    "{} reported '{}', but no X client holds a grab on the root window, so that binding is not active",
+                    "{} reported '{}', but no X client holds a grab on the root window or on the focused window's path, so that binding is not active",
                     adapter.layer, adapter.summary
                 ));
                 details.extend(
@@ -370,10 +410,20 @@ fn with_detail(mut adapter: LayerResult, detail: &str) -> LayerResult {
 mod tests {
     use super::*;
 
+    const ROOT: u32 = 0x21f;
+    /// The frame muffin wraps around the focused client (a child of the root).
+    const FRAME: u32 = 0x60005b;
+
     fn check(core: Vec<u16>, xi2: Option<Vec<u16>>) -> GrabCheck {
+        on_window(ROOT, true, core, xi2)
+    }
+
+    fn on_window(window: u32, root: bool, core: Vec<u16>, xi2: Option<Vec<u16>>) -> GrabCheck {
         GrabCheck {
             keycode: 28,
             modmask: 64,
+            window,
+            root,
             core_conflicts: core,
             xi2_conflicts: xi2,
         }
@@ -623,7 +673,74 @@ mod tests {
             result
                 .details
                 .iter()
-                .any(|detail| detail.contains("its own window is not visible"))
+                .any(|detail| detail.contains("off that path is not visible"))
+        );
+    }
+
+    #[test]
+    fn grab_on_the_focused_frame_confirms_the_claiming_adapter() {
+        // muffin keeps a window's own bindings on the frame around the focused
+        // client, not on the root: the root is free, the frame holds the grab.
+        let cinnamon = LayerResult::consumed(
+            "Cinnamon",
+            LayerId::Compositor,
+            "Cinnamon global shortcut consumes the key",
+            vec!["binding: org.cinnamon.desktop.keybindings.wm toggle-maximized".into()],
+        );
+        let path = vec![
+            on_window(ROOT, true, Vec::new(), Some(Vec::new())),
+            on_window(FRAME, false, Vec::new(), Some(vec![64])),
+        ];
+        let result = x11_result(cinnamon, Observation::Checked(path.clone()));
+        assert_eq!(result.layer, "Cinnamon");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(result.summary, "Cinnamon global shortcut consumes the key");
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("toggle-maximized"))
+        );
+        assert!(result.details.iter().any(|detail| detail.starts_with(
+            "observed: the X server refused an XInput2 passive grab on window 0x60005b on the focused window's path"
+        )));
+        // The same grab with nothing claiming the key is reported under the
+        // neutral layer, never attributed to Cinnamon.
+        let unclaimed = x11_result(
+            LayerResult::pass("Cinnamon", LayerId::Compositor, "no binding", Vec::new()),
+            Observation::Checked(path),
+        );
+        assert_eq!(unclaimed.layer, LAYER);
+        assert_eq!(unclaimed.outcome, Outcome::Consumed);
+    }
+
+    #[test]
+    fn free_root_and_free_path_pass_and_say_so_once_per_key() {
+        let cinnamon = LayerResult::consumed(
+            "Cinnamon",
+            LayerId::Compositor,
+            "Cinnamon global shortcut consumes the key",
+            vec!["binding: toggle-maximized".into()],
+        );
+        let path = vec![
+            on_window(ROOT, true, Vec::new(), Some(Vec::new())),
+            on_window(FRAME, false, Vec::new(), Some(Vec::new())),
+        ];
+        let result = x11_result(cinnamon, Observation::Checked(path));
+        assert_eq!(result.layer, "Cinnamon");
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert_eq!(result.summary, FREE);
+        let free_lines = result
+            .details
+            .iter()
+            .filter(|detail| detail.starts_with("observed: root-window grabs on"))
+            .count();
+        assert_eq!(free_lines, 1);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("the 2 windows of the focused window's path"))
         );
     }
 }

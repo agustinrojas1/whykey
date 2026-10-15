@@ -1,0 +1,27 @@
+{
+  "id": "cinnamon-custom-unbound",
+  "description": "with a Cinnamon custom shortcut on Super+t (which is grabbed), Super+y has no shortcut: no command runs and the key reaches the X11 probe",
+  "tier": "observed",
+  "environment": "cinnamon",
+  "session_setup": [
+    "gsettings set org.cinnamon.desktop.keybindings.custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/custom0/ name 'Lab fire'",
+    "gsettings set org.cinnamon.desktop.keybindings.custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/custom0/ command 'touch /tmp/fired'",
+    "gsettings set org.cinnamon.desktop.keybindings.custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/custom0/ binding \"['<Super>t']\"",
+    "gsettings set org.cinnamon.desktop.keybindings custom-list \"['custom0']\""
+  ],
+  "probe": "x11",
+  "actions": [
+    {"wait_grab": {"keysym": "t", "modmask": 64}},
+    {"xdotool": ["keydown", "Super_L", "keydown", "y", "keyup", "y", "keyup", "Super_L"]}
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["super+y"],
+    "layer": "Cinnamon"
+  }
+}

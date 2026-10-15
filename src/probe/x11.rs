@@ -39,6 +39,10 @@ const XI_VIRTUAL_CORE_KEYBOARD: u16 = 3;
 const XI_STATUS_ACCESS: u8 = 10;
 
 const KEYSYM_NUM_LOCK: u32 = 0xff7f;
+/// GetInputFocus reports PointerRoot (focus follows the pointer) as 1.
+const POINTER_ROOT_FOCUS: u32 = 1;
+/// Deepest window chain the key path walks; real stacks are a few levels.
+const MAX_WINDOW_DEPTH: usize = 256;
 
 /// Whether another X client holds a passive grab on a key combination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,16 +51,21 @@ pub enum GrabStatus {
     GrabbedByOtherClient,
 }
 
-/// Result of probing one keycode + modifier mask on the root window.
+/// Result of probing one keycode + modifier mask on one window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrabCheck {
     pub keycode: u8,
     pub modmask: u16,
+    /// The window the grab was tried on.
+    pub window: u32,
+    /// Whether `window` is the root window. Any other window was on the path
+    /// key presses take to the focused window (a window manager's frame).
+    pub root: bool,
     /// Modifier masks (the requested mask combined with Lock/NumLock) another
     /// client grabbed through the core protocol.
     pub core_conflicts: Vec<u16>,
-    /// Same for XInput2 passive grabs (Mutter/GNOME Shell); `None` when the
-    /// server has no usable XInput2 extension.
+    /// Same for XInput2 passive grabs (Mutter/GNOME Shell, Cinnamon's muffin);
+    /// `None` when the server has no usable XInput2 extension.
     pub xi2_conflicts: Option<Vec<u16>>,
 }
 
@@ -82,13 +91,23 @@ pub struct KeyTarget {
     pub level_modifiers: u16,
 }
 
-/// Whether some X client grabs `keycode` with `modmask` on the root window,
-/// in any Lock/NumLock combination (window managers grab all of them).
+/// Whether some X client grabs `keycode` with `modmask` on the root window or
+/// on the path key presses take to the focused window, in any Lock/NumLock
+/// combination (window managers grab all of them).
 pub fn grab_status(keycode: u32, modmask: u32) -> io::Result<GrabStatus> {
     let mut connection = Connection::connect_from_env()?;
     let keycode = checked_keycode(keycode)?;
     let modmask = checked_modmask(modmask)?;
-    Ok(connection.check_grab(keycode, modmask)?.status())
+    let path = connection.key_event_path()?;
+    let grabbed = path.iter().try_fold(false, |grabbed, &window| {
+        let check = connection.check_grab_on(window, keycode, modmask)?;
+        io::Result::Ok(grabbed || check.status() == GrabStatus::GrabbedByOtherClient)
+    })?;
+    Ok(if grabbed {
+        GrabStatus::GrabbedByOtherClient
+    } else {
+        GrabStatus::Free
+    })
 }
 
 /// Opens a mapped, focused probe toplevel on the `DISPLAY` X server.
@@ -116,6 +135,31 @@ fn checked_modmask(modmask: u32) -> io::Result<u16> {
 
 fn invalid_input(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+/// The path from `root` down to `start` (root first), built from `parent_of`.
+/// The root is always on it, so it is probed even when the walk from `start`
+/// ends before reaching it (a window that vanished mid-probe).
+fn path_to_root(
+    root: u32,
+    start: u32,
+    mut parent_of: impl FnMut(u32) -> io::Result<u32>,
+) -> io::Result<Vec<u32>> {
+    let mut path = vec![start];
+    let mut window = start;
+    while window != root && path.len() < MAX_WINDOW_DEPTH {
+        let parent = parent_of(window)?;
+        if parent == x11rb::NONE {
+            break;
+        }
+        path.push(parent);
+        window = parent;
+    }
+    if path.last() != Some(&root) {
+        path.push(root);
+    }
+    path.reverse();
+    Ok(path)
 }
 
 fn connect_error(error: ConnectError) -> io::Error {
@@ -376,11 +420,67 @@ impl Connection {
         Ok(unique)
     }
 
-    /// Tries to grab `keycode`+`modmask` (with every Lock/NumLock variant)
-    /// on the root window through the core protocol and XInput2. A grab the
-    /// server refuses is held by another client; grabs that succeed are
-    /// released immediately.
+    /// Tries to grab `keycode`+`modmask` on the root window (see
+    /// `check_grab_on`).
     pub fn check_grab(&mut self, keycode: u8, modmask: u16) -> io::Result<GrabCheck> {
+        self.check_grab_on(self.root, keycode, modmask)
+    }
+
+    /// The windows a key press passes through on its way to the focused
+    /// window, from the root window down. The X server searches passive grabs
+    /// along this path in that order, so a grab on any of them takes the key.
+    /// A window manager such as muffin puts its per-window bindings on the
+    /// frame around the focused client, which is on this path but not the root.
+    pub fn key_event_path(&mut self) -> io::Result<Vec<u32>> {
+        let focus = self
+            .conn
+            .get_input_focus()
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?
+            .focus;
+        let start = match focus {
+            // None: no window receives keys; PointerRoot: the window under the
+            // pointer does (focus-follows-mouse); anything else is a window.
+            x11rb::NONE => self.root,
+            POINTER_ROOT_FOCUS => self.pointer_window()?,
+            window => window,
+        };
+        path_to_root(self.root, start, |window| {
+            Ok(self
+                .conn
+                .query_tree(window)
+                .map_err(connection_error)?
+                .reply()
+                .map_err(reply_error)?
+                .parent)
+        })
+    }
+
+    fn pointer_window(&self) -> io::Result<u32> {
+        let pointer = self
+            .conn
+            .query_pointer(self.root)
+            .map_err(connection_error)?
+            .reply()
+            .map_err(reply_error)?;
+        Ok(if pointer.child == x11rb::NONE {
+            self.root
+        } else {
+            pointer.child
+        })
+    }
+
+    /// Tries to grab `keycode`+`modmask` (with every Lock/NumLock variant)
+    /// on `window` through the core protocol and XInput2. A grab the server
+    /// refuses is held by another client; grabs that succeed are released
+    /// immediately.
+    pub fn check_grab_on(
+        &mut self,
+        window: u32,
+        keycode: u8,
+        modmask: u16,
+    ) -> io::Result<GrabCheck> {
         if keycode < self.min_keycode || keycode > self.max_keycode {
             return Err(invalid_input(format!(
                 "X11 keycode {keycode} is outside the server range {}..={}",
@@ -388,6 +488,7 @@ impl Connection {
             )));
         }
         let variants = self.lock_variants(modmask)?;
+        let root = window == self.root;
 
         let mut grabs = Vec::with_capacity(variants.len());
         for &variant in &variants {
@@ -395,7 +496,7 @@ impl Connection {
                 .conn
                 .grab_key(
                     false,
-                    self.root,
+                    window,
                     xproto::ModMask::from(variant),
                     keycode,
                     xproto::GrabMode::ASYNC,
@@ -419,7 +520,7 @@ impl Connection {
             if !core_conflicts.contains(&variant) {
                 ungrabs.push(
                     self.conn
-                        .ungrab_key(keycode, self.root, xproto::ModMask::from(variant))
+                        .ungrab_key(keycode, window, xproto::ModMask::from(variant))
                         .map_err(connection_error)?,
                 );
             }
@@ -429,13 +530,15 @@ impl Connection {
         }
 
         let xi2_conflicts = if self.xinput2_available()? {
-            Some(self.check_xi2_grab(keycode, &variants)?)
+            Some(self.check_xi2_grab(window, keycode, &variants)?)
         } else {
             None
         };
         Ok(GrabCheck {
             keycode,
             modmask,
+            window,
+            root,
             core_conflicts,
             xi2_conflicts,
         })
@@ -466,7 +569,7 @@ impl Connection {
         Ok(available)
     }
 
-    fn check_xi2_grab(&self, keycode: u8, variants: &[u16]) -> io::Result<Vec<u16>> {
+    fn check_xi2_grab(&self, window: u32, keycode: u8, variants: &[u16]) -> io::Result<Vec<u16>> {
         let modifiers: Vec<u32> = variants.iter().map(|&variant| u32::from(variant)).collect();
         let mask = [u32::from(
             xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE,
@@ -475,7 +578,7 @@ impl Connection {
             .conn
             .xinput_xi_passive_grab_device(
                 x11rb::CURRENT_TIME,
-                self.root,
+                window,
                 x11rb::NONE,
                 u32::from(keycode),
                 XI_VIRTUAL_CORE_KEYBOARD,
@@ -512,7 +615,7 @@ impl Connection {
         if !held.is_empty() {
             self.conn
                 .xinput_xi_passive_ungrab_device(
-                    self.root,
+                    window,
                     u32::from(keycode),
                     XI_VIRTUAL_CORE_KEYBOARD,
                     xinput::GrabType::KEYCODE,
@@ -1123,12 +1226,33 @@ mod tests {
         let mut check = GrabCheck {
             keycode: 28,
             modmask: 64,
+            window: 1,
+            root: true,
             core_conflicts: Vec::new(),
             xi2_conflicts: None,
         };
         assert_eq!(check.status(), GrabStatus::Free);
         check.xi2_conflicts = Some(vec![64]);
         assert_eq!(check.status(), GrabStatus::GrabbedByOtherClient);
+    }
+
+    #[test]
+    fn key_path_runs_from_the_root_down_to_the_focused_window() {
+        // Root 1 > frame 2 (a window manager's frame) > focused client 3.
+        let parents = HashMap::from([(3u32, 2u32), (2, 1), (1, x11rb::NONE)]);
+        let path = path_to_root(1, 3, |window| Ok(parents[&window])).unwrap();
+        assert_eq!(path, vec![1, 2, 3]);
+        // Nothing focused: the root is the whole path, and no tree is walked.
+        assert_eq!(
+            path_to_root(1, 1, |_| panic!("walked the root")).unwrap(),
+            vec![1]
+        );
+        // A walk that ends early still probes the root, first.
+        assert_eq!(path_to_root(1, 9, |_| Ok(x11rb::NONE)).unwrap(), vec![1, 9]);
+        // A cyclic or absurdly deep tree stops at the depth limit.
+        let deep = path_to_root(1, 9, |window| Ok(window + 1)).unwrap();
+        assert_eq!(deep.len(), MAX_WINDOW_DEPTH + 1);
+        assert_eq!(deep[0], 1);
     }
 
     /// Lab-only: needs a live X server on `DISPLAY`. Run inside a lab
@@ -1194,6 +1318,90 @@ mod tests {
         let check = prober.check_grab(target.keycode, 4).unwrap();
         assert!(check.core_conflicts.is_empty());
         assert_eq!(check.xi2_conflicts, Some(vec![4]));
+    }
+
+    /// Lab-only: muffin keeps a window's own bindings on the frame around the
+    /// focused client, not on the root. The probe must see that grab on the
+    /// key path and find the root free.
+    #[test]
+    #[ignore = "needs an X server on DISPLAY (lab container)"]
+    fn lab_grab_on_the_focused_frame_is_on_the_key_path() {
+        let holder = Connection::connect_from_env().unwrap();
+        let mut prober = Connection::connect_from_env().unwrap();
+        let key: KeyCombo = "super+F7".parse().unwrap();
+        let target = prober.key_targets(&key).unwrap()[0];
+
+        // A frame (a child of the root) around a mapped client that has the focus.
+        let frame = holder.conn.generate_id().unwrap();
+        holder
+            .conn
+            .create_window(
+                0,
+                frame,
+                holder.root,
+                0,
+                0,
+                50,
+                50,
+                0,
+                xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &xproto::CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        let client = holder.conn.generate_id().unwrap();
+        holder
+            .conn
+            .create_window(
+                0,
+                client,
+                frame,
+                0,
+                0,
+                10,
+                10,
+                0,
+                xproto::WindowClass::INPUT_OUTPUT,
+                0,
+                &xproto::CreateWindowAux::new(),
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+        holder.conn.map_window(frame).unwrap().check().unwrap();
+        holder.conn.map_window(client).unwrap().check().unwrap();
+        holder
+            .conn
+            .set_input_focus(xproto::InputFocus::PARENT, client, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        holder
+            .conn
+            .grab_key(
+                false,
+                frame,
+                xproto::ModMask::M4,
+                target.keycode,
+                xproto::GrabMode::ASYNC,
+                xproto::GrabMode::ASYNC,
+            )
+            .unwrap()
+            .check()
+            .unwrap();
+
+        assert_eq!(
+            prober.key_event_path().unwrap(),
+            vec![holder.root, frame, client]
+        );
+        let on_frame = prober.check_grab_on(frame, target.keycode, 64).unwrap();
+        assert!(!on_frame.root);
+        assert_eq!(on_frame.status(), GrabStatus::GrabbedByOtherClient);
+        let on_root = prober.check_grab(target.keycode, 64).unwrap();
+        assert!(on_root.root);
+        assert_eq!(on_root.status(), GrabStatus::Free);
     }
 
     /// Lab-only: run under Xvfb + i3 with `bindsym Mod4+t ...` and xdotool.
