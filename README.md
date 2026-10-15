@@ -1,328 +1,328 @@
-# whykey
+<h1 align="center">whykey</h1>
 
-[![CI](https://github.com/agustinrojas1/whykey/actions/workflows/ci.yml/badge.svg)](https://github.com/agustinrojas1/whykey/actions/workflows/ci.yml)
+<p align="center">
+  <b>Why didn't my shortcut work?</b><br>
+  whykey traces a key press through every layer of the Linux input stack<br>
+  and tells you which program took it, and why.
+</p>
 
-`whykey` tells you what happens to a key combination on Linux: which program
-takes it, and whether the key continues to the next program in line
-(remapper, compositor or window manager, terminal, input method, TTY,
-multiplexer, application, shell).
+<p align="center">
+  <a href="https://github.com/agustinrojas1/whykey/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/agustinrojas1/whykey/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/agustinrojas1/whykey/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/agustinrojas1/whykey"></a>
+  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-informational">
+  <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-orange">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
-It gets its answer in three steps. Each answer is labelled with the step that
-produced it.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#supported-environments">Supported environments</a> ·
+  <a href="#verified-against-reality">Verified against reality</a> ·
+  <a href="#documentation">Docs</a>
+</p>
 
-1. **Observe.** `whykey listen` watches the key itself.
-2. **Ask the running program.** Compositor IPC, GNOME's settings, KDE's
-   kglobalaccel, the X server's key grabs, tmux, and your shell's live
-   bindings.
-3. **Read configuration files.** This is the fallback when a program cannot
-   be asked. Such answers are marked `config file (static)` or
-   `default (unverified)`, because the running program may disagree.
+<p align="center">
+  <img src="docs/assets/whykey-demo.svg" alt="whykey super+return on Hyprland: Hyprland is configured to consume the shortcut, with the action, the evidence tier, and the file and line that bind it" width="820">
+</p>
 
-whykey never edits configuration and never runs the shortcut it inspects.
+---
 
-```console
-$ whykey super+t
-Super+T · Inspect
+## The problem
 
-Sway is configured to consume the shortcut.
+On Linux, a key press does not go straight to the application. It passes
+through a chain of programs, and **any one of them can take the key and stop
+it there**:
 
-Effect
-  The configured consumer stops this shortcut before later layers can handle it.
-
-Relevant layers (configuration)
-  Sway — Configured to stop: exec touch /tmp/fired [live query]
-      action exec touch /tmp/fired; source /root/.config/sway/config:1
-
-Technical detail: use --verbose for the complete route and raw evidence.
+```mermaid
+flowchart TB
+    subgraph top [" "]
+        direction LR
+        K(["⌨️ Key press"]) --> R["Remapper<br/><sub>keyd · kanata · xremap</sub>"]
+        R --> C["Compositor / WM<br/><sub>Hyprland · Sway · GNOME · KDE · i3</sub>"]
+        C --> T["Terminal<br/><sub>kitty · foot · Ghostty · WezTerm</sub>"]
+    end
+    subgraph bottom [" "]
+        direction LR
+        I["Input method<br/><sub>Fcitx5 · IBus</sub>"] --> Y["TTY driver<br/><sub>Ctrl+C · Ctrl+Z · Ctrl+S</sub>"]
+        Y --> M["Multiplexer<br/><sub>tmux · Screen · Zellij</sub>"]
+        M --> A(["Application / shell<br/><sub>bash · zsh · fish · Vim · Emacs</sub>"])
+    end
+    top --> bottom
+    style top fill:none,stroke:none
+    style bottom fill:none,stroke:none
 ```
 
-(Output from the lab's headless Sway, where `Mod4+t` runs `touch /tmp/fired`.)
+When `Ctrl+Left` does nothing in your editor, the culprit could be a global
+desktop shortcut, a terminal keybinding, a tmux prefix, or a line-editor
+binding in your shell. Finding out means reading half a dozen config formats
+and guessing which one is actually loaded.
 
-## 1. Observe: `whykey listen`
+**whykey does that for you.** Give it a key combination, or just press it,
+and it walks the chain: it says which layer handles the key, whether the key
+continues to the next one, and how sure it is.
+
+## Highlights
+
+- **One command, the whole route.** Remappers, 20 compositors, desktops, and
+  window managers, desktop shortcut daemons, terminals, input methods, the TTY,
+  multiplexers, shells, and editors in a single report.
+- **Asks the running programs, not just their files.** Answers come from
+  compositor IPC, D-Bus, the X server, tmux, and your shell's live bindings
+  whenever possible, so they reflect what is actually loaded.
+- **Watches the real key.** `whykey listen` captures the shortcut as you
+  press it, through the compositor, a probe window, the terminal, or the
+  kernel.
+- **Honest about certainty.** Every answer carries its evidence: *observed*,
+  *live query*, *config file*, or *default*. When whykey cannot know, it says
+  so instead of guessing.
+- **Safe by design.** Read-only: it never edits configuration and never runs
+  the shortcut it inspects. Temporary capture state is always restored.
+- **Verified against real programs.** A lab of 249 scenarios runs real
+  compositors, desktops, terminals, and shells, presses real keys, and checks
+  that whykey's verdict matches what actually happened.
+- **Scriptable.** Stable JSON (schema v1 and v2) and NDJSON output, shell
+  completions, snapshots, and diffs.
+
+## Install
+
+whykey runs on Linux (x86_64 and aarch64). Pick one:
+
+**mise** (prebuilt binary)
+
+```sh
+mise use github:agustinrojas1/whykey@2
+```
+
+**Cargo** (Rust 1.85 or newer)
+
+```sh
+cargo install --git https://github.com/agustinrojas1/whykey --locked
+```
+
+**Release binaries.** Each [release](https://github.com/agustinrojas1/whykey/releases/latest)
+publishes archives with a `.sha256` checksum:
+
+| Asset | Runs on |
+| --- | --- |
+| `whykey-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64 with glibc 2.28+ (Debian 10, Ubuntu 18.10, RHEL 8 and later) |
+| `whykey-<version>-x86_64-unknown-linux-musl.tar.gz` | any x86_64 Linux: fully static (Alpine, older glibc) |
+| `whykey-<version>-aarch64-unknown-linux-musl.tar.gz` | any aarch64 Linux: fully static |
+
+**Distribution packages.** Arch, Debian, RPM, and Nix recipes live in
+[`packaging/`](packaging/README.md).
+
+<details>
+<summary>Notes on mise version pinning and the editor extensions</summary>
+
+By default mise hides releases younger than 24 hours
+(`minimum_release_age`). During a release's first day, `@2` can fail; an
+exact version such as `@2.2.0` installs at once.
+
+The editor extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) are
+`python3` scripts. Distribution packages install them next to `whykey`; mise
+and `cargo install` do not put them on `PATH`. With mise they are in
+`"$(mise where github:agustinrojas1/whykey)/extensions"`; with Cargo, take
+them from the repository's `extensions/` directory.
+
+</details>
+
+## Quick start
+
+```sh
+whykey ctrl+left            # who handles Ctrl+Left, and does it get through?
+whykey listen               # press a shortcut and let whykey watch it
+whykey doctor               # what whykey can observe and ask on this machine
+```
+
+| Command | Answers |
+| --- | --- |
+| `whykey KEY` | Which layer handles `KEY`, and whether it continues downstream. |
+| `whykey inspect ctrl+x ctrl+e` | The same for a sequence; prefix state (tmux, Readline, Screen) carries over. |
+| `whykey inspect --focused ctrl+z` | Inspect against the focused window's process. |
+| `whykey listen` | Capture the next shortcut you press and explain its path. |
+| `whykey doctor` | Which integrations are available here, and what to enable. |
+| `whykey bindings --key ctrl+x` | Every binding for a key across the detected layers. |
+| `whykey conflicts` | Shortcuts that fire together or shadow each other. |
+| `whykey snapshot KEY` / `diff A B` | Save a diagnosis and compare it with a later one. |
+
+Keys are written as modifiers and a key joined with `+`: `ctrl`, `alt`,
+`shift`, `super`, `hyper`, `altgr`, `caps`, `num`, plus a character, a named
+key (`return`, `left`, `f1`, `kp_enter`), an XF86 media key, or `code:N`.
+`whykey --help` lists every command and option.
+
+For the most accurate shell answers, load the shell integration once in your
+shell's startup file:
+
+```sh
+eval "$(whykey shell-init bash)"      # or: zsh
+whykey shell-init fish | source       # fish
+```
+
+## How it works
+
+For every layer, whykey uses the strongest source of evidence available and
+labels the answer with it:
+
+```mermaid
+flowchart LR
+    O["<b>1 · Observe</b><br/>capture the key itself<br/><sub>whykey listen</sub>"]
+    A["<b>2 · Ask the running program</b><br/><sub>compositor IPC · D-Bus · X server grabs<br/>tmux · live shell bindings</sub>"]
+    F["<b>3 · Read configuration</b><br/><sub>config files · built-in defaults</sub>"]
+    O -- "not observable" --> A -- "cannot be asked" --> F
+```
+
+| Tier | Meaning |
+| --- | --- |
+| `observed` | A capture saw the key pass this layer, or stop at it. |
+| `live query` | The running program answered. |
+| `config file (static)` | Parsed from configuration; the running program may differ. |
+| `default (unverified)` | Built-in defaults; your configuration may override them. |
+
+A report opens with a one-line **diagnosis**, its **effect**, the
+**relevant layers** with their tiers, **what remains uncertain**, and a
+**next step**. `--verbose` shows the full route and the raw evidence.
+
+<details>
+<summary>Capture backends used by <code>whykey listen</code></summary>
 
 `listen` waits for one key and uses the first capture method that works:
 
 | Order | Backend | What it proves |
 | --- | --- | --- |
-| 1 | Native compositor capture: Hyprland (Lua hook; needs a `hyprland.lua` config) or Sway (binding events over IPC) | The compositor received the key. Sway reports only keys that ran a Sway binding. |
-| 2 | Probe window: a small focused Wayland or X11 window titled "whykey: press a shortcut here (Esc exits)". Skipped in SSH sessions. | Whether the desktop delivered the key to a normal window. If only modifier changes arrive, something above the window (compositor, window manager, hotkey daemon, or input method) probably consumed the key. |
-| 3 | Terminal capture | The key reached this terminal, and the bytes it arrived as. Keys consumed earlier never show up here. |
+| 1 | **Native compositor capture**: Hyprland (Lua hook) or Sway (binding events over IPC) | The compositor received the key. Sway reports only keys that run a Sway binding. |
+| 2 | **Probe window**: a small focused Wayland or X11 window | Whether the desktop delivered the key to a normal window. |
+| 3 | **Terminal capture** | The key reached this terminal, and the bytes it arrived as. |
 
-`--window`, `--terminal`, and `--evdev [--device PATH]` force one backend.
-`whykey listen --dry-run` prints the chain and the reason for each choice
-without capturing anything.
+`--window`, `--terminal`, and `--evdev [--device PATH]` force one backend;
+`--evdev` reads the kernel's view of the keyboard, before any remapper or
+compositor. `whykey listen --dry-run` prints the chain without capturing.
 
-The probe window can only infer "not delivered" from what it does not see.
-Pressing and releasing Super alone looks exactly like Super+T swallowed by
-the desktop, so a "not delivered" verdict is reported as conditional, not
-confirmed. The window also cannot tell which program took the key; the
-inspection that follows names the likely owner. Over SSH, the display
-belongs to the remote side, so the default chain skips the probe window;
-`--window` still forces it.
+On Hyprland, `--suppress` temporarily stops the shortcut from firing while
+whykey inspects it. Capture state is held by a short lease, so Hyprland
+drops it by itself even if whykey is killed.
 
-On Hyprland, native capture installs a temporary Lua hook. By default it
-only observes. `--suppress` adds a private submap so the shortcut does not
-fire. Both are held by a 5-second lease that whykey renews while listening.
-Hyprland drops them by itself if the lease expires, for example after
-`kill -9`. With a `hyprland.conf` config, Hyprland rejects the hook
-(`hyprctl eval` needs the Lua config manager), and `listen` falls back to the
-probe window and says why. `--suppress` never falls back, and only Hyprland
-supports it.
+</details>
 
-`whykey listen --evdev` reads the kernel's view of the keyboard, before any
-remapper or compositor. It is the only backend that needs extra permission.
-Press Escape or Ctrl+C to stop listening.
+<details>
+<summary>Permissions</summary>
 
-## 2. Ask the running program
-
-Running `whykey KEY` (or `whykey inspect KEY...`) queries what is running
-now:
-
-- Hyprland: `hyprctl binds -j`, submap and devices.
-- Sway and i3: the running config from `get_config` and the mode from
-  `get_binding_state`.
-- X11 (any window manager or hotkey daemon): whykey asks the X server whether
-  another client holds a passive grab for the key on the root window. The X
-  server refuses the grab (`BadAccess`) when another client holds it. The
-  probe takes the grab for a moment and releases it at once. A free key
-  means only that no client holds a root-window grab for it. The probe
-  cannot name the client that holds a grab.
-- GNOME: `gsettings` over the mutter, GNOME Shell, window-manager, media-key,
-  and custom keybinding schemas.
-- KDE Plasma: the running kglobalaccel over D-Bus (`globalShortcutsByKey`
-  and the component's `isActive`). whykey never starts the daemon.
-- Bash, zsh, and fish: live bindings, when you load the wrapper (see
-  [Shell integration](#shell-integration)). The shell is found by walking up
-  the process tree, not from `$SHELL`.
-- tmux (`list-keys`), herbstluftwm (`herbstclient`), Xfce (`xfconf-query`),
-  Cinnamon and MATE (`gsettings`), and WezTerm (`wezterm show-keys`).
-
-## 3. Fall back to configuration files
-
-Niri, River, Wayfire, labwc, dwl, Openbox, sxhkd, xbindkeys, AwesomeWM, Qtile,
-XMonad, the remappers (keyd, kanata, kmonad, input-remapper, xremap), most
-terminals, editors, and GNU Screen are read from their configuration files.
-On X11 the grab probe above still checks whether something holds the key.
-A file says what is configured, not what is loaded. Plugins, generated files,
-and executable configs (Lua, Python, Haskell) are never evaluated, so
-these answers stay conditional.
-
-## Evidence tiers
-
-Every layer row in the report carries a tier, and JSON v2/NDJSON path
-entries carry it as `tier`:
-
-| Tier | JSON | Meaning |
-| --- | --- | --- |
-| observed | `observed` | A capture saw the key pass (or stop at) this layer. |
-| live query | `live_query` | The running program answered. |
-| config file (static) | `config_file` | Parsed from configuration files; the running program may differ. |
-| default (unverified) | `default` | Built-in defaults; your configuration may override them. |
-
-A row with no tier means nothing answered (an unavailable integration).
-Schema v1 JSON is unchanged.
-
-## Verified against reality
-
-Fixture tests only show that whykey agrees with its own authors. Support
-claims here come from the [lab](lab/README.md): real programs in containers
-receive real synthetic input, and their reaction is the ground truth (a bind
-ran a command, a key arrived at an independent test client). Each scenario
-also needs a positive control: the probe must have seen a key, or the bind
-must be shown able to fire, so a dead setup cannot pass by default. whykey's
-verdict must match the ground truth. The current run has 172 scenarios: 156
-match exactly, 16 pass only as honest uncertainty (see below), none fail,
-and none are lab errors. The per-capability list is in the
-[support matrix](SUPPORT_MATRIX.md).
-
-**Lab-verified** (Fedora 44 image):
-
-| Environment | Version | Scenarios |
-| --- | --- | --- |
-| Hyprland, `hyprland.conf` and `hyprland.lua`, in a KVM guest | 0.56.2 | 30 (4 probe-window; 5 use the `qkbd` kernel keyboard) |
-| Sway (headless) | 1.11 | 16 (2 probe-window) |
-| i3 on Xvfb | 4.25.1 | 15 (3 probe-window; 5 with `DISPLAY` unset) |
-| KDE kglobalacceld on Xvfb (daemon only, no Plasma session) | 6.7.5 | 8 (3 with `DISPLAY` unset) |
-| GNOME: headless mutter (mutter-owned bindings only; GNOME Shell cannot start in the container, so Shell and gnome-settings-daemon bindings are not verified) | mutter 50.5 | 4 |
-| sxhkd on Xvfb (replay `~`, release `@`, braces, ranges, plain keys, continuations) | 0.6.1 | 11 |
-| Openbox, AwesomeWM, xbindkeys on Xvfb | 3.6.1, 4.3, 1.8.7 | 2 each |
-| Qtile, XMonad, Xfce, MATE on Xvfb | Fedora 44 (unpinned) | 2 each |
-| bash, zsh, fish in a pty | 5.3.9, 5.9, 4.6.0 | 27 (14 with `shell-init`, 13 without) |
-| tmux and GNU Screen, with bash, zsh, or fish inside | 3.7c, 5.0.1 | 16 |
-| Terminal emulators: Alacritty, foot, Ghostty, kitty, Konsole, WezTerm | Fedora 44; Ghostty and WezTerm from COPRs | 16 |
-| Emacs (`emacs-nw`, `emacsclient`) | 30.2 | 4 (1 tolerated) |
-| Neovim | 0.12.5 | 3 |
-| dwl, built from source | v0.9 (wlroots 0.20) | 2 |
-| labwc | Fedora 44 (unpinned) | 2 |
-| Niri, nested in a headless Sway | Fedora 44 (unpinned) | 2 (1 tolerated) |
-| Wayfire | Fedora 44 (unpinned) | 2 (1 tolerated) |
-
-Without `shell-init`, the 13 shell scenarios pass only as honest
-uncertainty: whykey says the shell probably handles the key, unverified.
-Three more pass only as uncertainty: `emacs-unbound-f7`, `niri-bind-consumed`,
-and `wayfire-bind-consumed`. For the two compositor binds, whykey reports the
-bind as handled, but the lab cannot confirm the compositor consumed the key.
-`tmux-root-alt-escape` is now exact. These 16 do not count as verification.
-
-**Live-verified by hand on the maintainer's desktop:** static `whykey KEY`
-inspection on Hyprland 0.56.2, bash with `shell-init`, and the Neovim
-extension.
-
-**Not verified against the real program:** River 0.4 and later (the lab has
-no `riverctl`), Cinnamon, herbstluftwm (installed, no scenario), a full GNOME
-Shell or Plasma session, the remappers (keyd, kanata, kmonad, input-remapper,
-xremap), IBus and Fcitx5, Zellij, Vim, Helix, Kakoune, Micro, JetBrains IDEs,
-and VS Code (its bundled default keybindings are not run by any lab scenario).
-Sway native capture, Hyprland `--suppress`, and capture of a physical keyboard
-on a real desktop have no lab scenario. These adapters work from documentation,
-upstream source, and fixtures. Treat their answers as informed guesses.
-
-## Permissions
-
-The probe window, terminal capture, the X11 grab probe, and every query
-above need no extra permission. `listen --evdev` needs read access to
-`/dev/input/event*`. `whykey doctor` names the keyboards it cannot open and
-prints a temporary grant for exactly those devices:
+Everything except `listen --evdev` works without extra permission.
+`--evdev` needs read access to `/dev/input/event*`; `whykey doctor` names
+the keyboards it cannot open and prints a temporary grant for exactly those
+devices:
 
 ```sh
 sudo setfacl -m u:"$USER":r '/dev/input/eventN'   # gone after replug or reboot
 ```
 
-Joining the `input` group also works, but it grants permanent access to
-every input device.
+</details>
 
-## Install
+## Supported environments
 
-```sh
-mise use github:agustinrojas1/whykey@2.1.0
-# or, with Rust 1.85 or newer:
-cargo install --git https://github.com/agustinrojas1/whykey --locked
-```
+✅ verified against the real program in the lab · 🟡 verified in part (some
+cases answer as honest uncertainty or are not covered) · ⚪ supported from
+documentation and configuration only
 
-Pin a version with mise: the exact `@2.1.0`, or the major `@2`. By default
-mise hides releases younger than 24 hours (`minimum_release_age`), so an
-unpinned `github:agustinrojas1/whykey` can silently resolve to an older major
-release right after a new one is published. During that first day `@2` fails
-instead; an exact version such as `@2.1.0` installs at once.
-
-Each release publishes these binaries, each archive with a `.sha256` file:
-
-| Asset | Runs on |
+| Layer | Programs |
 | --- | --- |
-| `whykey-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64 with glibc 2.28 or newer (Debian 10, Ubuntu 18.10, RHEL 8 and later) |
-| `whykey-<version>-x86_64-unknown-linux-musl.tar.gz` | any x86_64 Linux: fully static, no libc needed (Alpine, older glibc) |
-| `whykey-<version>-aarch64-unknown-linux-musl.tar.gz` | any aarch64 Linux: fully static |
+| **Wayland compositors** | ✅ Hyprland · ✅ Sway · ✅ Wayfire · ✅ labwc · ✅ dwl · 🟡 Niri · ⚪ River |
+| **Desktops** | ✅ GNOME (mutter, GNOME Shell, media keys) · ✅ KDE Plasma (KWin, kglobalaccel) · ✅ Cinnamon · ✅ Xfce · ✅ MATE |
+| **X11 window managers and hotkey daemons** | ✅ i3 · ✅ Openbox · ✅ AwesomeWM · ✅ Qtile · ✅ XMonad · ✅ sxhkd · ✅ xbindkeys · ⚪ herbstluftwm |
+| **Key remappers** | ✅ keyd · ✅ kanata · ✅ xremap · 🟡 kmonad · 🟡 input-remapper |
+| **Input methods** | ✅ Fcitx5 · 🟡 IBus |
+| **Terminals** | ✅ kitty · ✅ Alacritty · ✅ foot · ✅ WezTerm · ✅ Konsole · ✅ Ghostty |
+| **Multiplexers** | ✅ tmux · ✅ GNU Screen · ✅ Zellij |
+| **Shells** | ✅ bash · ✅ zsh · ✅ fish (exact with `shell-init`) |
+| **Editors** | ✅ Neovim · 🟡 Emacs · 🟡 Vim · 🟡 Helix · 🟡 Kakoune · 🟡 Micro · ⚪ VS Code · ⚪ JetBrains |
 
-On glibc systems mise picks the `gnu` archive for x86_64; aarch64 only has
-the static `musl` archive.
+On X11, whykey also asks the X server directly whether any client holds a
+grab on the key, so it catches window managers and daemons it has no adapter
+for. The per-capability evidence is in the [support matrix](SUPPORT_MATRIX.md),
+and the known boundaries are in the [defect register](DEFECT_REGISTER.md).
 
-whykey builds only on Linux; other targets fail with an explicit message.
-Arch, Debian, RPM, and Nix recipes are in [`packaging/`](packaging/README.md).
-Only the Arch recipe has a package smoke test (L-008 in the
-[defect register](DEFECT_REGISTER.md)).
+## Verified against reality
 
-The editor extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) are
-`python3` scripts. The distribution packages install them next to `whykey`.
-mise and `cargo install` do not put them on `PATH`. With mise they are in
-`"$(mise where github:agustinrojas1/whykey)/extensions"`; with Cargo, take
-them from the repository's `extensions/` directory. Add that directory to
-`PATH` or link the scripts into a directory that is already on it.
+Unit tests only show that whykey agrees with its own authors. So every
+support claim above comes from the **reality lab**: each scenario starts the
+real program in a throwaway container or VM, presses a real key, and records
+what actually happened through an independent path. whykey's verdict must
+match.
 
-The `whykey-vscode` extension answers a missing key from VS Code's default
-keybindings, bundled in `extensions/whykey-vscode-defaults.json` (VS Code
-1.140.0). Extensions set a `tier` on each answer (`live_query`, `config_file`,
-or `default`); the bundled defaults answer with `default`.
-
-## Usage
-
-```sh
-whykey ctrl+left                    # inspect one combination
-whykey inspect ctrl+x ctrl+e        # a sequence; prefix state carries over
-whykey inspect --focused ctrl+z     # use the focused window's process
-whykey listen                       # observe the next shortcut
-whykey listen --window --repeat     # probe window, one shortcut at a time
-whykey listen --dry-run             # show the capture chain only
-whykey doctor                       # what whykey can observe and ask here
-whykey bindings --key ctrl+x        # list matching desktop bindings
-whykey conflicts --source hyprland  # find duplicate bindings
-whykey snapshot ctrl+super+return --output snap.json
-whykey replay snap.json
-whykey diff before.json after.json
-whykey extension extensions/whykey-nvim ctrl+x   # ask a running Neovim
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as Scenario
+    participant P as Real program<br/>(Sway, KWin, tmux…)
+    participant O as Independent oracle
+    participant W as whykey
+    S->>P: start with a test config
+    S->>P: synthetic key press (virtual or kernel keyboard)
+    P-->>O: did the bind run? did a test window receive the key?
+    S->>W: whykey KEY --json
+    W-->>S: verdict
+    O-->>S: ground truth
+    Note over S: passes only if the verdict matches reality
 ```
 
-Join modifiers and the key with `+`. Modifiers: `ctrl`, `alt`, `shift`,
-`super`, `hyper`, `altgr` (Mod5), `caps`, `num`. A key is a character, a
-named key (`return`, `left`, `comma`, `f1`), an XF86 media key, or `code:N`.
-Keypad keys are their own keys: `kp_enter` is not `return`, and `kp_1`,
-`kp_home`, `kp_add` and the other `kp_` names are not the main keys.
-Unknown names exit with status 2 and suggest the closest valid name.
+Every scenario also needs a positive control, so a broken setup can never
+pass by accident. Current run: **249 scenarios: 208 match exactly, 41 pass
+as honest uncertainty, 0 fail.** Hyprland and KWin run in KVM guests, many
+scenarios with a kernel-level keyboard, so keys travel the same evdev →
+libinput → compositor path as a physical keyboard.
 
-Reports open with a diagnosis, its effect, the relevant layers with their
-tiers, what remains uncertain, and a "Next" step (for example, run
-`whykey listen` or load `shell-init`). `--verbose` shows the full route and
-raw evidence. `--json` emits schema v1; `--json-v2` adds context, evidence,
-and tiers. `whykey doctor` lists the observation taps available now and,
-for each layer, whether its answer will come from a live query, a config
-file, or nothing.
+The lab has found and fixed dozens of bugs that passed every unit test. The
+scenario format and how to run it are in [`lab/README.md`](lab/README.md).
 
-`whykey --help` lists every command and option. The
-[specification](SPEC.md) and the [man page](whykey.1) cover the details, and
-[ADAPTER_INVENTORY.md](ADAPTER_INVENTORY.md) gives the sources and limits of
-each adapter.
+## Design principles
 
-## Shell integration
+- **Never act on the system.** Inspection is read-only; whykey does not edit
+  configuration, start daemons, or execute shortcuts.
+- **Prefer evidence over inference.** Ask the running program before reading
+  its files, and label every answer with where it came from.
+- **Say "I don't know".** Uncertain answers are reported as uncertain, and
+  the lab counts them separately; they never count as verification.
+- **Small and portable.** A single Rust binary, with fully static builds
+  for x86_64 and aarch64; Linux only, by design.
 
-```sh
-eval "$(whykey shell-init bash)"
-# eval "$(whykey shell-init zsh)"
-# whykey shell-init fish | source
-```
+## Documentation
 
-The wrapper passes the shell's live bindings to whykey (`bind -p/-S/-X/-V`,
-`bindkey -lL main; bindkey -L; bindkey -LM vicmd`, or
-`bind --all | string collect` plus `$fish_bind_mode`). Without it, whykey
-asks the installed shell for its defaults (`zsh -f`, `fish --no-config`) and
-applies the `bind`/`bindkey` lines it finds in your startup files. Those
-answers are marked unverified, because plugins and tools such as fzf rebind
-keys at runtime. Completion scripts: `whykey completions bash|zsh|fish`.
+| Document | Contents |
+| --- | --- |
+| [SPEC.md](SPEC.md) and [whykey.1](whykey.1) | Full behaviour specification and man page |
+| [ADAPTER_INVENTORY.md](ADAPTER_INVENTORY.md) | Sources and limits of each adapter |
+| [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) | Capabilities and the lab scenarios behind each one |
+| [DEFECT_REGISTER.md](DEFECT_REGISTER.md) | Fixed defects with their regression tests, and accepted limitations |
+| [lab/README.md](lab/README.md) | The reality lab: scenario format, environments, running it |
+| [docs/](docs/) | Capture backends, compositor extensions, platform scope |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ## Development
 
-CI runs:
-
 ```sh
-cargo test --all-targets --all-features --locked
-cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all -- --check
-python3 extensions/tests/run_all.py
 python3 tools/generate_support_matrix.py --check
-python3 tools/generate_dependency_provenance.py --check
-tools/check_package_versions.sh
 ```
 
-The lab runs on pull requests (`.github/workflows/lab.yml`). To run it locally:
+CI also runs the extension tests, provenance and packaging checks, and the
+reality lab on every pull request. See [`lab/README.md`](lab/README.md) to
+run the lab locally (Docker, and `/dev/kvm` for the VM scenarios).
 
-```sh
-docker build -t whykey-lab lab/
-cargo build --release --locked
-python3 lab/run.py -j 12
-```
+<details>
+<summary>Live Hyprland tests</summary>
 
-See [lab/README.md](lab/README.md) for the scenario format and the KVM
-requirement of the Hyprland scenarios.
-
-Live Hyprland tests change the compositor's state, so they never run in the
-normal suite. They need `--ignored`, `WHYKEY_RUN_LIVE_TESTS=1`, and
-`WHYKEY_LIVE_INSTANCE_SIGNATURE` equal to `HYPRLAND_INSTANCE_SIGNATURE`. Run
-them only in a dedicated session:
+Live tests change the compositor's state, so they never run in the normal
+suite. Run them only in a dedicated session:
 
 ```sh
 WHYKEY_RUN_LIVE_TESTS=1 WHYKEY_LIVE_INSTANCE_SIGNATURE="$HYPRLAND_INSTANCE_SIGNATURE" \
 cargo test --test hyprland_live -- --ignored
 ```
 
-Report reproducible gaps in the [defect register](DEFECT_REGISTER.md).
+</details>
 
 ## License
 
