@@ -11,13 +11,24 @@ package change rebuilds only the images that contain that family.
 
     python3 tools/lab_images.py list
     python3 tools/lab_images.py hash NAME
-    python3 tools/lab_images.py build [--prefix P] [NAME...]
+    python3 tools/lab_images.py build [--prefix P] [--push] [--no-base]
+                                      [--label K=V]... [NAME...]
     python3 tools/lab_images.py tag-of NAME [--prefix P]
+    python3 tools/lab_images.py missing [--prefix P] [--json] [NAME...]
 
 build tags <P><name>:<hash> and <P><name>:latest (P defaults to
 "whykey-lab-") and passes --build-arg BASE=<P>base:<base hash> to the groups.
 A group named without the base builds the base first (a cache hit when it is
-current).
+current). CI (.github/workflows/lab-images.yml) uses:
+
+  --push      push <P><name>:<hash> after building it and tag nothing else
+              (no :latest, which would point at whichever commit built last)
+  --no-base   do not build the base as a dependency: FROM pulls
+              <P>base:<base hash>, which an earlier job pushed
+  --label K=V add an image label (org.opencontainers.image.source, ...)
+
+missing lists the images (build order) whose <P><name>:<hash> tag is not in
+the registry (docker manifest inspect); the image workflow builds those.
 """
 
 from __future__ import annotations
@@ -148,29 +159,44 @@ def tag_of(name: str, prefix: str = DEFAULT_PREFIX, manifest: dict | None = None
     return f"{prefix}{name}:{content_hash(name, manifest)}"
 
 
-def build(names: list[str], prefix: str, manifest: dict) -> None:
+def build(names: list[str], prefix: str, manifest: dict, *, push: bool = False,
+          no_base: bool = False, labels: list[str] | None = None) -> None:
     order = image_names(manifest)
     for name in names:
         _check_name(manifest, name)
     selected = set(names) if names else set(order)
-    if selected - {BASE}:
+    if selected - {BASE} and not no_base:
         selected.add(BASE)  # every group builds FROM the base image
     base_hash = content_hash(BASE, manifest)
     for name in order:
         if name not in selected:
             continue
         tag = f"{prefix}{name}:{content_hash(name, manifest)}"
-        command = [
-            "docker", "build",
-            "-f", str(IMAGES / f"{name}.Dockerfile"),
-            "-t", tag,
-            "-t", f"{prefix}{name}:latest",
-        ]
+        command = ["docker", "build", "-f", str(IMAGES / f"{name}.Dockerfile"), "-t", tag]
+        if not push:
+            command += ["-t", f"{prefix}{name}:latest"]
+        for label in labels or []:
+            command += ["--label", label]
         if name != BASE:
             command += ["--build-arg", f"BASE={prefix}{BASE}:{base_hash}"]
         command.append(str(LAB))
         print(f"== {name}: {tag}", flush=True)
         subprocess.run(command, check=True)
+        if push:
+            subprocess.run(["docker", "push", tag], check=True)
+
+
+def missing(names: list[str], prefix: str, manifest: dict) -> list[str]:
+    """The images (build order) whose hash tag the registry does not have."""
+    for name in names:
+        _check_name(manifest, name)
+    absent = []
+    for name in names or image_names(manifest):
+        tag = tag_of(name, prefix, manifest)
+        probe = subprocess.run(["docker", "manifest", "inspect", tag], capture_output=True, text=True)
+        if probe.returncode != 0:
+            absent.append(name)
+    return absent
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,12 +205,21 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("list", help="image names in build order, base first")
     hash_parser = commands.add_parser("hash", help="print an image's content hash (16 hex chars)")
     hash_parser.add_argument("name")
-    build_parser = commands.add_parser("build", help="build images locally with docker")
+    build_parser = commands.add_parser("build", help="build images with docker (and push them)")
     build_parser.add_argument("--prefix", default=DEFAULT_PREFIX, help=f"image name prefix (default {DEFAULT_PREFIX!r})")
+    build_parser.add_argument("--push", action="store_true", help="push each <P><name>:<hash> and tag nothing else")
+    build_parser.add_argument("--no-base", action="store_true",
+                              help="do not build the base as a dependency (it must be pullable)")
+    build_parser.add_argument("--label", action="append", default=[], metavar="K=V",
+                              help="image label, repeatable")
     build_parser.add_argument("names", nargs="*", metavar="NAME", help="images to build (default: all)")
     tag_parser = commands.add_parser("tag-of", help="print an image's full hash tag")
     tag_parser.add_argument("name")
     tag_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    missing_parser = commands.add_parser("missing", help="images whose hash tag the registry lacks")
+    missing_parser.add_argument("--prefix", default=DEFAULT_PREFIX)
+    missing_parser.add_argument("--json", action="store_true", help="print a JSON list")
+    missing_parser.add_argument("names", nargs="*", metavar="NAME", help="images to check (default: all)")
     args = parser.parse_args(argv)
     try:
         manifest = load_manifest()
@@ -195,7 +230,11 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "tag-of":
             print(tag_of(args.name, args.prefix, manifest))
         elif args.command == "build":
-            build(args.names, args.prefix, manifest)
+            build(args.names, args.prefix, manifest, push=args.push, no_base=args.no_base,
+                  labels=args.label)
+        elif args.command == "missing":
+            absent = missing(args.names, args.prefix, manifest)
+            print(json.dumps(absent) if args.json else "\n".join(absent))
     except ImageError as error:
         print(f"lab_images: {error}", file=sys.stderr)
         return 2

@@ -1,11 +1,26 @@
 name: Reality lab
 
-# Runs every lab/scenarios scenario against real compositors, window managers,
-# hotkey daemons, settings stores and shells in the Fedora lab image, and fails
-# when whykey's verdict disagrees with what the programs actually did.
+# Runs the lab/scenarios against real compositors, window managers, hotkey
+# daemons, settings stores and shells, in the prebuilt lab images (built and
+# pushed to GHCR by lab-images.yml), and fails when whykey's verdict disagrees
+# with what the programs actually did.
+#
+# A pull request runs the scenarios its changed paths can affect
+# (tools/lab_select.py, rules in lab/affected.json); a change that cannot affect
+# a verdict runs none. The nightly schedule, and workflow_dispatch with full
+# set, run all 249. Each shard is one job that uploads its results; the summary
+# job merges them and fails if any scenario failed or any job did not finish.
+
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      full:
+        description: Run every scenario, not only those the changed paths affect
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -14,37 +29,140 @@ concurrency:
   group: lab-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  IMAGE_PREFIX: ghcr.io/agustinrojas1/whykey-lab-
+
 jobs:
-  lab:
+  plan:
+    name: Select scenarios
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
+    outputs:
+      count: ${{ steps.select.outputs.count }}
+      shards: ${{ steps.select.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build lab image
-        uses: docker/build-push-action@v6
         with:
-          context: lab
-          tags: whykey-lab
-          load: true
-          cache-from: type=gha,scope=whykey-lab
-          cache-to: type=gha,mode=max,scope=whykey-lab
+          fetch-depth: 0
+      - id: select
+        env:
+          FULL: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$FULL" = true ]; then
+            python3 tools/lab_select.py --full --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+          else
+            git diff --name-only "${BASE_SHA:-origin/main}...HEAD" > "$RUNNER_TEMP/changed.txt"
+            python3 tools/lab_select.py --changed "$RUNNER_TEMP/changed.txt" \
+              --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+          fi
+
+  images:
+    name: Lab images
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    permissions:
+      contents: read
+      packages: write
+    # A pull request from a fork gets a read-only token: it may only use images
+    # that are already in GHCR (they are pushed by main).
+    uses: ./.github/workflows/lab-images.yml
+    with:
+      push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+  lab:
+    name: Shard ${{ matrix.shard.name }}
+    needs: [plan, images]
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && needs.images.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Hyprland scenarios boot a KVM guest; GitHub's Linux runners expose /dev/kvm.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull the shard image
+        # Pulled before the run: a scenario's container must not spend its
+        # 180 s on a multi-gigabyte pull.
+        env:
+          IMAGE: ${{ matrix.shard.image }}
+        run: docker pull "$(python3 tools/lab_images.py tag-of "$IMAGE" --prefix "$IMAGE_PREFIX")"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+          cache: false
+      - uses: Swatinem/rust-cache@v2
       - name: Build whykey
         run: cargo build --release --locked
-      # Hyprland scenarios boot a KVM guest inside their container; run.py
-      # passes /dev/kvm through (GitHub's Linux runners expose it) and the
-      # guest falls back to much slower TCG emulation without it. On the
-      # 4-CPU runner --vms defaults to 1 (2 vCPUs), leaving the other CPUs
-      # for the container scenarios: about 5 minutes for the whole lab.
-      - name: Run lab scenarios
-        run: python3 lab/run.py -j "$(nproc)"
+      - name: Run the shard
+        # The plan's args: --group IMAGE --shard I/N [--only GLOB]...
+        env:
+          ARGS: ${{ toJSON(matrix.shard.args) }}
+          NAME: ${{ matrix.shard.name }}
+        run: |
+          mapfile -t args < <(jq -r '.[]' <<< "$ARGS")
+          python3 lab/run.py --image-prefix "$IMAGE_PREFIX" --image-tag hash "${args[@]}" \
+            --results "$RUNNER_TEMP/results-$NAME.json"
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lab-results
-          path: lab/results.json
+          name: lab-results-${{ matrix.shard.name }}
+          path: ${{ runner.temp }}/results-${{ matrix.shard.name }}.json
           if-no-files-found: warn
+
+  summary:
+    name: Lab summary
+    needs: [plan, images, lab]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Nothing selected
+        if: needs.plan.outputs.count == '0'
+        run: echo "No lab scenario is affected by this change (lab/affected.json), so none ran." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        if: needs.plan.outputs.count != '0'
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.count != '0'
+        with:
+          pattern: lab-results-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/lab-results
+      - name: Merge the shard results
+        if: needs.plan.outputs.count != '0'
+        run: |
+          shopt -s nullglob
+          files=("$RUNNER_TEMP"/lab-results/results-*.json)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no shard produced results"
+            exit 1
+          fi
+          status=0
+          python3 lab/run.py --merge "${files[@]}" --results "$RUNNER_TEMP/lab-results-all.json" \
+            > "$RUNNER_TEMP/combined.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/combined.txt"
+          { echo '```text'; cat "$RUNNER_TEMP/combined.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Check every job finished
+        if: always() && needs.plan.outputs.count != '0'
+        env:
+          IMAGES: ${{ needs.images.result }}
+          LAB: ${{ needs.lab.result }}
+        run: |
+          if [ "$IMAGES" != success ] || [ "$LAB" != success ]; then
+            echo "::error::lab images: $IMAGES; lab shards: $LAB"
+            exit 1
+          fi

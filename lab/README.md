@@ -16,7 +16,7 @@ inside lab containers. Never send it to your own desktop session.
   container.
 - A whykey release build (`cargo build --release --locked`).
 - `/dev/kvm` for the Hyprland scenarios (see below). The rest need no KVM.
-- About 10 GB of disk space for the six lab images (see [The images](#the-images)); a scenario pulls one of them, 2.1 to 3.5 GB.
+- About 10 GB of disk space for the six lab images (see [The images](#the-images)); a scenario runs in one of them, 2.1 to 3.5 GB each.
 
 ## Build and run
 
@@ -34,6 +34,11 @@ scenario, then a table of ground truth against whykey's verdict, followed by
 details for every failure. It writes `lab/results.json` (git-ignored) and
 exits 1 on any mismatch.
 
+To run part of the lab, combine `--group IMAGE` (the scenarios that run in one
+group image, e.g. `vm`) with `--only` and `--shard I/N` (shard I of N of the
+selected scenarios, dealt round-robin by sorted id). CI runs one shard per
+job; see [Continuous integration](#continuous-integration).
+
 | Option | Effect |
 | --- | --- |
 | `--only GLOB` | Run matching scenario ids or `scenarios/`-relative paths. Repeatable, e.g. `--only 'i3/*' --only sway-release-bind`. |
@@ -47,18 +52,22 @@ exits 1 on any mismatch.
 | `--results FILE` | Write the results to this file. Default: `lab/results.json`. |
 | `--repeat N` | Run every selected scenario N times at once, to hunt flakes, e.g. `--only sway-mode-inactive --repeat 30 -j 12`. |
 | `--retries N` | Rerun a scenario that ended in a lab error (ground truth could not be established, e.g. a slow terminal lost the first key) up to N times, one at a time. Default: 2. A mismatch with reality is never retried. Retried records carry `retried`. |
+| `--group IMAGE` | Only the scenarios that run in this group image: `base`, `wayland`, `tty`, `x11`, `gnome` or `vm` (the `kde` scenarios of `x11` run in `vm`). |
+| `--shard I/N` | Only shard I of N of the selected scenarios, sorted by id and dealt round-robin. `tools/lab_select.py` plans the CI shards with the same split. |
+| `--merge FILE...` | Runs nothing: merges results files, prints the combined table, writes `--results` and exits 1 on any failure. The CI summary job uses it. |
 
 To add a run's results to the support matrix, run
 `python3 tools/generate_support_matrix.py` (it reads `lab/results.json`) or
-pass `--lab-results FILE`. The CI workflow `.github/workflows/lab.yml` builds
-the image with layer caching, runs every scenario on pull requests, and
-uploads `results.json`.
+pass `--lab-results FILE`. CI does not change the support matrix: its results
+are run artifacts (see [Continuous integration](#continuous-integration)).
 
 ## The images
 
 Every scenario runs in the image of its environment, so it pulls only the
 packages that environment needs. `lab/images.json` lists the images, their
 package families and their environments; `tools/lab_images.py` builds them.
+CI pulls them from GHCR as `ghcr.io/agustinrojas1/whykey-lab-<name>:<hash>`;
+`lab-images.yml` builds and pushes the ones whose hash tag is missing.
 Each image is Fedora 44. `base` is the shared base, and each group image is
 built FROM it (`lab/images/<name>.Dockerfile`, one `COPY` and `RUN` pair per
 family, sorted by name).
@@ -121,7 +130,53 @@ families' files and, for a group, the base image's hash, so a package change
 rebuilds only the images that contain it. `python3 tools/lab_images.py list`
 prints the build order; `hash NAME` and `tag-of NAME` print the hash and the
 full tag. `run.py --image-tag hash` runs the images whose content hashes are
-those tags.
+those tags. CI builds with `build --push --no-base --label K=V`, which pushes
+only the hash tag and does not build the base again; `missing` lists the
+images whose hash tag a registry lacks.
+
+## Continuous integration
+
+Three workflows run the lab. It is not a required check: `ci.yml` (`check`,
+`msrv`) is.
+
+- **`.github/workflows/lab-images.yml`** builds the images that GHCR lacks and
+  pushes them: base first, then the group images as a matrix, each `FROM` the
+  base hash. It runs on pushes to main that touch `lab/images/**`,
+  `lab/images.json`, `lab/packages/**` or `tools/lab_images.py`, on
+  `workflow_dispatch`, and when `lab.yml` calls it. Each image gets the
+  `org.opencontainers.image.source` label and only its hash tag. No Actions
+  cache is used: the images are the cache.
+- **`.github/workflows/lab.yml`** runs on pull requests, nightly (a full run at
+  03:17 UTC) and on `workflow_dispatch` (`full: true` runs every scenario). Its
+  jobs:
+  - `plan` runs `tools/lab_select.py` on the pull request's changed paths and
+    emits the shards. A pull request runs the scenarios its changes can affect;
+    a change that cannot affect a verdict (documentation, packaging) runs none.
+  - `images` calls `lab-images.yml`, so the images for this commit's hashes
+    exist. It is skipped when the plan is empty.
+  - `lab` runs one job per shard. It pulls the shard's image, builds whykey
+    (`cargo build --release --locked`), runs `lab/run.py` with the shard's
+    arguments and uploads `results-<shard>.json`. A shard has 30 minutes.
+  - `summary` always runs. It merges the shard results, prints the combined
+    table in the job summary, and fails on any failed scenario or unfinished
+    job. An empty plan succeeds with a note.
+- **`tools/lab_select.py`** reads changed paths, one per line, and prints the
+  plan as JSON. Its rules are in `lab/affected.json`. `core` paths select every
+  scenario. Each `rules` entry maps paths to scenario globs, to a group image
+  (`image:tty`), or to the changed scenario, environment plugin, image or
+  package family. `ignore` paths select nothing. Any other path selects every
+  scenario, so a new source file runs the whole lab until it is mapped. The
+  rules are tested by `tools/tests/test_lab_select.py`. To see what a branch
+  selects, pipe its changed paths (`git diff --name-only origin/main...HEAD`)
+  into the script.
+
+`shard_size` in `lab/affected.json` sizes the shards: 22 scenarios for `vm`
+(Hyprland boots a VM per scenario), 60 for the others. A full run is 8 shards:
+`vm` 3, `tty` 2, and `wayland`, `x11` and `gnome` 1 each.
+
+A pull request from a fork gets a read-only token and cannot push images. Its
+`images` job fails only when an image it needs is missing from GHCR. The GHCR
+packages must be readable by the repository's workflows.
 
 ## How ground truth is established
 

@@ -12,8 +12,10 @@ writes lab/results.json and exits 1 on any mismatch.
 
     python3 tools/lab_images.py build
     cargo build --release --locked
-    python3 lab/run.py [--only GLOB]... [-j N] [--vms N] [--keep]
+    python3 lab/run.py [--only GLOB]... [--group IMAGE] [--shard I/N]
+                       [-j N] [--vms N] [--keep]
                        [--image-tag TAG|hash] [--image-prefix P]
+    python3 lab/run.py --merge RESULTS.json...   (combine shard results)
 
 Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
 (the file stem must equal "id").
@@ -162,6 +164,7 @@ LAB = Path(__file__).resolve().parent
 ROOT = LAB.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import lab_images  # noqa: E402  (tools/lab_images.py: the image layout, lab/images.json)
+import lab_select  # noqa: E402  (tools/lab_select.py: the shard split, shared with CI)
 
 SCENARIOS = LAB / "scenarios"
 # Environment -> group image (lab/images.json is the single source of truth).
@@ -180,7 +183,12 @@ SCENARIO_TIMEOUT = 180
 HONEST_UNCERTAINTY = {True: {"handled-uncertain"}, False: {"uncertain-continues"}}
 
 
-def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
+def scenario_image(scenario: dict) -> str:
+    """The group image a scenario runs in (its "image" field, else its environment's)."""
+    return scenario.get("image") or ENV_IMAGE[scenario["environment"]]
+
+
+def load_scenarios(patterns: list[str], group: str | None = None) -> list[tuple[Path, dict]]:
     scenarios = []
     seen: set[str] = set()
     for path in sorted(SCENARIOS.rglob("*.json")):
@@ -218,6 +226,8 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
             fnmatch.fnmatch(identifier, pattern) or fnmatch.fnmatch(relative, pattern)
             for pattern in patterns
         ):
+            continue
+        if group is not None and scenario_image(scenario) != group:
             continue
         scenarios.append((path, scenario))
     return scenarios
@@ -338,7 +348,7 @@ def image_for(args, scenario: dict) -> str:
     --image-tag "hash" resolves each image's content hash."""
     if args.image:
         return args.image
-    name = scenario.get("image") or ENV_IMAGE[scenario["environment"]]
+    name = scenario_image(scenario)
     tag = args.image_tag
     if tag == "hash":
         tag = lab_images.content_hash(name, MANIFEST)
@@ -606,10 +616,58 @@ def print_table(records: list[dict]) -> None:
             print("  ".join("-" * width for width in widths))
 
 
+def finish(records: list[dict], results: Path) -> int:
+    """Write the records, print the table and the failures; 1 on any mismatch."""
+    records.sort(key=lambda record: record["file"])
+    results.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    print()
+    print_table(records)
+    failed = [record for record in records if not record["pass"]]
+    tolerated = [record for record in records if record["pass"] and record.get("tolerated")]
+    print(
+        f"\n{len(records) - len(failed) - len(tolerated)}/{len(records)} scenarios match reality; "
+        f"{len(tolerated)} only tolerated (PASS~: whykey honestly answered uncertain; "
+        f"not lab-verified); {len(failed)} failed; results: {results}"
+    )
+    for record in tolerated:
+        print(f"  PASS~ {record['scenario']}: {record['whykey_verdict']} where reality was "
+              f"{record['ground_truth']['label']}")
+    for record in failed:
+        print(f"\nFAIL {record['scenario']} ({record['file']})")
+        if record.get("error"):
+            print(f"  lab error: {record['error']}")
+            continue
+        truth = record["ground_truth"]
+        print(f"  ground truth: {truth['label']} ({truth_evidence(truth)})")
+        expected = "|".join(record["expected"]) or "no verdict (the key was withheld by something whykey does not model)"
+        print(f"  whykey {' '.join(record['whykey_args'])}: {record['whykey_verdict']}, expected {expected}")
+        if record.get("expected_summary"):
+            print(f"  whykey must also report: {record['expected_summary']!r}")
+        if record.get("expected_detail"):
+            print(f"  layer evidence must contain: {record['expected_detail']!r}")
+        for line in record.get("whykey_layers", []):
+            print(f"    {line}")
+        if record.get("whykey_stderr"):
+            print(f"  stderr: {record['whykey_stderr'].strip()}")
+    kept = [record["container"] for record in records if record.get("container")]
+    if kept:
+        print("\nkept containers:", " ".join(kept))
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--only", action="append", default=[], metavar="GLOB",
                         help="scenario id or scenarios/-relative path glob (repeatable)")
+    parser.add_argument("--group", metavar="IMAGE", default=None,
+                        help="only scenarios that run in this group image (lab/images.json), "
+                             "e.g. vm; CI runs one group per shard")
+    parser.add_argument("--shard", metavar="I/N", default=None,
+                        help="run shard I of N of the selected scenarios, split round-robin by "
+                             "sorted id (tools/lab_select.py plans the CI shards with the same split)")
+    parser.add_argument("--merge", nargs="+", type=Path, metavar="FILE", default=None,
+                        help="do not run anything: merge these results files, print the combined "
+                             "table, write --results, and exit 1 on any failure (CI summary job)")
     parser.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1))
     parser.add_argument("--vms", type=int,
                         default=max(1, (os.cpu_count() or 1) // (3 if os.path.exists("/dev/kvm") else 4)),
@@ -636,14 +694,37 @@ def main() -> int:
                              "could not establish ground truth (lab error); a mismatch "
                              "with reality is never retried")
     args = parser.parse_args()
+
+    if args.merge is not None:
+        records: list[dict] = []
+        for path in args.merge:
+            records.extend(json.loads(path.read_text(encoding="utf-8")))
+        if not records:
+            raise SystemExit("no records in " + " ".join(str(path) for path in args.merge))
+        return finish(records, args.results)
+
     args.binary = args.binary.resolve()
     if not args.binary.is_file():
         raise SystemExit(f"{args.binary} not found; run `cargo build --release --locked`")
-    scenarios = load_scenarios(args.only)
+    if args.group is not None and args.group not in IMAGE_NAMES:
+        raise SystemExit(f"--group {args.group!r}: unknown image; known: {sorted(IMAGE_NAMES)}")
+    shard = None
+    if args.shard is not None:
+        try:
+            shard = lab_select.parse_shard(args.shard)
+        except ValueError as error:
+            raise SystemExit(str(error))
+    scenarios = load_scenarios(args.only, args.group)
+    if shard is not None:
+        scenarios.sort(key=lambda item: item[1]["id"])
+        selected = len(scenarios)
+        scenarios = lab_select.shard_slice(scenarios, *shard)
+        print(f"shard {args.shard}: {len(scenarios)} of {selected} selected scenarios",
+              file=sys.stderr, flush=True)
     if not scenarios:
         raise SystemExit("no scenario matched")
 
-    records: list[dict] = []
+    records = []
     jobs = max(1, args.jobs)
     vms = max(1, min(args.vms, jobs))
     with concurrent.futures.ThreadPoolExecutor(max_workers=vms) as vm_pool, \
@@ -679,40 +760,7 @@ def main() -> int:
             status = ("PASS~" if retry.get("tolerated") else "PASS") if retry["pass"] else "FAIL"
             print(f"[{status}] {retry['scenario']} (retry {attempt})", file=sys.stderr, flush=True)
 
-    records.sort(key=lambda record: record["file"])
-    args.results.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
-    print()
-    print_table(records)
-    failed = [record for record in records if not record["pass"]]
-    tolerated = [record for record in records if record["pass"] and record.get("tolerated")]
-    print(
-        f"\n{len(records) - len(failed) - len(tolerated)}/{len(records)} scenarios match reality; "
-        f"{len(tolerated)} only tolerated (PASS~: whykey honestly answered uncertain; "
-        f"not lab-verified); {len(failed)} failed; results: {args.results}"
-    )
-    for record in tolerated:
-        print(f"  PASS~ {record['scenario']}: {record['whykey_verdict']} where reality was "
-              f"{record['ground_truth']['label']}")
-    for record in failed:
-        print(f"\nFAIL {record['scenario']} ({record['file']})")
-        if record.get("error"):
-            print(f"  lab error: {record['error']}")
-            continue
-        truth = record["ground_truth"]
-        print(f"  ground truth: {truth['label']} ({truth_evidence(truth)})")
-        expected = "|".join(record["expected"]) or "no verdict (the key was withheld by something whykey does not model)"
-        print(f"  whykey {' '.join(record['whykey_args'])}: {record['whykey_verdict']}, expected {expected}")
-        if record.get("expected_summary"):
-            print(f"  whykey must also report: {record['expected_summary']!r}")
-        if record.get("expected_detail"):
-            print(f"  layer evidence must contain: {record['expected_detail']!r}")
-        for line in record.get("whykey_layers", []):
-            print(f"    {line}")
-        if record.get("whykey_stderr"):
-            print(f"  stderr: {record['whykey_stderr'].strip()}")
-    if args.keep:
-        print("\nkept containers:", " ".join(r["container"] for r in records if r.get("container")))
-    return 1 if failed else 0
+    return finish(records, args.results)
 
 
 if __name__ == "__main__":
