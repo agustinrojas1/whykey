@@ -1,0 +1,27 @@
+{
+  "id": "remap-keyd-redirect-modifier-bound",
+  "description": "keyd maps F9 to Super+T ('[main] f9 = M-t', a redirect that carries a modifier) on the VM kernel keyboard; the Input remapper layer must report the redirect to super+t, and Hyprland's Super+T bind fires and consumes the key",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["keyd"], "ready": "keyd virtual keyboard"}},
+  "files": {
+    "/etc/keyd/default.conf": ["[ids]", "*", "", "[main]", "f9 = M-t"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["f9"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["f9"],
+    "layer": ["Hyprland"],
+    "via": {"layer": "Input remapper", "summary": "F9", "binding": "SUPER+T"},
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+  }
+}
