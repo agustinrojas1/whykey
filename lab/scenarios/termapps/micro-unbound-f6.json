@@ -1,0 +1,32 @@
+{
+  "id": "micro-unbound-f6",
+  "description": "F6 has no entry in ~/.config/micro/bindings.json; Micro reads the key and nothing fires. whykey cannot see Micro's default bindings or plugins, so it answers uncertain-continues (tolerated, not verified). F7 is not used: Micro treats it as a binding that leaves the command bar unusable for the lab's whykey run",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/micro/bindings.json": ["{\"Ctrl-y\": \"command:term touch /tmp/other\"}"],
+    "/root/run-whykey.sh": ["/w/whykey f6 --json --schema-version 2 >/tmp/whykey.out 2>/tmp/whykey.err", "touch /tmp/whykey.done"],
+    "/root/work.txt": ["one"]
+  },
+  "pty": {
+    "command": ["strace", "-f", "-o", "/tmp/strace.log", "-e", "trace=read", "-s", "64", "micro", "/root/work.txt"],
+    "settle": 1.5
+  },
+  "actions": [
+    {"type": "\\e[17~"},
+    {"sleep": 1},
+    {"type": "\\x05"},
+    {"sleep": 1}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "reached": {"sh": "sed -n 's/^.*read(5, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\33[17~'"}
+  },
+  "whykey": {
+    "args": ["f6"],
+    "layer": "Micro",
+    "run": "pty",
+    "command": "term sh /root/run-whykey.sh",
+    "accept": ["uncertain-continues"]
+  }
+}

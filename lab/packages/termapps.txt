@@ -1,0 +1,8 @@
+# Terminal editors and multiplexers that whykey has adapters for. Zellij is
+# not in Fedora; termapps.sh installs its pinned upstream release binary.
+vim-enhanced
+helix
+kakoune
+micro
+# Traces the reads of a program in a scenario (the independent "reached" oracle).
+strace

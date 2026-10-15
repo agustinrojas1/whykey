@@ -1,0 +1,70 @@
+{
+  "id": "zellij-locked-normal-bind",
+  "description": "after Ctrl-g switches to locked mode, Ctrl-y (bound only in normal mode) is not handled by Zellij and reaches the pane's shell; whykey, told the mode with WHYKEY_ZELLIJ_MODE=locked, agrees",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/zellij/config.kdl": [
+      "show_release_notes false",
+      "show_startup_tips false",
+      "keybinds {",
+      "    normal {",
+      "        bind \"Ctrl y\" {",
+      "            NewPane",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "echo started >> /tmp/shells-started",
+      "bind -x '\"\\C-v\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-y\": touch /tmp/reached-shell'",
+      "bind -x '\"\\en\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zellij",
+      "-s",
+      "lab"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    },
+    "settle": 3
+  },
+  "actions": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x07"
+    },
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x19"
+    },
+    {
+      "sleep": 2
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test \"$(wc -l < /tmp/shells-started)\" -ge 2"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+y"
+    ],
+    "layer": "Zellij",
+    "run": "pty",
+    "command": "WHYKEY_ZELLIJ_MODE=locked /w/whykey"
+  }
+}
