@@ -5,6 +5,13 @@ copies it where the wayfire user can read it, gives that user its own runtime
 directory, and points lab.env's XDG_RUNTIME_DIR and WAYLAND_DISPLAY at the
 Wayfire socket so the probe and the injector connect to it. Wayfire has no
 window-query IPC in the lab image, so focus is checked with the Shift tap alone.
+
+whykey asks the running Wayfire for its live binding options through the
+ipc-rules plugin (scenarios list it in `plugins`), and it confirms that a
+plugin is loaded by reading the compositor's memory map. In a real session
+whykey runs as the compositor's own user and may read that map; the lab's
+whykey runs as root, which needs CAP_SYS_PTRACE for it, so `docker_args`
+grants that capability to the container.
 """
 
 from __future__ import annotations
@@ -57,3 +64,8 @@ def start(lab) -> None:
 
 def inject(lab, keys: list[str]) -> None:
     lab.run(["python3", "/lab/vkbd.py", *keys])
+
+
+def docker_args() -> list[str]:
+    """Let root in the container read /proc/<wayfire pid>/maps (see above)."""
+    return ["--cap-add", "SYS_PTRACE"]

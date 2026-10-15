@@ -1,0 +1,22 @@
+{
+  "id": "niri-bind-mod-nested",
+  "description": "a Mod+T bind; niri runs nested under Sway (winit), where Mod is Alt, so Alt+T runs the command and the key is consumed; tolerated uncertainty for the bind as with niri-bind-consumed",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "binds {",
+      "    Mod+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["alt+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["alt+t"],
+    "layer": "Niri",
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

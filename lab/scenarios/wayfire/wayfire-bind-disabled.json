@@ -1,0 +1,24 @@
+{
+  "id": "wayfire-bind-disabled",
+  "description": "a [command] binding Super+T set to none is disabled, so Super+T reaches the probe client",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = ipc ipc-rules command",
+      "",
+      "[command]",
+      "binding_terminal = none",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

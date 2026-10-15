@@ -1,0 +1,21 @@
+{
+  "id": "niri-mod-nested-super-unbound",
+  "description": "a Mod+T bind under nested niri means Alt+T, so Super+T has no bind and the probe client receives it (whykey must not read Mod as Super on a nested session)",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "binds {",
+      "    Mod+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Niri",
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}
