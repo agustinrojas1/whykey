@@ -1,0 +1,43 @@
+{
+  "id": "ime-fcitx5-x11-keyboard-us-xim",
+  "description": "Fcitx5 whose only input method is keyboard-us, with a focused XIM client (xterm), passes the key unchanged to the client",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "fcitx5",
+    "session": "x11",
+    "client": "xterm",
+    "profile": "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=keyboard-us\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n[GroupOrder]\n0=Default\n",
+    "env": {
+      "GTK_IM_MODULE": "fcitx",
+      "QT_IM_MODULE": "fcitx",
+      "XMODIFIERS": "@im=fcitx"
+    }
+  },
+  "probe": null,
+  "actions": [
+    {
+      "xdotool": ["key", "a"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "false"
+    },
+    "delivered": {
+      "typed": "a"
+    },
+    "reached": {
+      "typed": "a"
+    }
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": "Input method",
+    "detail": "active engine: keyboard-us",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "x11",
+      "XDG_SESSION_TYPE": "x11"
+    }
+  }
+}

@@ -77,6 +77,11 @@ pub struct Detection {
     /// that the input method is inactive.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_error: Option<String>,
+    /// The daemon answered that no engine is selected (IBus reports "No
+    /// global engine"). Keys then reach the client unchanged; this is an
+    /// answer, not a failed query.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_engine: bool,
     /// Typed limits of what a passive diagnostic can reconstruct. Keeping
     /// these separate from `query_error` prevents an unreachable daemon from
     /// being mistaken for an inactive IME or for observed committed text.
@@ -137,6 +142,7 @@ pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Dete
                 active_engine: runtime.active_engine,
                 state: runtime.state,
                 query_error: runtime.error,
+                no_engine: runtime.no_engine,
                 text_reconstruction: TextReconstruction::default(),
             }
         })
@@ -184,6 +190,9 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         );
         if let Some(active_engine) = &detection.active_engine {
             details.push(format!("active engine: {active_engine}"));
+        }
+        if detection.no_engine {
+            details.push("active engine: none (the daemon reports no engine is set)".into());
         }
         if let Some(state) = &detection.state {
             if state == "closed" && detection.active_engine.is_none() {
@@ -268,6 +277,9 @@ enum RuntimeMode {
 }
 
 fn runtime_mode(detection: &Detection) -> RuntimeMode {
+    if detection.no_engine {
+        return RuntimeMode::Forwarding("no engine is set".into());
+    }
     if let Some(state) = detection
         .state
         .as_deref()
@@ -301,6 +313,11 @@ struct RuntimeQuery {
     active_engine: Option<String>,
     state: Option<String>,
     error: Option<String>,
+    no_engine: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Query documented read-only input-method APIs only after an input-method
@@ -317,16 +334,40 @@ fn query_runtime(engine: &str) -> RuntimeQuery {
 fn query_ibus() -> RuntimeQuery {
     let mut command = Command::new("ibus");
     command.arg("engine");
-    match run_query(&mut command) {
-        Ok(active_engine) => RuntimeQuery {
-            active_engine: nonempty_line(&active_engine),
+    let output = match command::output(&mut command) {
+        Ok(output) => output,
+        Err(error) => {
+            return RuntimeQuery {
+                error: Some(format!("ibus: {error}")),
+                ..RuntimeQuery::default()
+            };
+        }
+    };
+    if output.status.success() {
+        return RuntimeQuery {
+            active_engine: nonempty_line(&String::from_utf8_lossy(&output.stdout)),
             ..RuntimeQuery::default()
-        },
-        Err(error) => RuntimeQuery {
-            error: Some(error),
-            ..RuntimeQuery::default()
-        },
+        };
     }
+    // The daemon answered and selected nothing: `ibus engine` exits 1 with
+    // "No engine is set." (stdout) and "No global engine" (stderr). That is a
+    // reply, not an unreachable API.
+    if ibus_reports_no_engine(&output) {
+        return RuntimeQuery {
+            no_engine: true,
+            ..RuntimeQuery::default()
+        };
+    }
+    RuntimeQuery {
+        error: Some(command_failure("ibus", &output)),
+        ..RuntimeQuery::default()
+    }
+}
+
+fn ibus_reports_no_engine(output: &std::process::Output) -> bool {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("No engine is set") || stderr.contains("No global engine")
 }
 
 fn query_fcitx5() -> RuntimeQuery {
@@ -374,6 +415,7 @@ fn query_fcitx5() -> RuntimeQuery {
                 active_engine,
                 state,
                 error,
+                ..RuntimeQuery::default()
             }
         }
         Err(error) => RuntimeQuery {
@@ -441,16 +483,6 @@ fn has_fcitx5_service(names: &str) -> bool {
             !(character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-'))
         })
         .any(|name| name == "org.fcitx.Fcitx5")
-}
-
-fn run_query(command: &mut Command) -> Result<String, String> {
-    let program = command.get_program().to_string_lossy().into_owned();
-    let output = command::output(command).map_err(|error| format!("{program}: {error}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        Err(command_failure(&program, &output))
-    }
 }
 
 fn command_failure(program: &str, output: &std::process::Output) -> String {
@@ -561,6 +593,7 @@ mod tests {
             active_engine: Some("xkb:us::eng".into()),
             state: None,
             query_error: None,
+            no_engine: false,
             text_reconstruction: TextReconstruction::default(),
         };
         let value = serde_json::to_value(&detection).unwrap();
@@ -607,6 +640,7 @@ mod tests {
             active_engine: Some(active_engine.into()),
             state: Some(state.into()),
             query_error: None,
+            no_engine: false,
             text_reconstruction: TextReconstruction::default(),
         }
     }
@@ -648,6 +682,7 @@ mod tests {
             active_engine: None,
             state: None,
             query_error: Some("session bus unavailable".into()),
+            no_engine: false,
             text_reconstruction: TextReconstruction::default(),
         }]);
         assert!(result.summary.contains("runtime API is unreachable"));
@@ -689,6 +724,7 @@ mod tests {
             active_engine: Some(active_engine.into()),
             state: None,
             query_error: None,
+            no_engine: false,
             text_reconstruction: TextReconstruction::default(),
         };
         let active = inspect_with_detections(&[ibus("libpinyin")]);
@@ -705,6 +741,7 @@ mod tests {
             active_engine: None,
             state: None,
             query_error: Some("session bus unavailable".into()),
+            no_engine: false,
             text_reconstruction: TextReconstruction::default(),
         }]);
         assert!(unreachable.summary.contains("runtime API is unreachable"));
@@ -715,6 +752,56 @@ mod tests {
                 .iter()
                 .any(|detail| { detail.contains("application preedit unobserved") })
         );
+    }
+
+    fn ibus_no_engine(no_engine: bool) -> Detection {
+        Detection {
+            engine: "ibus".into(),
+            sources: vec!["GTK_IM_MODULE=ibus".into()],
+            processes: vec!["ibus-daemon".into()],
+            active_engine: None,
+            state: None,
+            query_error: None,
+            no_engine,
+            text_reconstruction: TextReconstruction::default(),
+        }
+    }
+
+    #[test]
+    fn ibus_without_a_global_engine_forwards_keys() {
+        // `ibus engine` answers "No global engine": the daemon is reachable
+        // and no engine is selected, so keys pass unchanged. It is not an
+        // unreachable runtime API.
+        let result = inspect_with_detections(&[ibus_no_engine(true)]);
+
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(result.summary.contains("no engine is set"));
+        assert!(!result.summary.contains("unreachable"));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("active engine: none"))
+        );
+    }
+
+    #[test]
+    fn ibus_engine_query_reads_no_engine_as_an_answer() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let no_engine = std::process::Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: b"No engine is set.\n".to_vec(),
+            stderr: b"(process): IBUS-WARNING: Properties.Get: No global engine.\n".to_vec(),
+        };
+        assert!(ibus_reports_no_engine(&no_engine));
+
+        let unreachable = std::process::Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: b"Cannot connect to ibus-daemon\n".to_vec(),
+        };
+        assert!(!ibus_reports_no_engine(&unreachable));
     }
 
     #[test]

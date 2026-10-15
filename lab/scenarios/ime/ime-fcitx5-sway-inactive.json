@@ -1,0 +1,48 @@
+{
+  "id": "ime-fcitx5-sway-inactive",
+  "description": "Fcitx5 with pinyin deactivated on the focused foot probe (state 1) passes the key unchanged",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "fcitx5",
+    "session": "sway",
+    "env": {
+      "GTK_IM_MODULE": "fcitx",
+      "QT_IM_MODULE": "fcitx",
+      "XMODIFIERS": "@im=fcitx"
+    }
+  },
+  "files": {
+    "/root/.config/sway/config": ["output * resolution 1024x768"]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "fcitx5": {
+        "engine": "pinyin",
+        "state": "inactive"
+      }
+    },
+    {
+      "vkbd": ["a"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "false"
+    },
+    "delivered": "probe",
+    "reached": {
+      "probe": "any"
+    }
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": "Input method",
+    "summary": "is inactive",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    }
+  }
+}

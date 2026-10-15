@@ -1,0 +1,42 @@
+{
+  "id": "ime-ibus-x11-no-engine-xim",
+  "description": "IBus running with no global engine set (ibus engine: No global engine) passes the key unchanged to a focused XIM client (xterm)",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "ibus",
+    "session": "x11",
+    "client": "xterm",
+    "env": {
+      "GTK_IM_MODULE": "ibus",
+      "QT_IM_MODULE": "ibus",
+      "XMODIFIERS": "@im=ibus"
+    }
+  },
+  "probe": null,
+  "actions": [
+    {
+      "xdotool": ["key", "a"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "false"
+    },
+    "delivered": {
+      "typed": "a"
+    },
+    "reached": {
+      "typed": "a"
+    }
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": "Input method",
+    "summary": "no engine is set",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "x11",
+      "XDG_SESSION_TYPE": "x11"
+    }
+  }
+}

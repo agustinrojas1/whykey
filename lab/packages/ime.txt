@@ -1,0 +1,8 @@
+# Input-method daemons for the IME scenarios (lab/envs/ime.py): Fcitx5 with its
+# pinyin engine, and IBus with its Wayland frontend and the libpinyin engine.
+# The daemons run on the scenario's session D-Bus.
+fcitx5
+fcitx5-chinese-addons
+ibus
+ibus-wayland
+ibus-libpinyin
