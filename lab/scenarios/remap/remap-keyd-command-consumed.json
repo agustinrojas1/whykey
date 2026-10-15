@@ -18,6 +18,6 @@
   "whykey": {
     "args": ["CAPS_LOCK"],
     "layer": ["Input remapper"],
-    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
   }
 }

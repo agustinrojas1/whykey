@@ -38,7 +38,6 @@
     "env": {
       "XDG_CURRENT_DESKTOP": "Hyprland",
       "XDG_SESSION_TYPE": "wayland",
-      "XKB_DEFAULT_LAYOUT": "us",
       "INPUT_REMAPPER_CONFIG": "/home/lab/.config/input-remapper-2"
     }
   }

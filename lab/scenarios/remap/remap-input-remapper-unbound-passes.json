@@ -1,6 +1,6 @@
 {
   "id": "remap-input-remapper-unbound-passes",
-  "description": "with input-remapper's autoloaded preset f9-f12 (KEY_F9 only; requested as an unprivileged user) on the VM kernel keyboard, an unmapped 'a' reaches the probe unchanged through the input-remapper virtual keyboard; Hyprland finds no bind and the Input remapper layer does not redirect it. XKB_DEFAULT_LAYOUT=us is set because the VM's Hyprland layout is us and whykey reads the layout only from the environment",
+  "description": "with input-remapper's autoloaded preset f9-f12 (KEY_F9 only; requested as an unprivileged user) on the VM kernel keyboard, an unmapped 'a' reaches the probe unchanged through the input-remapper virtual keyboard; Hyprland finds no bind and the Input remapper layer does not redirect it",
   "tier": "observed",
   "environment": "remap",
   "remap": {
@@ -37,7 +37,6 @@
     "env": {
       "XDG_CURRENT_DESKTOP": "Hyprland",
       "XDG_SESSION_TYPE": "wayland",
-      "XKB_DEFAULT_LAYOUT": "us",
       "INPUT_REMAPPER_CONFIG": "/home/lab/.config/input-remapper-2"
     }
   }

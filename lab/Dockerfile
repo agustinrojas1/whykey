@@ -22,6 +22,8 @@ COPY packages/kde.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh kde
 COPY packages/kwin.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh kwin
+COPY packages/remap.* /tmp/packages/
+RUN sh /tmp/packages/_install.sh remap
 COPY packages/shells.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh shells
 COPY packages/termapps.* /tmp/packages/

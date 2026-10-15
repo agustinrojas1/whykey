@@ -196,7 +196,7 @@ pub use ipc::{
 use ipc::{has_hyprland_signature, inspect_system, inspect_system_with_probe};
 pub(crate) use keyboard::{
     KeyboardInventory, VIRTUAL_KEYBOARD_PREFIX, compile_main_xkb_keymap, keyboard_inventory,
-    keymap_layout_name, main_keyboard_active_layout_index,
+    keymap_layout_name, main_keyboard_active_layout_index, main_keyboard_is_plain_us,
 };
 use matching::deserialize_boolish;
 pub(crate) use matching::main_keyboard_lock_state;
@@ -999,6 +999,20 @@ xkb_symbols "pc" {
     fn reads_the_main_keyboard_active_layout_group() {
         let devices = include_str!("../../../tests/fixtures/hyprland/devices-layout-groups.json");
         assert_eq!(main_keyboard_active_layout_index(devices), Some(2));
+    }
+
+    #[test]
+    fn plain_us_layout_comes_from_the_main_keyboard() {
+        let devices = |layout: &str, variant: &str| {
+            format!(
+                r#"{{"keyboards":[{{"name":"other","layout":"de","variant":"","main":false}},{{"name":"main","layout":"{layout}","variant":"{variant}","main":true}}]}}"#
+            )
+        };
+        assert!(main_keyboard_is_plain_us(&devices("us", "")));
+        assert!(!main_keyboard_is_plain_us(&devices("us", "altgr-intl")));
+        assert!(!main_keyboard_is_plain_us(&devices("fr", "")));
+        let no_layout = include_str!("../../../tests/fixtures/hyprland/devices-keyboards.json");
+        assert!(!main_keyboard_is_plain_us(no_layout));
     }
 
     #[test]

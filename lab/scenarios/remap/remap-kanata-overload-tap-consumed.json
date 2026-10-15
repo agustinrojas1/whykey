@@ -22,6 +22,6 @@
     "args": ["CAPS_LOCK"],
     "layer": ["Input remapper"],
     "accept": ["handled-uncertain"],
-    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
   }
 }

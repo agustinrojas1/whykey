@@ -1,6 +1,6 @@
 {
   "id": "remap-kmonad-unbound-passes",
-  "description": "with kmonad running and '(defsrc f9)', an unlisted 'a' from the VM kernel keyboard reaches the probe unchanged through kmonad's uinput-sink; Hyprland finds no bind and the Input remapper layer does not redirect it. XKB_DEFAULT_LAYOUT=us is set because the VM's Hyprland layout is us and whykey reads the layout only from the environment",
+  "description": "with kmonad running and '(defsrc f9)', an unlisted 'a' from the VM kernel keyboard reaches the probe unchanged through kmonad's uinput-sink; Hyprland finds no bind and the Input remapper layer does not redirect it",
   "tier": "observed",
   "environment": "remap",
   "setup": [
@@ -32,6 +32,6 @@
     "args": ["a"],
     "layer": ["Hyprland"],
     "not_via": "Input remapper",
-    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
   }
 }

@@ -214,10 +214,15 @@ fn inspect_step(
 ) -> Vec<LayerResult> {
     let generations_before = session.reload_generations();
     let remapper_result = (!command::deadline_exceeded()).then(|| {
-        crate::remapper::inspect_with_detections(
+        crate::remapper::inspect_with_detections_and_layout(
             request.key,
             request.physical_input.as_ref(),
             &session.remappers,
+            session
+                .hyprland_probe
+                .as_ref()
+                .and_then(|probe| probe.devices_json())
+                .map(crate::layers::hyprland::main_keyboard_is_plain_us),
         )
     });
     let mut results = route_after_remapper(remapper_result, request, |request| {
