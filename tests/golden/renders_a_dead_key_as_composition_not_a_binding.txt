@@ -1,0 +1,15 @@
+AltGr+'
+
+> AltGr+' is a dead key (dead_acute); Kitty composes it with the next key.
+  Nothing is sent until the next key completes or cancels the composition.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      v  no active binding
+  3  Kitty         >  dead_acute starts composition; no bytes until the next key
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+More  whykey altgr+' -v

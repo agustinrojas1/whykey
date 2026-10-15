@@ -1,0 +1,7 @@
+(header)
+
+? sxhkd matches Super+Return, but whykey cannot tell whether it continues.
+
+Bound in
+  binding: alacritty
+

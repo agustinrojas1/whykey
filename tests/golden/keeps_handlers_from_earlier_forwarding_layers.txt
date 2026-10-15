@@ -1,0 +1,15 @@
+Ctrl+Left
+
+v Hyprland handles Ctrl+Left and passes it on.
+  It continues to the next layer.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      v  binding found
+  3  Ghostty       v  no binding found
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+More  whykey ctrl+left -v

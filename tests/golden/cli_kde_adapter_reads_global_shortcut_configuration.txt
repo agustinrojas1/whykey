@@ -1,0 +1,8 @@
+(header)
+
+? KDE Plasma matches Alt+F2, but whykey cannot tell whether it continues.
+
+Bound in
+  <tmp>/kglobalshortcutsrc
+  KGlobalAccel _launch
+

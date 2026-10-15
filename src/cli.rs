@@ -13,6 +13,7 @@ pub(crate) struct GlobalArguments {
     pub ndjson: bool,
     pub verbose: bool,
     pub color: ColorChoice,
+    pub ascii: bool,
     pub schema_version: u8,
 }
 
@@ -32,12 +33,13 @@ pub(crate) fn parse_global_arguments(raw: Vec<OsString>) -> Result<GlobalArgumen
         .iter()
         .any(|argument| matches!(flag(argument), "--verbose" | "-v"));
     let mut color = ColorChoice::Auto;
+    let ascii = raw.iter().any(|argument| flag(argument) == "--ascii");
     let mut schema_version = None;
     let mut arguments = Vec::with_capacity(raw.len());
     let mut raw = raw.into_iter();
     while let Some(argument) = raw.next() {
         match flag(&argument) {
-            "--json" | "--ndjson" | "--verbose" | "-v" => {}
+            "--json" | "--ndjson" | "--verbose" | "-v" | "--ascii" => {}
             "--color" => {
                 color = raw
                     .next()
@@ -70,6 +72,7 @@ pub(crate) fn parse_global_arguments(raw: Vec<OsString>) -> Result<GlobalArgumen
         ndjson,
         verbose,
         color,
+        ascii,
         schema_version: schema_version.map_or(schema::DEFAULT_VERSION, |(version, _)| version),
     })
 }
@@ -929,6 +932,10 @@ pub(crate) mod help {
         OptionValue::Choices(&["auto", "always", "never"]),
         "set terminal colors",
     );
+    const ASCII: OptionSpec = OptionSpec::switch(
+        "--ascii",
+        "use ASCII glyphs and punctuation in text reports",
+    );
     const JSON: OptionSpec = OptionSpec::switch("--json", "emit JSON");
     const JSON_V2: OptionSpec = OptionSpec::switch("--json-v2", "emit JSON schema v2");
     const SCHEMA_VERSION: OptionSpec = OptionSpec::valued(
@@ -944,9 +951,9 @@ pub(crate) mod help {
     /// Options removed by [`super::parse_global_arguments`] before dispatch.
     #[cfg(test)]
     pub(crate) const GLOBAL_OPTIONS: &[OptionSpec] =
-        &[VERBOSE, COLOR, JSON, JSON_V2, SCHEMA_VERSION, NDJSON];
+        &[VERBOSE, COLOR, ASCII, JSON, JSON_V2, SCHEMA_VERSION, NDJSON];
     const VERBOSE_OPTIONS: &[OptionSpec] = &[VERBOSE];
-    const REPORT_OPTIONS: &[OptionSpec] = &[COLOR, JSON, JSON_V2, SCHEMA_VERSION];
+    const REPORT_OPTIONS: &[OptionSpec] = &[COLOR, ASCII, JSON, JSON_V2, SCHEMA_VERSION];
     const NDJSON_OPTIONS: &[OptionSpec] = &[NDJSON];
 
     const INSPECT_OPTIONS: &[OptionSpec] = &[
@@ -1220,7 +1227,7 @@ pub(crate) mod help {
             let _ = writeln!(output, "  {}\n    {}", usage(command.name), command.summary);
         }
         output.push_str(
-            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. JSON, NDJSON, shell-init, and completion output are always plain.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
+            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. --ascii (or a non-UTF-8 locale) replaces glyphs such as the route marks with ASCII. JSON, NDJSON, shell-init, and completion output are always plain.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
         );
         output
     }

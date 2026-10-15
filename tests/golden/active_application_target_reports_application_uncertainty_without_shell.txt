@@ -1,0 +1,15 @@
+Ctrl+W
+
+? Neovim has a matching keymap, but whykey cannot verify it runs.
+
+Route
+  1  Remapper      v  none detected
+  2  Compositor    -  not inspected
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Neovim        ?  <C-W>
+  8  Shell         -  not inspected
+
+More  whykey ctrl+w -v  -  whykey listen

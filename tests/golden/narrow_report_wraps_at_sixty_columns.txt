@@ -1,0 +1,17 @@
+Ctrl+Z
+
+x The TTY driver turns Ctrl+Z into a stop signal for the
+  foreground job.
+  Nothing after the TTY driver receives Ctrl+Z.
+
+Route
+  1  Remapper      v  none detected
+  2  Compositor    -  not inspected
+  3  Terminal      -  not inspected
+  4  TTY driver    x  terminal signal handling; interprets
+                      byte 0x1a as VSUSP (SIGTSTP)
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+More  whykey ctrl+z -v

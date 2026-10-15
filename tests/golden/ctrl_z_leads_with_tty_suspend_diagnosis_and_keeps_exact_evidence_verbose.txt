@@ -1,0 +1,21 @@
+Ctrl+Z
+
+x The TTY driver turns Ctrl+Z into a stop signal for the foreground job.
+  Nothing after the TTY driver receives Ctrl+Z.
+  This applies if earlier layers forward the key.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  compositor forwarding is unknown
+  3  Terminal      -  not inspected
+  4  TTY driver    x  terminal signal handling; interprets byte 0x1a as VSUSP
+                      (SIGTSTP)
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+Next
+  whykey listen --window
+    press the shortcut in the probe window to see if it arrives
+
+More  whykey ctrl+z -v

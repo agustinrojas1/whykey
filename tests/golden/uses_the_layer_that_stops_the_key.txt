@@ -1,0 +1,15 @@
+Ctrl+Z
+
+x Readline takes Ctrl+Z.
+  Nothing after Readline receives Ctrl+Z.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      v  binding found
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Readline      x  binding found
+
+More  whykey ctrl+z -v

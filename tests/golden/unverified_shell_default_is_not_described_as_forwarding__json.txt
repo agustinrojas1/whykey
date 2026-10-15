@@ -1,0 +1,33 @@
+[
+  {
+    "evidence": [],
+    "layer": "Kitty",
+    "propagation": "Continues",
+    "status": "NotHandled",
+    "summary": "no Kitty binding",
+    "tier": null
+  },
+  {
+    "binding": {
+      "action": "transpose-chars",
+      "description": null,
+      "dispatcher": null,
+      "has_universal_match": false,
+      "scope": "Unknown",
+      "source": null,
+      "submap": null,
+      "uncertainty": "UnverifiedDefault"
+    },
+    "evidence": [
+      {
+        "kind": "detail",
+        "text": "sequence: 0x14"
+      }
+    ],
+    "layer": "Bash / Readline",
+    "propagation": "Indeterminate",
+    "status": "Handled",
+    "summary": "bound to transpose-chars",
+    "tier": "default"
+  }
+]

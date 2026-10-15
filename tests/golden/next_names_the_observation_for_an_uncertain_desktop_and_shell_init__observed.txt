@@ -1,0 +1,23 @@
+Ctrl+T
+
+? Ctrl+T reached the focused probe window: the compositor/desktop and any input
+  method delivered it.
+  The key reached whykey's focused probe window, so every layer above a focused
+  client (remappers, compositor/desktop, input method) passed it on. Layers
+  below are shown for your usual focused application.
+  Observed via probe window (observe-only).
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  Hyprland IPC is unavailable; effective binding state is
+                      unknown                                           observed
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+Confidence  observed: whykey saw the key at probe window. Layers after that
+            point are predicted from configuration.
+
+More  whykey listen -v

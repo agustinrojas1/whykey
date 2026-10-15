@@ -1,0 +1,18 @@
+Ctrl+T
+
+? Nothing claims Ctrl+T before the TTY driver and Shell input, which whykey could not verify.
+  What those layers do with it is unknown.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      v  no binding
+  3  Kitty         v  no Kitty binding; forwarded to the terminal input
+  4  Terminal      v  not applicable to the current terminal
+  5  TTY driver    ?  terminal byte encoding is unknown; TTY signal checks
+                      unevaluated
+  6  Input method  -  not inspected
+  7  Multiplexer   -  not inspected
+  8  Shell input   ?  terminal byte encoding is unknown; shell line editing
+                      unevaluated
+
+More  whykey ctrl+t -v  -  whykey listen

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "key": {
+    "modifiers": 128,
+    "key": "Q"
+  },
+  "key_display": "MOD5 + Q",
+  "confidence": "configured",
+  "observed": null,
+  "layers": []
+}

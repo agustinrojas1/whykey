@@ -1,0 +1,7 @@
+(header)
+
+? tmux has a candidate binding, but whykey cannot verify the key reaches it.
+
+Bound in
+  binding: bind-key -T root M-Enter split-window -v
+

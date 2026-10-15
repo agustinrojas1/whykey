@@ -1,0 +1,16 @@
+Ctrl+T
+
+? Nothing claims Ctrl+T before the input method, which whykey could not verify.
+  What those layers do with it is unknown.
+
+Route
+  1  Remapper      v  none detected
+  2  Compositor    -  not inspected
+  3  Kitty         v  no Kitty binding
+  4  TTY driver    -  not inspected
+  5  Input method  ?  an active input method may transform this input before
+                      text is committed
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+More  whykey ctrl+t -v  -  whykey listen

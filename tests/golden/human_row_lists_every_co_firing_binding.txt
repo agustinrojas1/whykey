@@ -1,0 +1,16 @@
+Alt+Tab
+
+x Hyprland takes Alt+Tab and runs Focus on next window.
+  Nothing after Hyprland receives Alt+Tab.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      x  Focus on next window
+                      also: Reveal active window on top
+  3  Terminal      -  not reached
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+More  whykey alt+tab -v

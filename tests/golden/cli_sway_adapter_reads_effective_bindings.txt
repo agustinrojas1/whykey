@@ -1,0 +1,9 @@
+(header)
+
+✕ Sway takes Ctrl+C and runs exec copy.
+  Nothing after Sway receives Ctrl+C.
+
+Bound in
+  running config:2
+  exec copy
+

@@ -432,6 +432,8 @@ mod tests {
                 color: crate::style::ColorChoice::Never,
                 verbose: false,
                 width: 400,
+                ascii: true,
+                context: false,
             },
         );
         assert!(
