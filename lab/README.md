@@ -16,17 +16,20 @@ inside lab containers. Never send it to your own desktop session.
   container.
 - A whykey release build (`cargo build --release --locked`).
 - `/dev/kvm` for the Hyprland scenarios (see below). The rest need no KVM.
-- About 3 GB of disk space for the `whykey-lab` image.
+- About 10 GB of disk space for the six lab images (see [The images](#the-images)); a scenario pulls one of them, 2.1 to 3.5 GB.
 
 ## Build and run
 
 ```sh
-docker build -t whykey-lab lab/
+python3 tools/lab_images.py build
 cargo build --release --locked
 python3 lab/run.py -j 12
 ```
 
-`run.py` is stdlib-only Python and runs on the host. It prints one line per
+`tools/lab_images.py build` builds every image (or the named ones, e.g.
+`build tty`, which builds `base` first if needed) and tags each
+`whykey-lab-<name>:<hash>` and `whykey-lab-<name>:latest`. `run.py` is
+stdlib-only Python and runs on the host. It prints one line per
 scenario, then a table of ground truth against whykey's verdict, followed by
 details for every failure. It writes `lab/results.json` (git-ignored) and
 exits 1 on any mismatch.
@@ -38,7 +41,9 @@ exits 1 on any mismatch.
 | `--vms N` | Run at most N Hyprland VMs at once (2 vCPUs each, within `-j`). Default: a third of the CPUs when `/dev/kvm` exists, a quarter without. Starved VMs time out. |
 | `--binary PATH` | Test this whykey binary. Default: `target/release/whykey`. Pin a build when other work keeps rebuilding `target/`. |
 | `--keep` | Leave each container running afterwards, for `docker exec`. |
-| `--image NAME` | Use this lab image. Default: `whykey-lab`. |
+| `--image-prefix P` | Image names are `P<name>:<tag>`. Default: `whykey-lab-`. |
+| `--image-tag TAG` | Use this tag of each image. Default: `latest`. `hash` uses each image's content hash (`python3 tools/lab_images.py hash NAME`). |
+| `--image REF` | Run every scenario in this image reference, as is, instead of its group image. E.g. `--image whykey-lab` for the old single image. |
 | `--results FILE` | Write the results to this file. Default: `lab/results.json`. |
 | `--repeat N` | Run every selected scenario N times at once, to hunt flakes, e.g. `--only sway-mode-inactive --repeat 30 -j 12`. |
 | `--retries N` | Rerun a scenario that ended in a lab error (ground truth could not be established, e.g. a slow terminal lost the first key) up to N times, one at a time. Default: 2. A mismatch with reality is never retried. Retried records carry `retried`. |
@@ -49,41 +54,74 @@ pass `--lab-results FILE`. The CI workflow `.github/workflows/lab.yml` builds
 the image with layer caching, runs every scenario on pull requests, and
 uploads `results.json`.
 
-## The image
+## The images
 
-`lab/Dockerfile` builds Fedora 44 with pinned versions: Sway 1.11, i3
-4.25.1, Openbox 3.6.1, AwesomeWM 4.3, sxhkd 0.6.1, xbindkeys 1.8.7,
-kglobalacceld 6.7.5, mutter 50 (headless) with the GNOME schemas, and
-python3-dbus. It also has bash
-5.3, zsh 5.9, fish 4.6, tmux 3.7c, Screen 5.0, Xvfb, xdotool, xev, wtype,
-foot, and Hyprland 0.56.2 from the `sdegler/hyprland` COPR (Fedora no longer
-ships Hyprland). If the COPR drops that build, the image build fails; it
-does not silently switch versions. File capabilities are stripped from every
-binary, because they make `exec` fail with EPERM in an unprivileged
-container.
+Every scenario runs in the image of its environment, so it pulls only the
+packages that environment needs. `lab/images.json` lists the images, their
+package families and their environments; `tools/lab_images.py` builds them.
+Each image is Fedora 44. `base` is the shared base, and each group image is
+built FROM it (`lab/images/<name>.Dockerfile`, one `COPY` and `RUN` pair per
+family, sorted by name).
 
-The image also has Emacs 30.2 (`emacs-nw`, `emacsclient`) and Neovim 0.12.5;
-dwl v0.9, built from source against wlroots 0.20; Niri, labwc, and Wayfire
-from the Fedora repositories (unpinned); Ghostty and WezTerm from the
-`scottames/ghostty` and `wezfurlong/wezterm-nightly` COPRs; kitty, alacritty,
-foot, and Konsole; Qtile, XMonad, Xfce, MATE, herbstluftwm, and Cinnamon
-6.6 (`cinnamon --replace` on Xvfb; it needs a system bus with
-`org.freedesktop.locale1`). Newer families add Fcitx5 and IBus with pinyin
-engines (`ime`); KWin 6.7 (`kwin`); keyd 2.6.0 built from source, kanata
-1.12.0, xremap 0.15.14, kmonad 0.4.5 (pinned upstream artifacts, sha256 in
-`remap.sh`) and input-remapper 2.2.1 (`remap`); and Vim, Helix, Kakoune,
-Micro, strace, and Zellij 0.45.1 (pinned upstream binary, `termapps`).
+| Image | Families | Environments | Size (`docker images`) |
+| --- | --- | --- | --- |
+| `base` | `base`, `wayland`, `x11` | the base of every group | 1.24 GB |
+| `wayland` | `ime`, `waylandwms` | `sway`, `niri`, `labwc`, `wayfire`, `dwl`, `ime` | 2.82 GB |
+| `tty` | `editors`, `shells`, `termapps`, `terminals` | `pty`, `nvim`, `emacs`, `terminals` | 3.52 GB |
+| `x11` | `x11desktops` | `x11` (except its `kde` scenarios), `cinnamon` | 2.99 GB |
+| `gnome` | `gnome` | `gnome`, `gnome_shell` | 2.10 GB |
+| `vm` | `hyprland`, `kde`, `kwin`, `remap` | `hyprland`, `kwin`, `remap`, and the `kde` scenarios of `x11` | 3.13 GB |
+
+The sizes are uncompressed image sizes; the base layers are shared. The
+groups hold their own copies of libraries that other families also pull in,
+so the six images together take about 10 GB of disk.
+
+What the images hold:
+
+- `base`: python3 and python3-dbus (the driver and `lab/rdkbd.py`), the
+  session dbus, Mesa software rendering and `script` for tty runs; Sway and
+  wtype, foot (the Wayland probe) and wev; Xvfb, xdotool, xev, xinput, i3,
+  Openbox, AwesomeWM, sxhkd and xbindkeys.
+- `wayland`: niri, labwc and Wayfire from the Fedora repositories (unpinned);
+  dwl v0.9, built from source against wlroots 0.20; Fcitx5 and IBus with
+  pinyin engines.
+- `tty`: Emacs 30.2 (`emacs-nw`, `emacsclient`) and Neovim 0.12.5; bash,
+  zsh 5.9, fish 4.6, tmux 3.7c and Screen 5.0; Vim, Helix, Kakoune, Micro,
+  strace and Zellij 0.45.1 (pinned upstream binary); kitty, alacritty, foot,
+  Konsole, and Ghostty and WezTerm from their COPRs.
+- `x11`: Qtile, XMonad, Xfce, MATE, herbstluftwm and Cinnamon 6.6
+  (`cinnamon --replace` on Xvfb; it needs a system bus with
+  `org.freedesktop.locale1`).
+- `gnome`: headless mutter 50 with the GNOME schemas, gnome-shell and
+  gnome-settings-daemon.
+- `vm`: Hyprland 0.56.2 from the `sdegler/hyprland` COPR (Fedora no longer
+  ships Hyprland), and the VM tooling (virtme-ng, QEMU, the image's own
+  kernel, busybox); KWin 6.7 and kglobalacceld; keyd 2.6.0, kanata 1.12.0,
+  xremap 0.15.14, kmonad 0.4.5 (pinned upstream artifacts, sha256 in
+  `remap.sh`) and input-remapper 2.2.1.
+
+If a COPR drops the pinned Hyprland build, the image build fails; it does not
+silently switch versions. File capabilities are stripped from every binary,
+because they make `exec` fail with EPERM in an unprivileged container.
 
 Packages come in families under `lab/packages/`: `<family>.txt` lists dnf
 package names, one per line (`#` comments allowed, pin versions as
 `name-1.2.3`), and an optional `<family>.sh` runs before the install (enable
-a COPR, as `hyprland.sh` does). `_install.sh` installs one family, then
-strips file capabilities and recompiles the GSettings schemas. The
-Dockerfile installs `base` first and then every other family in name order,
-one `COPY packages/<family>.* /tmp/packages/` + `RUN sh
-/tmp/packages/_install.sh <family>` pair each, so changing one family
-rebuilds only its layer and those after it. A new family adds its pair at
-its sorted place.
+a COPR, as `hyprland.sh` does, or install a compiler the family needs, as
+`remap.sh` does). `_install.sh` installs one family, then strips file
+capabilities and recompiles the GSettings schemas. A family belongs to one
+image; `lab/images.json` is checked for that when it is read. A new family
+adds its `COPY` and `RUN` pair at its sorted place in its image's Dockerfile.
+
+Building: `python3 tools/lab_images.py build [--prefix P] [NAME...]` builds
+the named images (all by default; a group also builds `base` if needed) and
+tags each `<P><name>:<hash>` and `<P><name>:latest`. `P` defaults to
+`whykey-lab-`. The hash of an image covers its Dockerfile, `_install.sh`, its
+families' files and, for a group, the base image's hash, so a package change
+rebuilds only the images that contain it. `python3 tools/lab_images.py list`
+prints the build order; `hash NAME` and `tag-of NAME` print the hash and the
+full tag. `run.py --image-tag hash` runs the images whose content hashes are
+those tags.
 
 ## How ground truth is established
 
@@ -255,8 +293,10 @@ what the independent client saw.
 
 Each `lab/envs/<name>.py` (names starting with `_` excluded) is the
 environment `<name>`; `lab/envs/__init__.py` imports them all, and both
-`run.py` (host) and `driver.py` (container) use that registry, so a new
-environment is one new file plus its package family. Plugins are stdlib
+`run.py` (host) and `driver.py` (container) use that registry. A new
+environment is one new file, its package families, and its entry in the
+`environments` list of its group image in `lab/images.json` (the lab fails
+to start when an environment is in no image or in two). Plugins are stdlib
 only and share `lab/common.py` (`LabError`, `wait_for`, paths). Every hook
 gets the driver's `Lab`: `lab.scenario`, `lab.env` (exported to whykey,
 actions and probes), `lab.spawn(name, argv, env)`, `lab.run(argv)`,

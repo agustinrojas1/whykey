@@ -1,0 +1,27 @@
+{
+  "base": {
+    "families": ["base", "wayland", "x11"]
+  },
+  "images": {
+    "wayland": {
+      "families": ["ime", "waylandwms"],
+      "environments": ["sway", "niri", "labwc", "wayfire", "dwl", "ime"]
+    },
+    "tty": {
+      "families": ["editors", "shells", "termapps", "terminals"],
+      "environments": ["pty", "nvim", "emacs", "terminals"]
+    },
+    "x11": {
+      "families": ["x11desktops"],
+      "environments": ["x11", "cinnamon"]
+    },
+    "gnome": {
+      "families": ["gnome"],
+      "environments": ["gnome", "gnome_shell"]
+    },
+    "vm": {
+      "families": ["hyprland", "kde", "kwin", "remap"],
+      "environments": ["hyprland", "kwin", "remap"]
+    }
+  }
+}

@@ -304,7 +304,7 @@ tools/check_package_versions.sh
 The lab runs on pull requests (`.github/workflows/lab.yml`). To run it locally:
 
 ```sh
-docker build -t whykey-lab lab/
+python3 tools/lab_images.py build
 cargo build --release --locked
 python3 lab/run.py -j 12
 ```
