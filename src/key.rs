@@ -3,19 +3,24 @@ use std::str::FromStr;
 
 use serde::Serialize;
 
-const SHIFT_MASK: u32 = 1;
+pub(crate) const SHIFT_MASK: u32 = 1;
 const CAPS_MASK: u32 = 2;
-const CTRL_MASK: u32 = 4;
-const ALT_MASK: u32 = 8;
+pub(crate) const CTRL_MASK: u32 = 4;
+pub(crate) const ALT_MASK: u32 = 8;
 const MOD2_MASK: u32 = 16;
 const MOD3_MASK: u32 = 32;
-const SUPER_MASK: u32 = 64;
+pub(crate) const SUPER_MASK: u32 = 64;
 const MOD5_MASK: u32 = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct KeyCombo {
     modifiers: u32,
     key: String,
+    /// A modifier pressed and released on its own (`whykey super --alone`):
+    /// `key` is then the modifier's name and `modifiers` is empty. Not part
+    /// of the v1 JSON shape; schema v2 reports it as `input.alone`.
+    #[serde(skip)]
+    alone: bool,
 }
 
 impl KeyCombo {
@@ -23,6 +28,61 @@ impl KeyCombo {
         Self {
             modifiers,
             key: normalize_key_str(key.as_ref()),
+            alone: false,
+        }
+    }
+
+    /// Parse a modifier named on its own, for `whykey MODIFIER --alone`.
+    pub fn parse_alone(input: &str) -> Result<Self, ParseKeyComboError> {
+        let input = input.trim();
+        let Some(mask) = modifier_mask(input).filter(|mask| ALONE_MASKS.contains(mask)) else {
+            return Err(ParseKeyComboError::plain(format!(
+                "--alone takes one modifier ({}), not '{}'",
+                ALONE_NAMES,
+                abbreviate(input)
+            )));
+        };
+        let name = match mask {
+            CTRL_MASK => "CTRL",
+            ALT_MASK => "ALT",
+            SHIFT_MASK => "SHIFT",
+            SUPER_MASK => "SUPER",
+            MOD3_MASK => "HYPER",
+            _ => "ALTGR",
+        };
+        Ok(Self {
+            modifiers: 0,
+            key: name.into(),
+            alone: true,
+        })
+    }
+
+    /// Whether this asks about a modifier pressed and released on its own.
+    pub fn is_alone(&self) -> bool {
+        self.alone
+    }
+
+    /// Keysym names (normalized) of the physical keys that make up an alone
+    /// modifier: what a binding names when it listens for the modifier key
+    /// itself.
+    pub fn alone_keysyms(&self) -> &'static [&'static str] {
+        match self.alone_mask() {
+            CTRL_MASK => &["CONTROL_L", "CONTROL_R"],
+            ALT_MASK => &["ALT_L", "ALT_R", "META_L", "META_R"],
+            SHIFT_MASK => &["SHIFT_L", "SHIFT_R"],
+            SUPER_MASK => &["SUPER_L", "SUPER_R"],
+            MOD5_MASK => &["ISO_LEVEL3_SHIFT", "ALT_R"],
+            MOD3_MASK => &["HYPER_L", "HYPER_R"],
+            _ => &[],
+        }
+    }
+
+    /// The modmask bit of an alone modifier query; `0` otherwise.
+    pub fn alone_mask(&self) -> u32 {
+        if self.alone {
+            modifier_mask(&self.key).unwrap_or(0)
+        } else {
+            0
         }
     }
 
@@ -60,9 +120,18 @@ impl KeyCombo {
             }
         }
         display.push_str(&self.key);
+        if self.alone {
+            display.push_str("(alone)");
+        }
         display
     }
 }
+
+/// Modifiers that can be pressed and released on their own as a gesture.
+const ALONE_MASKS: [u32; 6] = [
+    CTRL_MASK, ALT_MASK, SHIFT_MASK, SUPER_MASK, MOD3_MASK, MOD5_MASK,
+];
+const ALONE_NAMES: &str = "ctrl, alt, shift, super, hyper, altgr";
 
 const MAX_SEQUENCE_LENGTH: usize = 64;
 
@@ -70,6 +139,11 @@ const MAX_SEQUENCE_LENGTH: usize = 64;
 pub struct KeySequence(Vec<KeyCombo>);
 
 impl KeySequence {
+    /// A one-step sequence.
+    pub fn single(combo: KeyCombo) -> Self {
+        Self(vec![combo])
+    }
+
     pub fn as_slice(&self) -> &[KeyCombo] {
         &self.0
     }
@@ -244,7 +318,7 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
 
     let remainder = remainder.trim();
     if remainder.is_empty() || modifier_mask(remainder).is_some() {
-        return Err(modifier_only_error(input));
+        return Err(modifier_only_error(input, modifiers, remainder));
     }
     if remainder.contains('+') && remainder != "+" {
         let segments: Vec<&str> = remainder.split('+').map(str::trim).collect();
@@ -287,7 +361,11 @@ fn parse_combo(input: &str, validate_key: bool) -> Result<KeyCombo, ParseKeyComb
         return Err(unknown_key_error(remainder));
     }
 
-    Ok(KeyCombo { modifiers, key })
+    Ok(KeyCombo {
+        modifiers,
+        key,
+        alone: false,
+    })
 }
 
 impl fmt::Display for KeyCombo {
@@ -317,7 +395,11 @@ impl fmt::Display for KeyCombo {
         if wrote_modifier {
             formatter.write_str(" + ")?;
         }
-        formatter.write_str(&self.key)
+        formatter.write_str(&self.key)?;
+        if self.alone {
+            formatter.write_str(" (alone)")?;
+        }
+        Ok(())
     }
 }
 
@@ -560,7 +642,9 @@ const SUGGESTED_ALIASES: &[&str] = &[
 ];
 
 /// `ctrl+super` → "Ctrl+Super has no main key", with what whykey accepts.
-fn modifier_only_error(input: &str) -> ParseKeyComboError {
+/// A single bare modifier (`super`) is a question about that modifier on its
+/// own, so the help also names `--alone`.
+fn modifier_only_error(input: &str, modifiers: u32, remainder: &str) -> ParseKeyComboError {
     let typed = abbreviate(input)
         .split('+')
         .map(str::trim)
@@ -579,11 +663,21 @@ fn modifier_only_error(input: &str) -> ParseKeyComboError {
         })
         .collect::<Vec<_>>()
         .join("+");
-    ParseKeyComboError::with_help(
-        format!("{typed} has no main key."),
+    let mut help = String::from(
         "  whykey inspects a combination with one main key, like `whykey super+return`\n  \
          or `whykey ctrl+shift+c`. A modifier on its own is not a combination.",
-    )
+    );
+    let bare = modifiers == 0
+        && !remainder.is_empty()
+        && modifier_mask(remainder).is_some_and(|mask| ALONE_MASKS.contains(&mask));
+    if bare {
+        let name = abbreviate(remainder).to_ascii_lowercase();
+        help.push_str(&format!(
+            "\n  To ask what {typed} does when pressed and released on its own:\n    \
+             whykey {name} --alone"
+        ));
+    }
+    ParseKeyComboError::with_help(format!("{typed} has no main key."), help)
 }
 
 /// Keysym inventory entries a query can be matched against: the lowercased
@@ -893,5 +987,38 @@ mod tests {
             .join(" ");
         let error = input.parse::<KeySequence>().unwrap_err();
         assert!(error.to_string().contains("maximum is 64"));
+    }
+
+    #[test]
+    fn a_bare_modifier_needs_alone() {
+        let error = KeyCombo::parse_query("super").unwrap_err().to_string();
+        assert!(error.contains("whykey super --alone"), "{error}");
+        let error = KeyCombo::parse_query("ctrl+shift").unwrap_err().to_string();
+        assert!(!error.contains("--alone"), "{error}");
+    }
+
+    #[test]
+    fn parses_a_lone_modifier() {
+        let combo = KeyCombo::parse_alone("Super").unwrap();
+        assert!(combo.is_alone());
+        assert_eq!(combo.key(), "SUPER");
+        assert_eq!(combo.modmask(), 0);
+        assert_eq!(combo.alone_mask(), SUPER_MASK);
+        assert_eq!(combo.to_string(), "SUPER (alone)");
+        assert_eq!(combo.alone_keysyms(), ["SUPER_L", "SUPER_R"]);
+        assert_ne!(combo, KeyCombo::from_parts(0, "SUPER"));
+    }
+
+    #[test]
+    fn alone_rejects_keys_and_combinations() {
+        for input in ["a", "ctrl+a", "ctrl+shift", "caps", "", "f5"] {
+            assert!(KeyCombo::parse_alone(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn alone_is_not_part_of_the_v1_key_shape() {
+        let value = serde_json::to_value(KeyCombo::parse_alone("alt").unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!({"modifiers": 0, "key": "ALT"}));
     }
 }

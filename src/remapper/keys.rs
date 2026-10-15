@@ -416,6 +416,25 @@ pub(crate) fn query_presses(
     keycode: Option<u16>,
     layout_us: bool,
 ) -> Option<QueryPresses> {
+    if key.is_alone() {
+        // A lone modifier gesture is a press of the modifier's own keys.
+        // Alt answers for both Alt keys here: either one is "Alt alone".
+        let bit = key.alone_mask();
+        let mut codes = modifier_codes(bit).to_vec();
+        if bit == ALT {
+            codes.extend(modifier_codes(ALTGR));
+        }
+        if let Some(code) = keycode {
+            codes = vec![code];
+        }
+        if codes.is_empty() {
+            return None;
+        }
+        return Some(QueryPresses {
+            presses: codes.into_iter().map(|code| Press::new(0, code)).collect(),
+            layout_assumed: false,
+        });
+    }
     let mods = key.modmask() & MODIFIER_BITS;
     if let Some(code) = keycode {
         return Some(QueryPresses {

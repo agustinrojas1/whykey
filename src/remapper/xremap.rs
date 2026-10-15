@@ -176,10 +176,20 @@ impl Config {
                         "xremap presses several keys: {}",
                         Yaml::Seq(items.clone()).render()
                     )),
-                    Yaml::Map(_) => Effect::Conditional(format!(
-                        "multi-purpose xremap key {}: the result depends on timing",
-                        value.render()
-                    )),
+                    Yaml::Map(_) => {
+                        let held = value.get("held").map(Yaml::render);
+                        let alone = value.get("alone").map(Yaml::render);
+                        match (alone, held) {
+                            (Some(alone), Some(held)) => Effect::Conditional(format!(
+                                "multi-purpose xremap key: alone emits {alone}, held acts as \
+                                 {held}; timing decides"
+                            )),
+                            _ => Effect::Conditional(format!(
+                                "multi-purpose xremap key {}: the result depends on timing",
+                                value.render()
+                            )),
+                        }
+                    }
                     Yaml::Null => Effect::Consume("disabled by xremap".into()),
                 }
             };
@@ -568,6 +578,20 @@ mod tests {
                     "shared:\n  a: &a\n    C-a: C-b\nkeymap:\n  - remap: *a\n"
                 )
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn held_and_alone_on_a_modifier_name_both_outputs() {
+        let config = config(
+            "modmap:\n  - name: tap super\n    remap:\n      Super_L:\n        held: Super_L\n        alone: Esc\n",
+        );
+        let Effect::Conditional(text) = effect(&config, Press::new(0, 125)) else {
+            panic!("a multi-purpose key is conditional");
+        };
+        assert!(
+            text.contains("alone emits Esc, held acts as Super_L"),
+            "{text}"
         );
     }
 }

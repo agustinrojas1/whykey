@@ -2014,4 +2014,35 @@ mod tests {
             .join("tests/fixtures/remappers")
             .join(name)
     }
+
+    #[test]
+    fn a_lone_modifier_reaches_only_the_remapper_and_the_compositor() {
+        use crate::layers::InspectRequest;
+
+        let mut session = crate::environment::Environment::collect();
+        session.remappers = vec![detection(
+            "keyd",
+            true,
+            &[(
+                "default.conf",
+                "[ids]\n*\n[main]\nleftmeta = overload(control, esc)\n",
+            )],
+        )];
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let results = crate::layers::inspection::inspect_with_environment(
+            &InspectRequest::new(&key),
+            &session,
+        );
+        assert_eq!(results[0].id, LayerId::Remapper);
+        assert_eq!(results[0].tier, Some(EvidenceTier::ConfigFile));
+        let text = format!("{} {:?}", results[0].summary, results[0].details);
+        assert!(text.contains("a tap emits esc"), "{text}");
+        for layer in &results {
+            assert!(
+                matches!(layer.id, LayerId::Remapper | LayerId::Compositor),
+                "a lone modifier produces no terminal bytes: {:?}",
+                layer.layer
+            );
+        }
+    }
 }

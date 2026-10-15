@@ -974,7 +974,15 @@ pub(crate) fn inspect(
     } else {
         key.modmask()
     };
+    let alone_own = key.alone_mask();
     let matches_key = |binding: &&ConfigBinding| {
+        if key.is_alone() {
+            // A modifier on its own is a binding whose key is the modifier;
+            // its modifier bits are empty or the key's own bit.
+            return matches!(&binding.key, BindKey::Sym(name)
+                    if key.alone_keysyms().iter().any(|alone| name.eq_ignore_ascii_case(alone)))
+                && binding.mask.is_none_or(|mask| mask & !alone_own == 0);
+        }
         (match (&binding.key, query_code) {
             (BindKey::Code(code), Some(query)) => *code == query,
             (BindKey::Sym(name), None) => name.eq_ignore_ascii_case(key.key()),

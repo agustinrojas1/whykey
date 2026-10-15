@@ -44,6 +44,15 @@ pub(crate) fn inspect_json_with_keycode(
 ) -> Result<LayerResult, String> {
     let (bindings, skipped_bindings) = parse_bindings(bindings_json)?;
     let active_submap = normalize_submap(active_submap);
+    if key.is_alone() {
+        return Ok(inspect_alone(
+            key,
+            &bindings,
+            skipped_bindings,
+            active_submap,
+            lua_hints,
+        ));
+    }
     let keyed_bindings: Vec<_> = bindings
         .iter()
         .map(|binding| (binding, BindingKey::of(binding, lua_hints)))
@@ -444,6 +453,105 @@ pub(crate) fn inspect_json_with_keycode(
         result.binding = binding;
         result
     })
+}
+
+/// A modifier pressed and released on its own is a bind whose key is the
+/// modifier itself: `bindr = SUPER, Super_L, exec, ...` runs on release, a
+/// plain `bind` on the modifier's own press. The modifier bits of such a
+/// bind are empty or the key's own bit.
+fn inspect_alone(
+    key: &KeyCombo,
+    bindings: &[Binding],
+    skipped_bindings: usize,
+    active_submap: &str,
+    lua_hints: &[LuaBindHint],
+) -> LayerResult {
+    let mask = key.alone_mask();
+    let names = key.alone_keysyms();
+    let shown = crate::style::human_key(key);
+    let candidates: Vec<_> = bindings
+        .iter()
+        .filter(|binding| binding_is_active(binding, active_submap))
+        .filter(|binding| binding.modmask & !mask == 0)
+        .filter(|binding| names.contains(&crate::key::normalize_key_str(&binding.key).as_str()))
+        .map(|binding| BindingMatch {
+            binding,
+            certainty: MatchCertainty::Exact,
+        })
+        .collect();
+    let (matches, _) = reachable_matches(candidates);
+    let mut details = vec![
+        format!("active submap: {active_submap}"),
+        format!(
+            "looked for bind/bindr entries on {} with no other modifier held",
+            names.join(" or ")
+        ),
+    ];
+    if skipped_bindings > 0 {
+        details.push(format!(
+            "could not parse {skipped_bindings} effective binding entr{}; other bindings may be missing",
+            if skipped_bindings == 1 { "y" } else { "ies" }
+        ));
+    }
+    if matches.is_empty() {
+        let (outcome, summary) = if skipped_bindings > 0 {
+            (
+                Outcome::Unknown,
+                format!("effective bindings are incomplete; no definitive match for {shown}"),
+            )
+        } else {
+            (Outcome::Pass, format!("no binding on {shown}"))
+        };
+        return LayerResult::new("Hyprland", LayerId::Compositor, outcome, summary, details);
+    }
+    for matched in &matches {
+        details.push(format!(
+            "binding: {} ({}{})",
+            binding_action(matched.binding),
+            binding_scope(matched.binding, active_submap),
+            if matched.binding.release {
+                ", runs on release"
+            } else {
+                ", runs on press"
+            }
+        ));
+    }
+    if matches
+        .iter()
+        .any(|matched| dispatcher_is_opaque(matched.binding))
+    {
+        details.push(
+            "Lua/plugin dispatcher is active; its runtime action is not executed by whykey.".into(),
+        );
+    }
+    let propagation = if skipped_bindings > 0 {
+        Propagation::Indeterminate
+    } else {
+        binding_propagation(&matches)
+    };
+    let outcome = Outcome::from_parts(&LayerStatus::Handled, &propagation);
+    let on_release = matches.iter().all(|matched| matched.binding.release);
+    let summary = match (&propagation, on_release) {
+        (Propagation::Continues, true) => {
+            format!("binding on {shown}; the press is forwarded and the action runs on release")
+        }
+        (Propagation::Continues, false) => format!("binding on {shown}; the key is forwarded"),
+        (Propagation::Stops, true) => {
+            format!("binding on {shown}; the press is consumed and the action runs on release")
+        }
+        (Propagation::Stops, false) => format!("binding on {shown}; the key is consumed"),
+        (Propagation::Redirected, _) => {
+            format!("binding on {shown}; the event is redirected to another window")
+        }
+        _ => format!("binding on {shown}; forwarding cannot be determined"),
+    };
+    let has_universal_match = matches
+        .iter()
+        .any(|matched| matched.binding.submap_universal);
+    let mut result = LayerResult::new("Hyprland", LayerId::Compositor, outcome, summary, details);
+    result.binding = primary_match(&matches)
+        .map(|matched| binding_evidence(matched.binding, lua_hints, has_universal_match));
+    result
 }
 
 /// Why a matching bind does not run for this key press.

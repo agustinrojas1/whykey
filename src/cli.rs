@@ -157,9 +157,11 @@ pub(crate) fn parse_inspect_arguments(
     let mut target_pid = None;
     let mut focused = false;
     let mut instance = None;
+    let mut alone = false;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--alone" => alone = true,
             "--pid" => {
                 let value = take_value(&mut arguments, "--pid", "a positive process id")?;
                 let pid = match value.parse::<u32>() {
@@ -200,11 +202,27 @@ pub(crate) fn parse_inspect_arguments(
         return Err(ExitCode::from(2));
     }
     let input = combinations.join(" ");
-    let sequence = match input.parse() {
-        Ok(sequence) => sequence,
-        Err(error) => {
-            eprintln!("error: {error}\n\nTry 'whykey --help'.");
+    let sequence = if alone {
+        let [modifier] = combinations.as_slice() else {
+            eprintln!(
+                "error: --alone takes exactly one modifier, for example `whykey inspect super --alone`"
+            );
             return Err(ExitCode::from(2));
+        };
+        match whykey::key::KeyCombo::parse_alone(modifier) {
+            Ok(combo) => whykey::key::KeySequence::single(combo),
+            Err(error) => {
+                eprintln!("error: {error}\n\nTry 'whykey --help'.");
+                return Err(ExitCode::from(2));
+            }
+        }
+    } else {
+        match input.parse() {
+            Ok(sequence) => sequence,
+            Err(error) => {
+                eprintln!("error: {error}\n\nTry 'whykey --help'.");
+                return Err(ExitCode::from(2));
+            }
         }
     };
     Ok(InspectArguments {
@@ -580,7 +598,22 @@ pub(crate) fn dispatch(
             }
         }
     }
-    if arguments.next().is_some() {
+    // `--alone` marks a modifier pressed and released on its own; it may sit
+    // before or after the modifier.
+    let mut alone = argument == "--alone";
+    let mut argument = argument;
+    if alone {
+        match arguments.next() {
+            Some(modifier) => argument = modifier,
+            None => {
+                eprintln!("error: --alone needs a modifier, for example `whykey super --alone`");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let rest: Vec<String> = arguments.collect();
+    alone |= rest.iter().any(|extra| extra == "--alone");
+    if rest.iter().any(|extra| extra != "--alone") {
         eprintln!(
             "error: expected one key combination\n\n{}",
             help::help_text()
@@ -588,7 +621,12 @@ pub(crate) fn dispatch(
         return ExitCode::from(2);
     }
 
-    let key = match whykey::key::KeyCombo::parse_query(&argument) {
+    let parsed = if alone {
+        whykey::key::KeyCombo::parse_alone(&argument)
+    } else {
+        whykey::key::KeyCombo::parse_query(&argument)
+    };
+    let key = match parsed {
         Ok(key) => key,
         Err(error) => {
             eprintln!("error: {error}\n\nTry 'whykey --help'.");
@@ -936,6 +974,10 @@ pub(crate) mod help {
     const NDJSON_OPTIONS: &[OptionSpec] = &[NDJSON];
 
     const INSPECT_OPTIONS: &[OptionSpec] = &[
+        OptionSpec::switch(
+            "--alone",
+            "ask about a modifier pressed and released on its own",
+        ),
         OptionSpec::valued(
             "--pid",
             OptionValue::Text("PID"),
@@ -1206,7 +1248,7 @@ pub(crate) mod help {
             let _ = writeln!(output, "  {}\n    {}", usage(command.name), command.summary);
         }
         output.push_str(
-            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. --ascii (or a non-UTF-8 locale) replaces glyphs such as the route marks with ASCII. JSON, NDJSON, shell-init, and completion output are always plain.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
+            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey super --alone\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. --ascii (or a non-UTF-8 locale) replaces glyphs such as the route marks with ASCII. JSON, NDJSON, shell-init, and completion output are always plain.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
         );
         output
     }
@@ -1569,7 +1611,13 @@ mod tests {
                     } else {
                         match command.name {
                             "inspect" => {
-                                arguments.push("ctrl+x".into());
+                                // `--alone` takes a bare modifier, not a combination.
+                                let operand = if option.long == "--alone" {
+                                    "ctrl"
+                                } else {
+                                    "ctrl+x"
+                                };
+                                arguments.push(operand.into());
                                 parse_inspect_arguments(arguments).is_ok()
                             }
                             "listen" => matches!(

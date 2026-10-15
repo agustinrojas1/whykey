@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `whykey super --alone` (and `ctrl`, `alt`, `shift`, `hyper`, `altgr`; also
+  `whykey inspect super --alone`) asks what happens when a modifier is
+  pressed and released on its own. It reads keyd `overload`/`timeout`,
+  kanata and kmonad `tap-hold`, xremap `modmap` `held`/`alone`, GNOME
+  `overlay-key`, KDE `kwinrc [ModifierOnlyShortcuts]`, Hyprland
+  `bindr`/`bindrt` and Sway/i3 `bindsym --release`, and renders the usual
+  route table. Without `--alone`, a bare modifier is still an error, now
+  naming the flag. JSON schema v2 reports `input.alone`; v1 is unchanged.
+  Tap-hold findings now say what a tap emits and what holding does.
+
 ## [2.3.0] - 2026-10-15
 
 The lab grows to 249 scenarios: 208 match exactly, 41 pass only as honest

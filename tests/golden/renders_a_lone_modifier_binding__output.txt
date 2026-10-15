@@ -1,0 +1,23 @@
+Super alone
+
+x Hyprland takes Super alone and runs exec walker.
+  Nothing after Hyprland receives Super alone.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      x  exec walker                                     live query
+  3  Terminal      -  not reached
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+Bound in
+  /home/u/.config/hypr/bindings.conf:7
+  exec walker
+  applies in every submap
+
+Confidence  live query: Hyprland answered from the running program, in every
+            submap. Not observed: run `whykey listen` to watch it.
+
+More  whykey super --alone -v

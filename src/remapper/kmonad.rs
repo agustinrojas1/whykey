@@ -423,10 +423,7 @@ impl Config {
                     "multi-tap" | "sticky-key" | "stepped" | "around-next-timeout"
                 ) =>
             {
-                Effect::Conditional(format!(
-                    "kmonad button {} depends on timing or other keys",
-                    button.render()
-                ))
+                Effect::Conditional(tap_hold_text(head, items, button))
             }
             _ => return not_evaluated(button),
         };
@@ -636,6 +633,31 @@ fn keycode(name: &str) -> Option<u16> {
     Some(code)
 }
 
+/// A timing-dependent kmonad button, naming its tap and hold outputs for
+/// the `tap-hold` family (`tap-hold MS TAP HOLD`) and the `tap-next` family
+/// (`tap-next TAP HOLD`).
+fn tap_hold_text(head: &str, items: &[Sexp], button: &Sexp) -> String {
+    let operands = if head.starts_with("tap-hold") {
+        items.get(2).zip(items.get(3))
+    } else if head.starts_with("tap-next") {
+        items.get(1).zip(items.get(2))
+    } else {
+        None
+    };
+    match operands {
+        Some((tap, hold)) => format!(
+            "kmonad {}: a tap emits {}, holding emits {}; timing decides",
+            button.render(),
+            tap.render(),
+            hold.render()
+        ),
+        None => format!(
+            "kmonad button {} depends on timing or other keys",
+            button.render()
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -781,5 +803,19 @@ mod tests {
             "x.kbd".into(),
         ]);
         assert!(load(Path::new("x.kbd"), "(defsrc caps)(deflayer base esc)", &cli).is_ok());
+    }
+
+    #[test]
+    fn tap_hold_on_a_modifier_names_tap_and_hold() {
+        let config = config(&format!(
+            "{CFG}(defalias m (tap-hold 200 esc lmet))\n(defsrc lmet a)\n(deflayer base @m _)\n"
+        ));
+        let Effect::Conditional(text) = effect(&config, Press::new(0, 125)) else {
+            panic!("tap-hold is conditional");
+        };
+        assert!(
+            text.contains("a tap emits esc, holding emits lmet"),
+            "{text}"
+        );
     }
 }

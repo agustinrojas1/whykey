@@ -6,6 +6,10 @@ whykey \- explain which layer handles a keyboard shortcut
 .I combination
 .RB \%[ --verbose "] \%[" --color\ auto|always|never "] \%[" --json "] \%[" --json-v2 "] \%[" --schema-version\ 1|2 ]
 .br
+.B whykey
+.I modifier
+.B --alone
+.br
 .B whykey inspect
 .I combination-or-sequence
 .RB \%[ --pid\ pid "] \%[" --focused "] \%[" --instance\ id "] \%[" --verbose ]
@@ -319,6 +323,18 @@ dead-key composition with no bytes sent (JSON v2 path entries carry its
 .B dead_key
 keysym). When the keymap or level is
 unknown, the report says why the encoding is unknown.
+.TP
+.B modifier --alone
+Ask what happens when one modifier (ctrl, alt, shift, super, hyper or altgr)
+is pressed and released with no other key. Only the remapper and the
+compositor or desktop are inspected: keyd, kanata, kmonad and xremap
+tap-hold rules, GNOME's overlay-key, KDE's ModifierOnlyShortcuts, Hyprland
+bindr/bindrt binds, and Sway or i3 bindsym entries. Without
+.B --alone
+a bare modifier is a usage error. Also accepted as
+.B inspect modifier --alone .
+JSON schema 2 carries
+.B input.alone .
 .TP
 .B inspect combination-or-sequence
 Inspect one or more whitespace-separated combinations, such as

@@ -193,15 +193,20 @@ fn render_json_v2(
     observed: Option<&ObservedKey>,
     operation: &'static str,
 ) -> String {
+    let mut input = serde_json::json!({
+        "kind": "key",
+        "key": key,
+        "key_display": observed_key_display(key),
+    });
+    if key.is_alone() {
+        // Additive: only a modifier-only query carries the field.
+        input["alone"] = serde_json::Value::Bool(true);
+    }
     serde_json::to_string_pretty(&serde_json::json!({
         "schema_version": 2,
         "operation": operation,
         "context": schema::context(),
-        "input": {
-            "kind": "key",
-            "key": key,
-            "key_display": observed_key_display(key),
-        },
+        "input": input,
         "assessment": {
             "confidence": observation_confidence(layers, observed),
             "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
@@ -382,15 +387,21 @@ pub fn render_sequence_json(
                 .iter()
                 .zip(reports)
                 .enumerate()
-                .map(|(index, (key, layers))| serde_json::json!({
-                    "index": index + 1,
-                    "key": key,
-                    "key_display": key.to_string(),
-                    "assessment": {
-                        "confidence": confidence_label(layers, false),
-                    },
-                    "path": schema::path(layers, None),
-                }))
+                .map(|(index, (key, layers))| {
+                    let mut step = serde_json::json!({
+                        "index": index + 1,
+                        "key": key,
+                        "key_display": key.to_string(),
+                        "assessment": {
+                            "confidence": confidence_label(layers, false),
+                        },
+                        "path": schema::path(layers, None),
+                    });
+                    if key.is_alone() {
+                        step["alone"] = serde_json::Value::Bool(true);
+                    }
+                    step
+                })
                 .collect::<Vec<_>>(),
         }))
         .expect("whykey v2 sequence report types are serializable")
@@ -3682,5 +3693,73 @@ mod tests {
         assert!(plain.starts_with("Shift+Super+F23\n"), "{plain}");
         let unresolved = render_with_key_symbol(&key, &[], RenderOptions::plain(false), None);
         assert!(unresolved.starts_with("Shift+Super+code:201\n"));
+    }
+
+    fn alone_layer(
+        outcome: Outcome,
+        summary: &str,
+        binding: Option<BindingEvidence>,
+    ) -> LayerResult {
+        let layer = LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            outcome,
+            summary,
+            vec!["active submap: default".into()],
+        )
+        .with_tier(crate::layers::EvidenceTier::LiveQuery);
+        match binding {
+            Some(binding) => layer.with_binding(binding),
+            None => layer,
+        }
+    }
+
+    #[test]
+    fn renders_a_lone_modifier_binding_with_the_same_route_table() {
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let binding = BindingEvidence::action(
+            "exec walker".to_owned(),
+            BindingScope::Universal,
+            Some(crate::layers::SourceLocation::new(
+                "/home/u/.config/hypr/bindings.conf",
+                Some(7),
+            )),
+        )
+        .with_dispatcher("exec");
+        let layer = alone_layer(
+            Outcome::Consumed,
+            "binding on Super alone; the press is consumed and the action runs on release",
+            Some(binding),
+        );
+        let output = render(&key, std::slice::from_ref(&layer), false);
+        crate::style::assert_golden("renders_a_lone_modifier_binding__output", &output);
+        assert!(output.contains("whykey super --alone -v"), "{output}");
+    }
+
+    #[test]
+    fn renders_a_lone_modifier_without_a_binding() {
+        let key = KeyCombo::parse_alone("ctrl").unwrap();
+        let layer = alone_layer(Outcome::Pass, "no binding on Ctrl alone", None);
+        let output = render(&key, std::slice::from_ref(&layer), false);
+        crate::style::assert_golden("renders_a_lone_modifier_without_a_binding__output", &output);
+    }
+
+    #[test]
+    fn schema_v2_marks_a_lone_modifier_and_v1_keeps_its_shape() {
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let layer = alone_layer(Outcome::Pass, "no binding on Super alone", None);
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_json(&key, std::slice::from_ref(&layer), None, 2))
+                .unwrap();
+        assert_eq!(v2["input"]["alone"], true);
+        assert_eq!(v2["input"]["key"]["key"], "SUPER");
+        let v1: serde_json::Value =
+            serde_json::from_str(&render_json(&key, std::slice::from_ref(&layer), None, 1))
+                .unwrap();
+        assert!(v1["key"].get("alone").is_none());
+        let plain: KeyCombo = "ctrl+f".parse().unwrap();
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_json(&plain, &[], None, 2)).unwrap();
+        assert!(v2["input"].get("alone").is_none());
     }
 }
