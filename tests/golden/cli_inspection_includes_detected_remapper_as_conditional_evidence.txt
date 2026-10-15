@@ -1,6 +1,0 @@
-(header)
-
-? Nothing claims Ctrl+C before Input remapper, Xfce, the input method, and the
-  TTY driver, which whykey could not verify.
-  What those layers do with it is unknown.
-

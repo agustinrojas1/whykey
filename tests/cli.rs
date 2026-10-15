@@ -73,6 +73,10 @@ fn strip_host_env(command: &mut Command) {
 fn binary() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_whykey"));
     strip_host_env(&mut command);
+    // Glyphs fall back to ASCII outside a UTF-8 locale, so pin one: the
+    // golden files must not depend on the locale of the machine running the
+    // tests. Tests of the ASCII fallback override it explicitly.
+    command.env("LC_ALL", "C.UTF-8");
     command
 }
 
@@ -1093,7 +1097,7 @@ fn inspection_includes_detected_remapper_as_conditional_evidence() {
     fs::write(&config, "[main]\ncapslock = overload(control, esc)\n").unwrap();
 
     let output = binary()
-        .args(["ctrl+c"])
+        .args(["ctrl+c", "--verbose"])
         .env("WHYKEY_KEYD_CONFIG", &config)
         .env("XDG_CURRENT_DESKTOP", "XFCE")
         .env("XDG_SESSION_TYPE", "wayland")
@@ -1105,10 +1109,20 @@ fn inspection_includes_detected_remapper_as_conditional_evidence() {
         .output()
         .unwrap();
 
+    // The verdict also names whichever input method the host runs, so only
+    // the remapper's own row and evidence are compared.
     let text = String::from_utf8_lossy(&output.stdout);
-    assert_report_core(
-        "inspection_includes_detected_remapper_as_conditional_evidence",
-        &text,
+    let row = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("1  Input remapper"))
+        .unwrap_or_else(|| panic!("no remapper row in the route:\n{text}"));
+    assert!(
+        row.contains("?  a pre-compositor remapper may transform"),
+        "{row}"
+    );
+    assert!(
+        text.contains("static transformation: capslock -> overload(control, esc)"),
+        "{text}"
     );
     let _ = fs::remove_dir_all(base);
 }
