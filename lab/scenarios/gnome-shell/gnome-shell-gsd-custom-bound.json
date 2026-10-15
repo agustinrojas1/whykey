@@ -1,0 +1,39 @@
+{
+  "id": "gnome-shell-gsd-custom-bound",
+  "description": "a gnome-settings-daemon custom shortcut (Super+t, `touch /tmp/fired`) runs while GNOME Shell is up: gsd-media-keys grabs the key through the shell, the command fires and the key does not reach the probe",
+  "tier": "observed",
+  "environment": "gnome_shell",
+  "session_setup": [
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \"['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/']\"",
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ name 'Lab fire'",
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ command 'touch /tmp/fired'",
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ binding '<Super>t'"
+  ],
+  "probe": "wayland",
+  "actions": [
+    {
+      "gsd": "media-keys"
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "rdkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "GNOME",
+    "detail": "Lab fire"
+  }
+}
