@@ -25,6 +25,8 @@ const SETUP_EXIT: i32 = 96;
 const UNRECORDED_EXIT: i32 = 97;
 /// A replay's recording held answers the run never asked for.
 const UNCONSUMED_EXIT: i32 = 98;
+/// Set to `1` to make recorded answers that a run never asked for a failure.
+const STRICT_VARIABLE: &str = "WHYKEY_REPLAY_STRICT";
 
 fn recordings_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -67,14 +69,25 @@ fn argv_of(document: &Value) -> Vec<String> {
 }
 
 /// Run whykey from `recording` with the given arguments, in an empty environment.
-fn replay(argv: &[String], recording: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_whykey"))
+fn replay_with(argv: &[String], recording: &Path, strict: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_whykey"));
+    command
         .args(argv)
         .env_clear()
         .env("WHYKEY_REPLAY", recording)
-        .stdin(Stdio::null())
-        .output()
-        .expect("whykey runs")
+        .stdin(Stdio::null());
+    if strict {
+        command.env(STRICT_VARIABLE, "1");
+    }
+    command.output().expect("whykey runs")
+}
+
+/// Run whykey from `recording`. Strict mode follows the test's own
+/// `WHYKEY_REPLAY_STRICT`, so `WHYKEY_REPLAY_STRICT=1 cargo test` fails on
+/// recorded answers that a run never asked for.
+fn replay(argv: &[String], recording: &Path) -> Output {
+    let strict = std::env::var(STRICT_VARIABLE).is_ok_and(|value| value == "1");
+    replay_with(argv, recording, strict)
 }
 
 /// The path entries of a report: the extension's layer, the `path` of a
@@ -240,13 +253,21 @@ fn every_recording_replays_to_the_accepted_verdict() {
         recordings_dir().display()
     );
     let mut failures = Vec::new();
+    let mut warnings = Vec::new();
     for path in &paths {
         let document = load(path);
         let scenario = document["scenario"].as_str().unwrap_or("?").to_owned();
         let output = replay(&argv_of(&document), path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Some(line) = stderr.lines().find(|line| line.contains("never requested")) {
+            warnings.push(format!("{scenario}: {}", line.trim()));
+        }
         if let Some(reason) = mismatch(&document, &output) {
             failures.push(format!("{scenario}: {reason}"));
         }
+    }
+    for warning in &warnings {
+        eprintln!("warning: recorded answers the run never asked for: {warning}");
     }
     assert!(
         failures.is_empty(),
@@ -298,7 +319,7 @@ fn a_question_the_recording_lacks_fails_loudly() {
 }
 
 #[test]
-fn an_answer_the_run_never_asks_for_fails_loudly() {
+fn an_unused_answer_is_a_warning_and_fails_only_when_strict() {
     let path = recordings().into_iter().next().expect("a recording exists");
     let document = load(&path);
     let recording = variant("lab-replay-unused-answer", &document, |inputs| {
@@ -308,18 +329,55 @@ fn an_answer_the_run_never_asks_for_fails_loudly() {
             "response": null,
         }));
     });
-    let output = replay(&argv_of(&document), &recording);
-    assert_eq!(
+    // Default: the run reports the unused answer and keeps its own verdict.
+    let output = replay_with(&argv_of(&document), &recording, false);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains("never requested"), "stderr: {stderr}");
+    assert_ne!(
         output.status.code(),
         Some(UNCONSUMED_EXIT),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "stderr: {stderr}"
     );
+    assert_eq!(
+        mismatch(&document, &output),
+        None,
+        "an unused answer must not change the verdict"
+    );
+    // WHYKEY_REPLAY_STRICT=1: the same recording fails.
+    let strict = replay_with(&argv_of(&document), &recording, true);
+    assert_eq!(
+        strict.status.code(),
+        Some(UNCONSUMED_EXIT),
+        "stderr: {}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+}
+
+#[test]
+fn a_different_verdict_with_the_same_inputs_is_a_mismatch() {
+    // Whykey's answer stays the one the recording holds, but the lab's accepted
+    // verdict differs: the replay must report the mismatch, not pass.
+    let (path, mut document) = recordings()
+        .into_iter()
+        .map(|path| {
+            let document = load(&path);
+            (path, document)
+        })
+        .find(|(_, document)| {
+            document["expect"]["verdicts"]
+                .as_array()
+                .is_some_and(|verdicts| verdicts.iter().any(|verdict| verdict == "consumed"))
+        })
+        .expect("a recording the lab accepted as consumed");
+    let output = replay(&argv_of(&document), &path);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("never requested"),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
+        mismatch(&document, &output).is_none(),
+        "the real expectation must pass"
     );
+    document["expect"]["verdicts"] = serde_json::json!(["pass"]);
+    let reason = mismatch(&document, &output).expect("a different accepted verdict must fail");
+    assert!(reason.contains("whykey says consumed"), "reason: {reason}");
+    assert!(reason.contains("the lab accepted pass"), "reason: {reason}");
 }
 
 /// Source files that may still call the standard library for inputs, with the

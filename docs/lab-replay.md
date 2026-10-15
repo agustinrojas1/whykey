@@ -39,9 +39,14 @@ be read is replayed as an error.
   wraps. Both set is an error (status 96).
 
 A question the recording holds no answer to ends the replay with status 97
-and `unrecorded input: ...` on stderr. An answer the run never asked for
-ends it with status 98 (`recorded input never requested`). Neither case
-prints a verdict, so a changed query forces a real lab run.
+and `unrecorded input: ...` on stderr. Neither case prints a verdict, so a
+changed query forces a real lab run.
+
+An answer the run never asked for is a warning (`recorded input never
+requested`), because a refactor that stops reading an input can keep the
+verdict. With `WHYKEY_REPLAY_STRICT=1` it ends the replay with status 98.
+`tests/lab_replay.rs` prints the warnings, and fails on them only under
+`WHYKEY_REPLAY_STRICT=1`.
 
 ## Recording format
 
@@ -58,7 +63,11 @@ prints a verdict, so a changed query forces a real lab run.
 - `expect`: `verdicts` (the set the lab accepted: `expected` in
   `lab/run.py`), `layers`, and the scenario's own text checks `summary`,
   `detail`, `binding`, `stderr`, `confidence`;
-- `inputs`: the ordered list of `{kind, key, response}`.
+- `inputs`: one entry per question, `{kind, key, response}`. A question
+  whose answers differed during the run keeps `responses` instead: every
+  answer, in the order the run took them. Replay serves those in that order
+  and fails with `unrecorded input` when they run out. A question that got
+  the same answer every time is stored once and served for every ask.
 
 The verdict rules are the ones in `lab/run.py` (`layer_verdict`, `evaluate`):
 `tests/lab_replay.rs` ports the status/propagation mapping and the text

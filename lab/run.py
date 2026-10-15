@@ -183,7 +183,7 @@ SCENARIO_TIMEOUT = 180
 HONEST_UNCERTAINTY = {True: {"handled-uncertain"}, False: {"uncertain-continues"}}
 # Recordings (`--record`): the format version, and the exit statuses src/recording.rs
 # gives a replay that cannot answer (unrecorded input, unused answers, setup).
-RECORDING_FORMAT = 1
+RECORDING_FORMAT = 2
 RECORDING_EXITS = {96: "recording setup failed", 97: "unrecorded input", 98: "recorded input never requested"}
 RECORDINGS = LAB / "recordings"
 
@@ -616,6 +616,32 @@ def replay_blocker(scenario: dict, result: dict) -> str | None:
     return None
 
 
+def group_inputs(reads: list) -> list:
+    """One entry per question (kind and key), in order of first use. A question
+    that got the same answer every time keeps one "response", which replay serves
+    for every ask. A question whose answers differed keeps "responses", every
+    answer in the order the run took them; replay serves those in that order."""
+    order: list = []
+    answers: dict = {}
+    for read in reads:
+        identity = (read["kind"], json.dumps(read["key"], sort_keys=True))
+        if identity not in answers:
+            order.append(identity)
+            answers[identity] = []
+        answers[identity].append(read["response"])
+    grouped = []
+    for identity in order:
+        kind, key_json = identity
+        values = answers[identity]
+        entry = {"kind": kind, "key": json.loads(key_json)}
+        if len({json.dumps(value, sort_keys=True) for value in values}) == 1:
+            entry["response"] = values[0]
+        else:
+            entry["responses"] = values
+        grouped.append(entry)
+    return grouped
+
+
 def recording_document(path: Path, scenario: dict, record: dict, result: dict, identity: dict) -> dict:
     """What lab/recordings/<scenario>.json holds: how whykey was run, the verdict
     the lab accepted, the text checks run.py applies, and every answer whykey took."""
@@ -646,7 +672,7 @@ def recording_document(path: Path, scenario: dict, record: dict, result: dict, i
             "stderr": whykey.get("stderr"),
             "confidence": whykey.get("confidence"),
         },
-        "inputs": result["whykey"]["recording"],
+        "inputs": group_inputs(result["whykey"]["recording"]),
     }
 
 

@@ -45,6 +45,10 @@ use crate::command::CommandError;
 pub const RECORD_VARIABLE: &str = "WHYKEY_RECORD";
 /// Environment variable naming the recording document a replay answers from.
 pub const REPLAY_VARIABLE: &str = "WHYKEY_REPLAY";
+/// With `WHYKEY_REPLAY_STRICT=1`, a replay whose recording held answers the run
+/// never asked for fails (status 98). Otherwise they are reported and ignored:
+/// a refactor that stops reading an input can keep the same verdict.
+pub const STRICT_VARIABLE: &str = "WHYKEY_REPLAY_STRICT";
 /// Exit status of a replay that was asked a question the recording lacks.
 pub const UNRECORDED_EXIT: u8 = 97;
 /// Exit status of a replay whose recording held answers the run never used.
@@ -60,8 +64,26 @@ enum Mode {
 
 #[derive(Default)]
 struct Replay {
-    /// Recorded answers per question, oldest first.
-    answers: HashMap<String, VecDeque<Value>>,
+    /// Recorded answers per question.
+    answers: HashMap<String, Answer>,
+}
+
+/// What a recording says about one question.
+enum Answer {
+    /// Every ask got the same answer. `asked` records whether whykey asked.
+    Fixed { response: Value, asked: bool },
+    /// The answers differed during the run: they are served in the order the
+    /// run took them, and running out of them is an unrecorded input.
+    Ordered(VecDeque<Value>),
+}
+
+impl Answer {
+    fn into_queue(self) -> VecDeque<Value> {
+        match self {
+            Self::Fixed { response, .. } => VecDeque::from([response]),
+            Self::Ordered(values) => values,
+        }
+    }
 }
 
 fn mode() -> &'static Mode {
@@ -118,21 +140,38 @@ fn load_replay(path: &Path) -> Result<Replay, String> {
         })?;
     let mut replay = Replay::default();
     for input in inputs {
-        let (Some(kind), Some(key), Some(response)) = (
-            input.get("kind").and_then(Value::as_str),
-            input.get("key"),
-            input.get("response"),
-        ) else {
+        let (Some(kind), Some(key)) = (input.get("kind").and_then(Value::as_str), input.get("key"))
+        else {
             return Err(format!(
-                "replay recording {} has an input without kind, key, or response",
+                "replay recording {} has an input without kind or key",
                 path.display()
             ));
         };
-        replay
-            .answers
-            .entry(question(kind, key))
-            .or_default()
-            .push_back(response.clone());
+        let id = question(kind, key);
+        let existing = replay.answers.remove(&id);
+        let answer = if let Some(response) = input.get("response") {
+            match existing {
+                None => Answer::Fixed {
+                    response: response.clone(),
+                    asked: false,
+                },
+                Some(existing) => {
+                    let mut values = existing.into_queue();
+                    values.push_back(response.clone());
+                    Answer::Ordered(values)
+                }
+            }
+        } else if let Some(responses) = input.get("responses").and_then(Value::as_array) {
+            let mut values = existing.map(Answer::into_queue).unwrap_or_default();
+            values.extend(responses.iter().cloned());
+            Answer::Ordered(values)
+        } else {
+            return Err(format!(
+                "replay recording {} has an input without a response or responses",
+                path.display()
+            ));
+        };
+        replay.answers.insert(id, answer);
     }
     Ok(replay)
 }
@@ -209,10 +248,14 @@ fn answer<T>(
         }
         Mode::Replay(replay) => {
             let id = question(kind, &key);
-            let recorded = lock(replay)
-                .answers
-                .get_mut(&id)
-                .and_then(VecDeque::pop_front);
+            let recorded = match lock(replay).answers.get_mut(&id) {
+                Some(Answer::Fixed { response, asked }) => {
+                    *asked = true;
+                    Some(response.clone())
+                }
+                Some(Answer::Ordered(values)) => values.pop_front(),
+                None => None,
+            };
             match recorded {
                 Some(response) => response,
                 None => fail(
@@ -239,31 +282,46 @@ fn answer<T>(
     }
 }
 
-/// Call this with whykey's result before exiting. In replay mode it refuses
-/// to report success when recorded answers went unused: whykey no longer asks
-/// everything the lab saw, so its verdict was not checked against the same
-/// evidence.
+/// Call this with whykey's result before exiting. In replay mode it reports
+/// recorded answers that the run never asked for. That is a warning, because
+/// a refactor that stops reading an input can keep the verdict. With
+/// `WHYKEY_REPLAY_STRICT=1` it is a failure (status 98) instead.
 pub fn finish(code: ExitCode) -> ExitCode {
     let Mode::Replay(replay) = mode() else {
         return code;
     };
     let replay = lock(replay);
-    let mut unused: Vec<&String> = replay
+    let mut unused: Vec<String> = replay
         .answers
         .iter()
-        .filter(|(_, answers)| !answers.is_empty())
-        .map(|(question, _)| question)
+        .filter_map(|(question, answer)| match answer {
+            Answer::Fixed { asked: false, .. } => Some(question.clone()),
+            Answer::Fixed { .. } => None,
+            Answer::Ordered(values) if !values.is_empty() => {
+                Some(format!("{question} ({} not asked)", values.len()))
+            }
+            Answer::Ordered(_) => None,
+        })
         .collect();
     if unused.is_empty() {
         return code;
     }
     unused.sort();
-    let names: Vec<&str> = unused.iter().map(|question| question.as_str()).collect();
+    let strict = std::env::var_os(STRICT_VARIABLE).is_some_and(|value| value == "1");
     eprintln!(
-        "whykey: recorded input never requested: {}; the recording no longer matches whykey's queries",
-        names.join(", ")
+        "whykey: recorded input never requested: {}{}",
+        unused.join(", "),
+        if strict {
+            "; WHYKEY_REPLAY_STRICT=1, so this fails the replay"
+        } else {
+            "; not a failure unless WHYKEY_REPLAY_STRICT=1"
+        }
     );
-    ExitCode::from(UNCONSUMED_EXIT)
+    if strict {
+        ExitCode::from(UNCONSUMED_EXIT)
+    } else {
+        code
+    }
 }
 
 // ---- bytes, OS errors, results ----------------------------------------------
