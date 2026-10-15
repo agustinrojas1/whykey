@@ -6,8 +6,8 @@
   "environment": "sway",
   "description": "bindsym --release Mod4+t fires on key release",
   "recorded_on": "2026-10-15",
-  "whykey": {"version": "whykey 2.2.0", "commit": "87d682e+uncommitted", "argv": ["super+t", "--json", "--schema-version", "2"], "run": "direct"},
-  "image": "whykey-lab sha256:af916297f572742b2c725b43ff453c3e1b8a121d34f8fb6f8274d2dd57680ce2",
+  "whykey": {"version": "whykey 2.2.0", "commit": "249caa0+uncommitted", "argv": ["super+t", "--json", "--schema-version", "2"], "run": "direct"},
+  "image": "whykey-lab-wayland:latest sha256:f90173a92125c24889046b1828873648f89445813d9d17add17f7acea0e1c22a",
   "label": "handled-passed",
   "expect": {"verdicts": ["handled-passed"], "layers": ["Sway"], "summary": null, "detail": null, "binding": null, "stderr": null, "confidence": null},
   "inputs": [
@@ -83,7 +83,7 @@
     {"kind":"env","key":"WHYKEY_ZLE_BINDINGS","response":null},
     {"kind":"env","key":"WHYKEY_FISH_BINDINGS","response":null},
     {"kind":"parent_pid","key":null,"response":7},
-    {"kind":"file","key":"/proc/7/stat","response":{"ok":{"utf8":"7 (python3) S 1 7 1 0 -1 4194560 2984 4372 0 0 6 1 5 2 20 0 1 0 27378424 24985600 4633 18446744073709551615 96153723138048 96153723139257 140734936621168 0 0 0 0 16781312 2 1 0 0 17 7 0 0 0 0 0 96153723149672 96153723150340 96153889165312 140734936624910 140734936624976 140734936624976 140734936625127 0\n"}}},
+    {"kind":"file","key":"/proc/7/stat","response":{"ok":{"utf8":"7 (python3) S 1 7 1 0 -1 4194560 2982 4357 0 0 3 1 4 2 20 0 1 0 27762257 25194496 4560 18446744073709551615 101034793746432 101034793747641 140720836879456 0 0 0 0 16781312 2 1 0 0 17 9 0 0 0 0 0 101034793758056 101034793758724 101034911387648 140720836886286 140720836886352 140720836886352 140720836886503 0\n"}}},
     {"kind":"env","key":"SHELL","response":"/bin/bash"},
     {"kind":"env","key":"TMUX","response":null},
     {"kind":"env","key":"STY","response":null},
@@ -101,9 +101,9 @@
     {"kind":"env","key":"TMUX_PANE","response":null},
     {"kind":"env","key":"ZELLIJ_PANE_ID","response":null},
     {"kind":"env","key":"WHYKEY_KEYD_CONFIG","response":null},
-    {"kind":"read_dir","key":"/etc/keyd","response":{"ok":[]}},
+    {"kind":"read_dir","key":"/etc/keyd","response":{"err":{"os":2}}},
     {"kind":"metadata","key":"/root/.config/keyd/app.conf","response":{"err":{"os":2}}},
-    {"kind":"metadata","key":"/etc/keyd","response":{"ok":{"is_dir":true,"is_file":false,"is_symlink":false,"size":0}}},
+    {"kind":"metadata","key":"/etc/keyd","response":{"err":{"os":2}}},
     {"kind":"metadata","key":"/root/.config/keyd","response":{"err":{"os":2}}},
     {"kind":"env","key":"KANATA_CONFIG","response":null},
     {"kind":"read_dir","key":"/root/.config/kanata","response":{"err":{"os":2}}},
@@ -130,7 +130,7 @@
     {"kind":"metadata","key":"/root/.config/ghostty/config.ghostty","response":{"err":{"os":2}}},
     {"kind":"metadata","key":"/root/.config/ghostty/config","response":{"err":{"os":2}}},
     {"kind":"process_id","key":null,"response":39},
-    {"kind":"file","key":"/proc/39/stat","response":{"ok":{"utf8":"39 (whykey) R 7 7 1 0 -1 4194560 335 376 0 0 0 0 0 0 20 0 1 0 27378522 146006016 1447 18446744073709551615 100845126581888 100845130156416 140729083423152 0 0 0 0 4096 1088 0 0 0 17 8 0 0 0 0 0 100845130265592 100845130268640 100845892128768 140729083424290 140729083424334 140729083424334 140729083424750 0\n"}}},
-    {"kind":"file","key":"/proc/1/stat","response":{"ok":{"utf8":"1 (docker-init) S 0 1 1 0 -1 4194560 693 0 0 0 1 1 0 0 20 0 1 0 27378417 1183744 179 18446744073709551615 4198400 4772797 140724451921712 0 0 0 0 3145728 0 1 0 0 17 9 0 0 0 0 0 5010472 5037744 33718272 140724451925752 140724451925839 140724451925839 140724451925990 0\n"}}}
+    {"kind":"file","key":"/proc/39/stat","response":{"ok":{"utf8":"39 (whykey) R 7 7 1 0 -1 4194560 328 387 0 0 0 0 0 0 20 0 1 0 27762352 146006016 1418 18446744073709551615 107287582224000 107287585798528 140730731789856 0 0 0 0 4096 1088 0 0 0 17 10 0 0 0 0 0 107287585907704 107287585910752 107288137670656 140730731798050 140730731798094 140730731798094 140730731798510 0\n"}}},
+    {"kind":"file","key":"/proc/1/stat","response":{"ok":{"utf8":"1 (docker-init) S 0 1 1 0 -1 4194560 680 0 0 0 1 1 0 0 20 0 1 0 27762253 1183744 179 18446744073709551615 4198400 4772797 140722111002128 0 0 0 0 3145728 0 1 0 0 17 4 0 0 0 0 0 5010472 5037744 984338432 140722111004408 140722111004495 140722111004495 140722111004646 0\n"}}}
   ]
 }

@@ -52,6 +52,12 @@
   (`remap`). New groups cover Vim, Helix, Kakoune, Micro, and Zellij
   (`termapps`), Sway native capture and Hyprland `--suppress`
   (`capture`), and more Niri and Wayfire cases.
+- `lab/run.py --record DIR` stores every input whykey read in a scenario
+  (commands, files, environment, process and TTY state), and
+  `cargo test --test lab_replay` replays the 81 recorded scenarios in under
+  a second without Docker. A replay that needs an input the recording lacks
+  fails, so a changed query sends the change back to the real lab
+  (`docs/lab-replay.md`).
 - Scenarios can require their binding to fire (`expect`), check state
   after whykey exits (`wait_whykey`, `restored`, `mark_probe`), and check
   upstream redirects (`whykey.via`, `whykey.not_via`).
