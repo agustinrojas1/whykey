@@ -1,6 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [2.3.0] - 2026-10-15
+
+The lab grows to 249 scenarios: 208 match exactly, 41 pass only as honest
+uncertainty, and none fail. It adds Vim, Helix, Kakoune, Micro, and
+Zellij; Fcitx5 and IBus; keyd, kanata, xremap, kmonad, and input-remapper
+in the Hyprland VM; GNOME Shell with gsd-media-keys; KWin; Cinnamon; Sway
+native capture; and Hyprland `listen --suppress`. Those programs exposed
+24 defects, fixed below. The lab now runs in a base image plus five group
+images published to GHCR, and CI runs only the scenarios a change can
+affect, in parallel shards (a full run takes about 9 minutes instead of
+35). The README is rewritten for first-time readers.
 
 ### Fixes
 

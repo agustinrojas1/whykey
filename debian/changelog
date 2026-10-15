@@ -1,3 +1,12 @@
+whykey (2.3.0) unstable; urgency=medium
+
+  * Verify Vim, Helix, Kakoune, Micro, Zellij, Fcitx5, IBus, keyd, kanata,
+    xremap, kmonad, input-remapper, GNOME Shell, KWin and Cinnamon against
+    the real programs; fix 24 defects found there.
+  * Hyprland listen --suppress reports again; Sway native capture fixes.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Thu, 15 Oct 2026 18:00:00 -0300
+
 whykey (2.2.0) unstable; urgency=medium
 
   * Verify Niri, Wayfire, labwc, dwl, Qtile, XMonad, Xfce, MATE, six terminal
