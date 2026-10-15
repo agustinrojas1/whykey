@@ -3,6 +3,7 @@
   "description": "a kglobalaccel shortcut on Qt's Launch (5) key (XF86Launch5) fires and kglobalacceld grabs it",
   "tier": "observed",
   "environment": "x11",
+  "image": "vm",
   "files": {
     "/root/.local/share/applications/lab-fire.desktop": [
       "[Desktop Entry]",

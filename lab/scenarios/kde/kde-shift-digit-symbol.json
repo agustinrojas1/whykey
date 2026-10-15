@@ -3,6 +3,7 @@
   "description": "a kglobalaccel shortcut stored as the shifted symbol (Meta+!, as KDE records Super+Shift+1) fires for Super+Shift+1; whykey matches shift+1 against `!` assuming a US layout",
   "tier": "observed",
   "environment": "x11",
+  "image": "vm",
   "files": {
     "/root/.local/share/applications/lab-fire.desktop": [
       "[Desktop Entry]",

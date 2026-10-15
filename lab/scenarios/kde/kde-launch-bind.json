@@ -3,6 +3,7 @@
   "description": "a kglobalaccel launch shortcut (Meta+T) fires and kglobalacceld grabs the key",
   "tier": "observed",
   "environment": "x11",
+  "image": "vm",
   "files": {
     "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired"],
     "/root/.config/kglobalshortcutsrc": ["[services][lab-fire.desktop]", "_launch=Meta+T"]

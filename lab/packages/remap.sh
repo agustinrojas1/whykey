@@ -6,6 +6,9 @@
 #   kmonad 0.4.5       kmonad/kmonad static linux binary
 #   keyd 2.6.0         rvaiya/keyd   source tarball, built with make (no Fedora package)
 set -eu
+# keyd is built from source below; its compiler comes with this family, not
+# with whichever family happened to be installed before it.
+dnf -y -q install --setopt=install_weak_deps=False gcc make
 work=$(mktemp -d)
 fetch() { # URL SHA256 FILE
     curl -fsSL -o "$work/$3" "$1"

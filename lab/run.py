@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """whykey reality lab runner.
 
-Every scenario runs in a fresh `whykey-lab` container with the whykey binary
-mounted at /w/whykey. lab/driver.py (inside the container) starts the real
-programs, performs real synthetic input, records ground truth from the
-programs' reaction, and runs `whykey <args> --json --schema-version 2`. This
-runner compares whykey's verdict for the scenario's layer with that ground
-truth, prints a table, writes lab/results.json and exits 1 on any mismatch.
+Every scenario runs in a fresh container of the lab image for its environment,
+with the whykey binary mounted at /w/whykey. The images are one base image and
+a few group images built from it (lab/images.json; tools/lab_images.py builds
+them). lab/driver.py (inside the container) starts the real programs, performs
+real synthetic input, records ground truth from the programs' reaction, and
+runs `whykey <args> --json --schema-version 2`. This runner compares whykey's
+verdict for the scenario's layer with that ground truth, prints a table,
+writes lab/results.json and exits 1 on any mismatch.
 
-    docker build -t whykey-lab lab/
+    python3 tools/lab_images.py build
     cargo build --release --locked
     python3 lab/run.py [--only GLOB]... [-j N] [--vms N] [--keep]
+                       [--image-tag TAG|hash] [--image-prefix P]
 
 Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
 (the file stem must equal "id").
@@ -23,6 +26,10 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   x11, pty, ...); its docstring documents its own fields
                   (e.g. sway.config, x11.daemons, pty.command), actions and
                   checks. A session D-Bus is always started.
+    image         optional: the group image to run in (a name in
+                  lab/images.json), when it is not the one the environment
+                  belongs to. The x11 "kde" scenarios need kglobalacceld, which
+                  lives in the vm image with KWin.
     files         {path: text or list of lines} written before anything starts
     setup         shell commands run before the session starts
     session_setup shell commands run after the environment is up
@@ -153,7 +160,15 @@ from envs import ENVIRONMENTS
 
 LAB = Path(__file__).resolve().parent
 ROOT = LAB.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import lab_images  # noqa: E402  (tools/lab_images.py: the image layout, lab/images.json)
+
 SCENARIOS = LAB / "scenarios"
+# Environment -> group image (lab/images.json is the single source of truth).
+MANIFEST = lab_images.load_manifest()
+ENV_IMAGE = lab_images.environment_images(MANIFEST)
+IMAGE_NAMES = set(lab_images.image_names(MANIFEST))
+DEFAULT_IMAGE_PREFIX = lab_images.DEFAULT_PREFIX
 RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
 TIERS = {"observed"}
 # Scenario "expect": what must have happened for the run to count (see the docstring).
@@ -180,6 +195,8 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
             raise SystemExit(f"{path}: duplicate id {identifier!r}")
         if scenario["environment"] not in ENVIRONMENTS:
             raise SystemExit(f"{path}: unknown environment {scenario['environment']!r}")
+        if "image" in scenario and scenario["image"] not in IMAGE_NAMES:
+            raise SystemExit(f"{path}: unknown image {scenario['image']!r}; known: {sorted(IMAGE_NAMES)}")
         if scenario["tier"] not in TIERS:
             raise SystemExit(f"{path}: unknown tier {scenario['tier']!r}")
         if scenario.get("expect", "fired") not in EXPECTATIONS:
@@ -314,6 +331,20 @@ def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | N
     return "absent", None
 
 
+def image_for(args, scenario: dict) -> str:
+    """The docker image reference a scenario runs in. --image forces one
+    reference for every scenario; otherwise the scenario's group image
+    (its "image" field, else its environment's) as <prefix><name>:<tag>, where
+    --image-tag "hash" resolves each image's content hash."""
+    if args.image:
+        return args.image
+    name = scenario.get("image") or ENV_IMAGE[scenario["environment"]]
+    tag = args.image_tag
+    if tag == "hash":
+        tag = lab_images.content_hash(name, MANIFEST)
+    return f"{args.image_prefix}{name}:{tag}"
+
+
 def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> list[str]:
     command = ["docker", "run", "--name", name, "--network", "none", "--init"]
     command += ["-d"] if keep else ["--rm"]
@@ -324,7 +355,7 @@ def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> l
         "-v", f"{LAB}:/lab:ro",
         "-v", f"{args.binary}:/w/whykey:ro",
         "-e", f"WHYKEY_LAB_KEEP={'1' if keep else '0'}",
-        args.image,
+        image_for(args, scenario),
         "python3", "/lab/driver.py", f"/lab/{path.relative_to(LAB).as_posix()}",
     ]
     return command
@@ -587,7 +618,15 @@ def main() -> int:
                              "starved guests time out)")
     parser.add_argument("--keep", action="store_true",
                         help="leave each container running after the scenario for docker exec")
-    parser.add_argument("--image", default="whykey-lab")
+    parser.add_argument("--image", metavar="REF", default=None,
+                        help="run every scenario in this docker image reference, as is (overrides "
+                             "each scenario's group image, --image-prefix and --image-tag; e.g. the "
+                             "old single image 'whykey-lab')")
+    parser.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX, metavar="P",
+                        help=f"prefix of the group images, <P><name>:<tag> (default {DEFAULT_IMAGE_PREFIX!r})")
+    parser.add_argument("--image-tag", default="latest", metavar="TAG",
+                        help="tag of the group images (default: latest); 'hash' uses each image's "
+                             "content hash (tools/lab_images.py hash NAME)")
     parser.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "whykey")
     parser.add_argument("--results", type=Path, default=LAB / "results.json")
     parser.add_argument("--repeat", type=int, default=1, metavar="N",
@@ -619,6 +658,7 @@ def main() -> int:
         for future in concurrent.futures.as_completed(futures):
             path, scenario = futures[future]
             record = evaluate(path, scenario, future.result())
+            record["image"] = image_for(args, scenario)
             records.append(record)
             status = ("PASS~" if record.get("tolerated") else "PASS") if record["pass"] else "FAIL"
             print(f"[{status}] {record['scenario']}", file=sys.stderr, flush=True)
@@ -634,6 +674,7 @@ def main() -> int:
             path, scenario = loaded[record["file"]]
             retry = evaluate(path, scenario, run_container(args, path, scenario, 0))
             retry["retried"] = attempt
+            retry["image"] = image_for(args, scenario)
             records[records.index(record)] = retry
             status = ("PASS~" if retry.get("tolerated") else "PASS") if retry["pass"] else "FAIL"
             print(f"[{status}] {retry['scenario']} (retry {attempt})", file=sys.stderr, flush=True)

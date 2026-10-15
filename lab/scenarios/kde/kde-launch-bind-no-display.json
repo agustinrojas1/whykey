@@ -3,6 +3,7 @@
   "description": "a kglobalaccel launch shortcut (Meta+T) fires and kglobalacceld grabs the key; whykey runs without DISPLAY (for example from a tmux server started outside X), so the X11 grab probe cannot run and the adapter's own answer is judged",
   "tier": "observed",
   "environment": "x11",
+  "image": "vm",
   "files": {
     "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired"],
     "/root/.config/kglobalshortcutsrc": ["[services][lab-fire.desktop]", "_launch=Meta+T"]

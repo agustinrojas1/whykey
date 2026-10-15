@@ -3,6 +3,7 @@
   "description": "a shortcut persisted for a component that is not running (kwin) stays registered in kglobalaccel, but kglobalacceld holds no X11 grab on Meta+Y (lab/xgrab.py) and the key reaches the focused client",
   "tier": "observed",
   "environment": "x11",
+  "image": "vm",
   "files": {
     "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired-launch"],
     "/root/.config/kglobalshortcutsrc": [

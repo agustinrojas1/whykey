@@ -1,5 +1,7 @@
 # Headless mutter; gnome-shell is installed for its GSettings schemas,
 # which whykey reads (GNOME Shell aborts without systemd-logind).
+# lab/envs/_logind.py (the gnome_shell environment's logind stand-in) imports gi.
+python3-gobject
 gsettings-desktop-schemas
 gnome-shell
 mutter
