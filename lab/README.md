@@ -66,9 +66,13 @@ The image also has Emacs 30.2 (`emacs-nw`, `emacsclient`) and Neovim 0.12.5;
 dwl v0.9, built from source against wlroots 0.20; Niri, labwc, and Wayfire
 from the Fedora repositories (unpinned); Ghostty and WezTerm from the
 `scottames/ghostty` and `wezfurlong/wezterm-nightly` COPRs; kitty, alacritty,
-foot, and Konsole; and Qtile, XMonad, Xfce, MATE, and herbstluftwm. Cinnamon
-is installed but not verified: `cinnamon --replace` fails headless, and muffin
-has no standalone binary.
+foot, and Konsole; Qtile, XMonad, Xfce, MATE, herbstluftwm, and Cinnamon
+6.6 (`cinnamon --replace` on Xvfb; it needs a system bus with
+`org.freedesktop.locale1`). Newer families add Fcitx5 and IBus with pinyin
+engines (`ime`); KWin 6.7 (`kwin`); keyd 2.6.0 built from source, kanata
+1.12.0, xremap 0.15.14, kmonad 0.4.5 (pinned upstream artifacts, sha256 in
+`remap.sh`) and input-remapper 2.2.1 (`remap`); and Vim, Helix, Kakoune,
+Micro, strace, and Zellij 0.45.1 (pinned upstream binary, `termapps`).
 
 Packages come in families under `lab/packages/`: `<family>.txt` lists dnf
 package names, one per line (`#` comments allowed, pin versions as
@@ -160,16 +164,40 @@ Input sources and what they can prove:
 
 GNOME scenarios run headless mutter 50 (`mutter --headless --wayland --no-x11
 --virtual-monitor`) and send input through mutter's RemoteDesktop D-Bus API
-(`rdkbd`, `lab/rdkbd.py`). GNOME Shell cannot start in the container (it
-aborts without systemd-logind), so they verify only bindings that mutter
-owns. For example, the close binding (default `<Alt>F4`, or rebound to
-`<Super>F9`) closes the foot probe, and unbound keys reach it. GNOME Shell
-and gnome-settings-daemon behaviour is not verified; the support matrix
-says so in its `lab_scope`.
+(`rdkbd`, `lab/rdkbd.py`). The `gnome` environment verifies bindings that
+mutter owns: the close binding (default `<Alt>F4`, or rebound to
+`<Super>F9`) closes the foot probe, and unbound keys reach it. The
+`gnome_shell` environment runs GNOME Shell on the same headless mutter. GNOME
+Shell aborts without systemd-logind, so `lab/envs/_logind.py` (a helper, not
+an environment) serves a minimal `org.freedesktop.login1` on the system bus;
+the shell's state is read back through `org.gnome.Shell.Eval`
+(`--unsafe-mode`), and scenarios can start gnome-settings-daemon's
+`gsd-media-keys`.
 
 The KDE scenarios run a bare kglobalacceld on Xvfb. For the inactive
 component, the "fired" truth is `lab/xgrab.py` showing that kglobalacceld
-holds no X11 grab on Meta+Y.
+holds no X11 grab on Meta+Y. The `kwin` environment runs `kwin_wayland
+--drm` (`LIBSEAT_BACKEND=noop`) in the KVM guest with the kernel keyboard.
+KWin handles global shortcuts in-process and needs the
+`org.kde.kglobalaccel` bus name, so no kglobalacceld may start before it
+(`kwin-kglobalacceld-owns-name` does that on purpose).
+
+The `cinnamon` environment runs `cinnamon --replace` on Xvfb. muffin keeps a
+window's own bindings (maximize, close) on the frame around the focused
+client rather than on the root window; `lab/xgrab.py --path` checks the root
+and the path to the focused window, and the `wait_grab` action waits on it
+before input is sent. Cinnamon reads a custom shortcut when `custom-list`
+changes, so scenarios write its fields first and `custom-list` last.
+
+The `ime` environment runs Fcitx5 or IBus on the scenario's session bus,
+with a foot probe in headless Sway or an xterm XIM client on Xvfb; checks
+`{"committed": text}` and `{"typed": text}` read the client's log. An input
+method that composes is tolerated as uncertain: whykey cannot see the
+composition.
+
+The `remap` environment starts a remapper daemon (keyd, kanata, xremap,
+kmonad, or input-remapper) in the Hyprland KVM guest, where it grabs the
+kernel keyboard and emits through `/dev/uinput`.
 
 Scenarios ending in `-no-display` (i3 and KDE) run whykey with `DISPLAY`
 unset, so the X11 grab probe cannot decide the verdict and the adapter's own
@@ -206,13 +234,17 @@ docstring of `lab/run.py`. A minimal scenario:
 | `environment` | Name of an environment plugin, `lab/envs/<name>.py`: `sway` (headless), `hyprland` (KVM guest), `gnome` (headless mutter), `x11` (Xvfb `:5` plus `x11.daemons` started in order and waited on), `pty` (`pty.command` on a pseudo-terminal), ...; the plugin's docstring documents its own fields. A session D-Bus is always started |
 | `files`, `setup`, `session_setup` | Files written before start, and shell commands run before and after the environment comes up |
 | `probe` | Independent key recorder: `wayland` or `x11` |
-| `actions` | `vkbd`, `rdkbd`, `wtype`, `xdotool`, `type`, `sh`, `sleep`, `wait_quiet`, `start_whykey`, or one of the environment's own `ACTIONS` |
-| `ground_truth` | `fired` (did the layer act), `delivered` (`probe`, or a check), and `reached` (`fired`, or a check such as `{"probe": "any"}`); `delivered` or `reached` is required |
+| `actions` | `vkbd`, `rdkbd`, `wtype`, `xdotool`, `type`, `sh`, `sleep`, `wait_quiet`, `start_whykey`, `wait_whykey` (wait for the background whykey to exit; later keys reach the restored session), `mark_probe` (`delivered: "probe"` then counts only keys before this point), or one of the environment's own `ACTIONS` |
+| `ground_truth` | `fired` (did the layer act), `delivered` (`probe`, or a check), and `reached` (`fired`, or a check such as `{"probe": "any"}`); `delivered` or `reached` is required. `restored` (optional) is a check that must hold after `wait_whykey`, such as `{"probe": "after_mark"}` (the probe got a key after `mark_probe`) |
+| `expect` | `"fired"`: the scenario's binding must fire; if it does not, the run is a lab error, never a pass |
 | `whykey.args`, `layer`, `env`, `run` | Command line, layer under test, environment, and how to run it: `direct`, `pty` (typed into the scenario's shell), or `background` (`listen`, with `ready`). For a key sequence (several key arguments) the verdict is the last key's (`steps[-1].path`) |
 | `whykey.summary`, `detail`, `binding`, `combo`, `stderr` | Substrings or values that must also match, so a right verdict for the wrong binding still fails. `binding` is a substring of the reported layer's primary binding action |
 | `whykey.observation` | Judge `listen`'s observation (`delivered` or not) instead of a layer |
 | `whykey.accept` | Honest-uncertainty verdicts tolerated when the scenario documents that whykey cannot know more (for example, a shell without `shell-init`). Shown as `PASS~` and counted separately in the run summary; such passes never count as verification. |
 | `whykey.confidence` | The report's `assessment.confidence` must equal this value |
+| `whykey.via`, `not_via` | An upstream layer (a remapper) that must, or must not, have redirected the key on its way to `layer` |
+| `whykey.silent` | The capture backend cannot see this key (native Sway capture of an unbound key): whykey must give no report and print `stderr`, and the key must have reached the session |
+| `whykey.suppress` | `"consumed"` or `"pass"`: `listen --suppress` held the key (not fired, not delivered, reached), and whykey must still report this normal-route verdict; `"pass"` needs a `restored` check proving the key reaches the client after whykey exits |
 
 Probe-window scenarios send the same input twice. The first time, the lab's
 own probe client has focus. The second time, `whykey listen --window` has
@@ -230,8 +262,12 @@ gets the driver's `Lab`: `lab.scenario`, `lab.env` (exported to whykey,
 actions and probes), `lab.spawn(name, argv, env)`, `lab.run(argv)`,
 `lab.ok(argv)`, `lab.ensure_alive()`, `lab.steps`, `lab.settle`, `lab.pty`.
 
-Registered environments: `dwl`, `emacs`, `gnome`, `hyprland`, `labwc`, `niri`,
-`nvim`, `pty`, `sway`, `terminals`, `wayfire`, and `x11`.
+Registered environments: `cinnamon`, `dwl`, `emacs`, `gnome`, `gnome_shell`,
+`hyprland`, `ime`, `kwin`, `labwc`, `niri`, `nvim`, `pty`, `remap`, `sway`,
+`terminals`, `wayfire`, and `x11`. Wayfire scenarios list the `ipc-rules`
+plugin so whykey can read the live options; `wayfire.py` grants the
+container `CAP_SYS_PTRACE`, which root needs to read the compositor's
+`/proc/<pid>/maps` (whykey's check that a plugin is loaded).
 
 | Hook | Use |
 | --- | --- |
