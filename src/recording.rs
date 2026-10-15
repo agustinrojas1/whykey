@@ -327,7 +327,13 @@ pub fn finish(code: ExitCode) -> ExitCode {
 // ---- bytes, OS errors, results ----------------------------------------------
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 fn hex_decode(text: &str) -> Option<Vec<u8>> {
@@ -997,8 +1003,6 @@ fn encode_termios(result: &Result<libc::termios, String>) -> Value {
             "lflag": termios.c_lflag,
             "line": termios.c_line,
             "cc": termios.c_cc.to_vec(),
-            "ispeed": termios.c_ispeed,
-            "ospeed": termios.c_ospeed,
         } }),
         Err(message) => json!({ "err": message }),
     }
@@ -1017,8 +1021,9 @@ fn decode_termios(response: &Value) -> Option<Result<libc::termios, String>> {
     termios.c_cflag = field("cflag")? as libc::tcflag_t;
     termios.c_lflag = field("lflag")? as libc::tcflag_t;
     termios.c_line = field("line")? as libc::cc_t;
-    termios.c_ispeed = field("ispeed")? as libc::speed_t;
-    termios.c_ospeed = field("ospeed")? as libc::speed_t;
+    // Line speeds are not recorded: whykey never reads them, and musl's
+    // termios has no c_ispeed/c_ospeed fields. Older recordings that carry
+    // them still load.
     let control = ok.get("cc")?.as_array()?;
     if control.len() != termios.c_cc.len() {
         return None;
