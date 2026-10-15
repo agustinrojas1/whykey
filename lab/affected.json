@@ -2,9 +2,9 @@
   "_about": "Which lab scenarios a change can affect; read by tools/lab_select.py (CI: .github/workflows/lab.yml). Paths are repo-relative; globs use * (one path segment), ** (any depth) and ?. Order of evaluation per changed path: core (every scenario), then every matching rule (union), then ignore (no scenario), else every scenario (a path nobody mapped is never assumed safe). Rule scenario entries: a glob matched against scenario ids and lab/scenarios-relative paths (as lab/run.py --only); image:NAME (every scenario of that group image); @self (the changed scenario file); @env (every scenario of the environment named by the changed lab/envs/NAME.py); @image (the image named by a changed lab/images/NAME.Dockerfile; base means all); @family (the image holding the package family named by a changed lab/packages/FAMILY.*; base means all). An empty scenarios list means no lab scenario covers the file. Every glob must match at least one scenario, or lab_select.py refuses to run.",
 
   "shard_size": {
-    "_about": "Largest number of selected scenarios in one CI shard, per group image (default for the rest). ceil(selected / size) shards: the full run gives vm 3 shards (62 scenarios), tty 2 (83), and wayland, x11 and gnome one each.",
+    "_about": "Largest number of selected scenarios in one CI shard, per group image (default for the rest). ceil(selected / size) shards: the full run gives vm 6 shards (62 scenarios, each boots a VM, so they are the slowest), tty 2 (83), and wayland, x11 and gnome one each.",
     "default": 60,
-    "vm": 22
+    "vm": 11
   },
 
   "core": [
