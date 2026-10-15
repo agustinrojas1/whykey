@@ -3275,10 +3275,15 @@ mod tests {
             &output,
         );
 
+        // The JSON context (desktop, shell) comes from the environment, so only
+        // the route is compared against the golden file.
         let json = render_json(&"ctrl+t".parse().unwrap(), &layers, None, 2);
+        assert!(json.contains("\"UnverifiedDefault\""), "{json}");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let path = serde_json::to_string_pretty(&value["path"]).unwrap();
         crate::style::assert_golden(
             "unverified_shell_default_is_not_described_as_forwarding__json",
-            &json,
+            &path,
         );
     }
 
