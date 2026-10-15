@@ -333,7 +333,8 @@ fn query_runtime(engine: &str) -> RuntimeQuery {
 
 fn query_ibus() -> RuntimeQuery {
     let mut command = Command::new("ibus");
-    command.arg("engine");
+    // Untranslated replies, so "No engine is set" below is recognized.
+    command.arg("engine").env("LC_ALL", "C");
     let output = match command::output(&mut command) {
         Ok(output) => output,
         Err(error) => {
