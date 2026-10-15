@@ -1,6 +1,6 @@
 {
   "id": "zellij-normal-bind",
-  "description": "Ctrl-y bound in normal mode of ~/.config/zellij/config.kdl opens a pane (NewPane); Zellij consumes the key, so the pane's shell never receives it",
+  "description": "Ctrl-y bound in normal mode of ~/.config/zellij/config.kdl opens a pane (NewPane); Zellij consumes the key, so the pane's shell never receives it. Zellij does not report its current mode and nothing tells whykey, so it can only say the key is handled if Zellij is in its default (normal) mode: tolerated handled-uncertain (zellij-default-alt-n checks the same path with the mode given)",
   "tier": "observed",
   "environment": "pty",
   "files": {
@@ -59,6 +59,7 @@
     ],
     "layer": "Zellij",
     "run": "pty",
-    "command": "/w/whykey"
+    "command": "/w/whykey",
+    "accept": ["handled-uncertain"]
   }
 }

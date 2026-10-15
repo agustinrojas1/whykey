@@ -1,6 +1,6 @@
 {
   "id": "zellij-default-alt-n",
-  "description": "Alt-n is Zellij's built-in normal-mode NewPane binding (no user binding); the key opens a second pane, so the first pane's shell never receives it",
+  "description": "Alt-n is Zellij's built-in normal-mode NewPane binding (no user binding); the key opens a second pane, so the first pane's shell never receives it; whykey is told the mode with WHYKEY_ZELLIJ_MODE=normal",
   "tier": "observed",
   "environment": "pty",
   "files": {
@@ -52,6 +52,6 @@
     ],
     "layer": "Zellij",
     "run": "pty",
-    "command": "/w/whykey"
+    "command": "WHYKEY_ZELLIJ_MODE=normal /w/whykey"
   }
 }
