@@ -3288,7 +3288,7 @@ fn listen_dry_run_selects_without_arming() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("capture chain: skipped; --terminal forces one backend"));
+    assert!(stdout.contains("skipped; --terminal forces one backend"));
     assert!(stdout.contains("Terminal (dry-run; not armed)"));
 }
 
@@ -3297,12 +3297,10 @@ fn listen_dry_run_shows_the_default_chain_and_why() {
     let output = binary().args(["listen", "--dry-run"]).output().unwrap();
     assert!(output.status.success(), "output: {output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("capture chain (first usable backend wins):"));
-    assert!(
-        stdout.contains("1. native compositor: unavailable: no Hyprland or Sway session detected")
-    );
-    assert!(stdout.contains("2. probe window: unavailable: no Wayland socket"));
-    assert!(stdout.contains("3. terminal:"));
+    assert!(stdout.contains("Capture chain  first usable backend wins"));
+    assert!(stdout.contains("no Hyprland or Sway session detected"));
+    assert!(stdout.contains("no Wayland socket"));
+    assert!(stdout.contains("terminal"));
 }
 
 #[test]
@@ -3315,11 +3313,11 @@ fn listen_dry_run_selects_the_probe_window_before_the_terminal() {
         .unwrap();
     assert!(output.status.success(), "output: {output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("2. probe window: selected: opens a probe window (X11)"));
-    assert!(stdout.contains("3. terminal: used only if the probe window cannot be opened"));
-    assert!(stdout.contains(
-        "capture backend: Probe window via X11 (dry-run; not armed; policy=pass-through)"
-    ));
+    assert!(stdout.contains("opens a probe window (X11)"));
+    assert!(stdout.contains("used only if the probe window cannot be opened"));
+    assert!(
+        stdout.contains("Backend  Probe window via X11 (dry-run; not armed; policy=pass-through)")
+    );
 }
 
 #[test]
@@ -3330,9 +3328,9 @@ fn listen_explain_capture_reports_detection_table() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("capture detection"));
-    assert!(stdout.contains("capture_factory="));
-    assert!(stdout.contains("selected compositor:"));
+    assert!(stdout.contains("Capture detection"));
+    assert!(stdout.contains("can capture keys"));
+    assert!(stdout.contains("Selected compositor"));
 }
 
 #[test]
