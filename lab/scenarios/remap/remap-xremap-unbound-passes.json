@@ -1,0 +1,27 @@
+{
+  "id": "remap-xremap-unbound-passes",
+  "description": "with xremap running and 'F9: F12' in its modmap, an unlisted 'a' from the VM kernel keyboard reaches the probe unchanged through xremap's uinput device; Hyprland finds no bind and the Input remapper layer does not redirect it. XKB_DEFAULT_LAYOUT=us is set because the VM's Hyprland layout is us and whykey reads the layout only from the environment",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["xremap", "/root/xremap.yml"], "ready": "xremap"}},
+  "files": {
+    "/root/xremap.yml": ["modmap:", "  - name: f9 to f12", "    remap:", "      F9: F12"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["a"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": ["Hyprland"],
+    "not_via": "Input remapper",
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "remap-keyd-overload-tap-consumed",
+  "description": "keyd '[main] capslock = overload(nav, esc)': a quick tap of CapsLock on the VM kernel keyboard is emitted as Escape, which Hyprland's Escape bind consumes. keyd cannot know tap from hold before the timing, so whykey answers handled-uncertain (tolerated, PASS~) with the overload named",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["keyd"], "ready": "keyd virtual keyboard"}},
+  "files": {
+    "/etc/keyd/default.conf": ["[ids]", "*", "", "[main]", "capslock = overload(nav, esc)", "", "[nav]", "h = left"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"Escape\",hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["capslock"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["CAPS_LOCK"],
+    "layer": ["Input remapper"],
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "id": "remap-input-remapper-redirect-bound",
+  "description": "input-remapper 2.2.1 (root service; the autoload is requested as an unprivileged user, the way the desktop autostart does) applies preset f9-f12 (KEY_F9 -> KEY_F12) to the QEMU Virtio Keyboard group and grabs the VM kernel keyboard; Hyprland's bind on F12 fires and consumes the key. The preset is limited to that device group and whykey inspects F9 without a captured device, so it cannot know the key comes from that device: it answers handled-uncertain (tolerated, PASS~) and names the F9 to F12 remap. It does not follow the remap to F12, because that is conditional",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {
+    "system_bus": true,
+    "daemon": {
+      "argv": ["input-remapper-service"],
+      "autoload": "/home/lab/.config/input-remapper-2",
+      "autoload_user": "nobody",
+      "autoload_home": "/home/lab",
+      "ready": "input-remapper"
+    }
+  },
+  "files": {
+    "/home/lab/.config/input-remapper-2/config.json": ["{\"version\": \"2.2.1\", \"autoload\": {\"QEMU Virtio Keyboard\": \"f9-f12\"}}"],
+    "/home/lab/.config/input-remapper-2/presets/QEMU Virtio Keyboard/f9-f12.json": [
+      "[{\"input_combination\": [{\"type\": 1, \"code\": 67}], \"target_uinput\": \"keyboard\", \"output_type\": 1, \"output_code\": 88}]"
+    ],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["f9"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["f9"],
+    "layer": ["Input remapper"],
+    "accept": ["handled-uncertain"],
+    "summary": "input-remapper may change F9",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "Hyprland",
+      "XDG_SESSION_TYPE": "wayland",
+      "XKB_DEFAULT_LAYOUT": "us",
+      "INPUT_REMAPPER_CONFIG": "/home/lab/.config/input-remapper-2"
+    }
+  }
+}

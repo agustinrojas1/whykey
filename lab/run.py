@@ -67,6 +67,11 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   pass), not "not fired, delivered -> pass": a bound scenario
                   whose bind silently did not register proves nothing.
     whykey        {"args": [...], "layer": name or [names], "env": {...},
+                   "via": {"layer": NAME, "summary": text, "binding": text}
+                   (a pre-compositor remapper must have redirected the key:
+                   that layer's entry is Redirected, with the texts in its
+                   summary and binding action), "not_via": NAME (that layer
+                   must be absent from the path: it passed the key silently),
                    "run": "direct" | "pty" | "background", "command": "whykey",
                    "accept": [...], "summary": "text", "detail": "text",
                    "binding": "text", "observation": bool, "combo": {...},
@@ -261,6 +266,28 @@ def report_path(report: dict | None) -> list[dict]:
         return report["path"]
     steps = report.get("steps") or []
     return steps[-1].get("path", []) if steps else []
+
+
+def via_check(spec: dict | None, report: dict | None) -> tuple[bool, str]:
+    """`whykey.via`: an upstream layer that must have redirected the key
+    (a pre-compositor remapper). {"layer": NAME, "summary": text,
+    "binding": text}: the layer's entry in the path must have propagation
+    Redirected, and its summary and binding action must contain the texts.
+    The scenario's verdict is still the layer named by "layer"."""
+    if not spec:
+        return True, ""
+    for entry in report_path(report or {}):
+        if entry.get("layer") != spec["layer"]:
+            continue
+        texts = [entry.get("summary") or ""] + [item.get("text", "") for item in entry.get("evidence", [])]
+        action = ((entry.get("binding") or {}).get("action")) or ""
+        ok = (
+            entry.get("propagation") == "Redirected"
+            and (spec.get("summary") is None or any(spec["summary"] in text for text in texts))
+            and (spec.get("binding") is None or spec["binding"] in action)
+        )
+        return ok, f"{spec['layer']} redirects the key (binding {action!r})"
+    return False, f"no {spec['layer']} layer redirected the key"
 
 
 def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | None]:
@@ -466,9 +493,27 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         summary_ok = (summary is None or (entry is not None and summary in texts[0])) and (
             detail is None or any(detail in text for text in texts)
         ) and (binding is None or binding in reported_binding)
+        via_ok, via_text = via_check(scenario["whykey"].get("via"), whykey["report"])
+        summary_ok = summary_ok and via_ok
+        not_via = scenario["whykey"].get("not_via")
+        if not_via is not None:
+            # A passing layer is omitted from the report path, so the layer must
+            # be absent: any entry (a redirect, a consume, or an uncertain
+            # "may change") means whykey claims the layer acts on the key.
+            claimed = [
+                entry.get("summary") or ""
+                for entry in report_path(whykey["report"])
+                if entry.get("layer") == not_via
+            ]
+            summary_ok = summary_ok and not claimed
+            via_text = f"{via_text}; " if via_text else ""
+            via_text += f"{not_via} passes the key" + (f" (reported: {claimed[0]})" if claimed else "")
         if binding is not None:
             detail = f"{detail}; " if detail else ""
             detail += f"binding action containing {binding!r} (reported {reported_binding!r})"
+        if via_text:
+            detail = f"{detail}; " if detail else ""
+            detail += via_text
     stderr = scenario["whykey"].get("stderr")
     stderr_ok = stderr is None or stderr in whykey["stderr"]
     if combo is not None:

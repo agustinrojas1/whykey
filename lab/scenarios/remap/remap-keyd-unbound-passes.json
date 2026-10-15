@@ -1,0 +1,27 @@
+{
+  "id": "remap-keyd-unbound-passes",
+  "description": "with keyd running and '[main] f9 = f12', an unremapped 'a' from the VM kernel keyboard reaches the probe unchanged through keyd's uinput device; Hyprland finds no bind and the Input remapper layer does not redirect it. XKB_DEFAULT_LAYOUT=us is set because the VM's Hyprland layout is us and whykey reads the layout only from the environment",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["keyd"], "ready": "keyd virtual keyboard"}},
+  "files": {
+    "/etc/keyd/default.conf": ["[ids]", "*", "", "[main]", "f9 = f12"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["a"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": ["Hyprland"],
+    "not_via": "Input remapper",
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "remap-keyd-ids-include-redirect-bound",
+  "description": "keyd runs with '[ids] 0627:0001' (the VM keyboard's vendor:product) and '[main] f9 = f12': keyd grabs the QEMU keyboard, so F9 is redirected to F12 and Hyprland's F12 bind fires. whykey inspects F9 without a captured device, so it cannot know the key comes from a listed device: it answers handled-uncertain (tolerated, PASS~) and names the F9 to F12 remap, without following it to F12",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["keyd"], "ready": "keyd virtual keyboard"}},
+  "files": {
+    "/etc/keyd/default.conf": ["[ids]", "0627:0001", "", "[main]", "f9 = f12"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["f9"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["f9"],
+    "layer": ["Input remapper"],
+    "accept": ["handled-uncertain"],
+    "summary": "keyd may change F9",
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland", "XKB_DEFAULT_LAYOUT": "us"}
+  }
+}

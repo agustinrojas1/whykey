@@ -1,0 +1,44 @@
+{
+  "id": "remap-input-remapper-unbound-passes",
+  "description": "with input-remapper's autoloaded preset f9-f12 (KEY_F9 only; requested as an unprivileged user) on the VM kernel keyboard, an unmapped 'a' reaches the probe unchanged through the input-remapper virtual keyboard; Hyprland finds no bind and the Input remapper layer does not redirect it. XKB_DEFAULT_LAYOUT=us is set because the VM's Hyprland layout is us and whykey reads the layout only from the environment",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {
+    "system_bus": true,
+    "daemon": {
+      "argv": ["input-remapper-service"],
+      "autoload": "/home/lab/.config/input-remapper-2",
+      "autoload_user": "nobody",
+      "autoload_home": "/home/lab",
+      "ready": "input-remapper"
+    }
+  },
+  "files": {
+    "/home/lab/.config/input-remapper-2/config.json": ["{\"version\": \"2.2.1\", \"autoload\": {\"QEMU Virtio Keyboard\": \"f9-f12\"}}"],
+    "/home/lab/.config/input-remapper-2/presets/QEMU Virtio Keyboard/f9-f12.json": [
+      "[{\"input_combination\": [{\"type\": 1, \"code\": 67}], \"target_uinput\": \"keyboard\", \"output_type\": 1, \"output_code\": 88}]"
+    ],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["a"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": ["Hyprland"],
+    "not_via": "Input remapper",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "Hyprland",
+      "XDG_SESSION_TYPE": "wayland",
+      "XKB_DEFAULT_LAYOUT": "us",
+      "INPUT_REMAPPER_CONFIG": "/home/lab/.config/input-remapper-2"
+    }
+  }
+}
