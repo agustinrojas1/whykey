@@ -271,10 +271,10 @@ fn unique(values: &[&'static str]) -> Vec<&'static str> {
 
 /// The output names of the running niri (`niri msg --json outputs`).
 fn output_names() -> Result<Vec<String>, String> {
-    let output = Command::new("niri")
-        .args(["msg", "--json", "outputs"])
-        .output()
-        .map_err(|error| format!("niri msg: {error}"))?;
+    let mut command = Command::new("niri");
+    command.args(["msg", "--json", "outputs"]);
+    let output =
+        crate::command::output(&mut command).map_err(|error| format!("niri msg: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "niri msg outputs exited {}",
