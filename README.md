@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/whykey-demo.svg" alt="whykey super+return on Hyprland: Hyprland is configured to consume the shortcut, with the action, the evidence tier, and the file and line that bind it" width="820">
+  <img src="docs/assets/whykey-demo.svg" alt="whykey super+return on Hyprland: Hyprland takes the shortcut and runs Terminal, the route through the seven layers, and the file and line that bind it" width="820">
 </p>
 
 ---
@@ -147,6 +147,49 @@ shell's startup file:
 eval "$(whykey shell-init bash)"      # or: zsh
 whykey shell-init fish | source       # fish
 ```
+
+## Reading a report
+
+```text
+Super+Return                                           Hyprland · Wayland · bash
+
+✕ Hyprland takes Super+Return and runs Terminal.          ← verdict
+  Nothing after Hyprland receives Super+Return.           ← consequence
+
+Route                                                     ← the seven layers, in order
+  1  Remapper      ↓  none detected
+  2  Hyprland      ✕  Terminal                                     live query
+  3  Terminal      ·  not reached                                  ↑ evidence tier
+  ...
+Bound in                                                  ← where the binding lives
+  /usr/share/omarchy/default/hypr/bindings/applications.lua:2
+  __lua 268 (Lua dispatcher; whykey does not execute it)
+
+Confidence  live query: Hyprland answered from the running program...
+More  whykey super+return -v                              ← every layer and raw evidence
+```
+
+The header names the environment that was evaluated (compositor, session,
+shell). The first line is the verdict; the route shows every layer in the order
+the key travels, so you can see where the chain was cut and which layers were
+never reached.
+
+| Glyph | ASCII | Color | Meaning |
+| --- | --- | --- | --- |
+| `✕` | `x` | red | The layer keeps the key; nothing after it receives it. |
+| `↓` | `v` | green | The layer lets the key through, with or without an action of its own. |
+| `↪` | `>` | yellow | The layer rewrites the key, or waits for another one. |
+| `?` | `?` | yellow | whykey could not verify it: a default, an unloaded file, an opaque dispatcher. |
+| `·` | `-` | dim | Not reached, or not applicable here. |
+
+The right-hand column says how well the answer is known, with one of four
+words: `observed` (whykey saw the key arrive), `live query` (the running
+program was asked), `config file` (a file was read, not confirmed loaded) and
+`default` (the program's built-in behavior; your configuration may override
+it). Meaning never depends on color: `NO_COLOR`, `--color never` and
+`TERM=dumb` give plain text, and `--ascii` (or a non-UTF-8 locale) swaps the
+glyphs for the ASCII column. `whykey doctor` uses `✓ ✗ – ?` for available,
+unavailable, not applicable here, and unknown.
 
 ## How it works
 
