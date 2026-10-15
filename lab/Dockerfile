@@ -16,10 +16,16 @@ COPY packages/gnome.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh gnome
 COPY packages/hyprland.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh hyprland
+COPY packages/ime.* /tmp/packages/
+RUN sh /tmp/packages/_install.sh ime
 COPY packages/kde.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh kde
+COPY packages/kwin.* /tmp/packages/
+RUN sh /tmp/packages/_install.sh kwin
 COPY packages/shells.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh shells
+COPY packages/termapps.* /tmp/packages/
+RUN sh /tmp/packages/_install.sh termapps
 COPY packages/terminals.* /tmp/packages/
 RUN sh /tmp/packages/_install.sh terminals
 COPY packages/wayland.* /tmp/packages/
