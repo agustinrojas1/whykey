@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -11,7 +10,7 @@ use crate::layers::{
 const MAX_ANCESTORS: usize = 16;
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
-    inspect_for_pid_with_source_inner(key, std::process::id(), None, false)
+    inspect_for_pid_with_source_inner(key, crate::recording::process_id(), None, false)
 }
 
 pub fn inspect_for_pid(key: &KeyCombo, target_pid: u32) -> LayerResult {
@@ -406,13 +405,13 @@ pub fn is_shell_process(pid: u32) -> bool {
 }
 
 fn process_info(pid: u32) -> Option<(u32, String)> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let stat = crate::recording::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(") ")?;
     let fields: Vec<_> = stat[close + 2..].split_whitespace().collect();
     // After comm, /proc stat fields start at state (field 3), then ppid is
     // field 4, i.e. index 1 in this slice.
     let parent = fields.get(1)?.parse().ok()?;
-    let command = fs::read(format!("/proc/{pid}/cmdline"))
+    let command = crate::recording::read(format!("/proc/{pid}/cmdline"))
         .ok()
         .map(|bytes| {
             bytes
@@ -433,7 +432,7 @@ fn process_info(pid: u32) -> Option<(u32, String)> {
 
 fn process_environment_value(pid: u32, name: &str) -> Option<String> {
     let prefix = format!("{name}=");
-    fs::read(format!("/proc/{pid}/environ"))
+    crate::recording::read(format!("/proc/{pid}/environ"))
         .ok()?
         .split(|byte| *byte == 0)
         .find_map(|value| {
@@ -656,10 +655,10 @@ fn emacs_runtime_mapping(key: &KeyCombo) -> Option<String> {
         elisp_string(&notation)
     );
     let mut command = Command::new("emacsclient");
-    if let Some(server_file) = std::env::var_os("EMACS_SERVER_FILE") {
+    if let Some(server_file) = crate::recording::env_var_os("EMACS_SERVER_FILE") {
         let server_file = server_file.to_string_lossy().into_owned();
         command.args(["--server-file", &server_file]);
-    } else if let Some(socket_name) = std::env::var_os("EMACS_SOCKET_NAME") {
+    } else if let Some(socket_name) = crate::recording::env_var_os("EMACS_SOCKET_NAME") {
         let socket_name = socket_name.to_string_lossy().into_owned();
         command.args(["--socket-name", &socket_name]);
     }
@@ -795,7 +794,7 @@ where
     F: Fn(&str) -> bool,
 {
     paths.into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         content.lines().find_map(|raw_line| {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with('"') || line.starts_with("--") {
@@ -875,7 +874,7 @@ fn emacs_static_mapping(key: &KeyCombo) -> Option<String> {
     let notations = emacs_key_notations(key);
     let paths = emacs_config_paths();
     paths.into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         content.lines().find_map(|raw_line| {
             let line = raw_line.trim();
             if line.is_empty() || line.starts_with(';') {
@@ -898,7 +897,7 @@ fn emacs_static_mapping(key: &KeyCombo) -> Option<String> {
 
 fn helix_static_mapping(key: &KeyCombo) -> Option<String> {
     helix_config_paths().into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         let mut in_keys = false;
         for raw_line in content.lines() {
             let line = raw_line.split('#').next()?.trim();
@@ -932,7 +931,7 @@ fn helix_static_mapping(key: &KeyCombo) -> Option<String> {
 
 fn micro_static_mapping(key: &KeyCombo) -> Option<String> {
     micro_config_paths().into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         let value: serde_json::Value = serde_json::from_str(&content).ok()?;
         let object = value.as_object()?;
         object.iter().find_map(|(raw_key, action)| {
@@ -949,7 +948,7 @@ fn micro_static_mapping(key: &KeyCombo) -> Option<String> {
 
 fn kakoune_static_mapping(key: &KeyCombo) -> Option<String> {
     kakoune_config_paths().into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         content.lines().find_map(|raw_line| {
             let line = raw_line.split('#').next()?.trim();
             let mut fields = line.split_whitespace();
@@ -967,7 +966,7 @@ fn kakoune_static_mapping(key: &KeyCombo) -> Option<String> {
 
 fn vscode_static_mapping(key: &KeyCombo) -> Option<String> {
     vscode_config_paths().into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         parse_vscode_mapping(&content, key).map(|mapping| format!("{}: {mapping}", path.display()))
     })
 }
@@ -991,7 +990,7 @@ fn parse_vscode_mapping(content: &str, key: &KeyCombo) -> Option<String> {
 
 fn jetbrains_static_mapping(key: &KeyCombo) -> Option<String> {
     jetbrains_config_paths().into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
+        let content = crate::recording::read_to_string(&path).ok()?;
         parse_jetbrains_mapping(&content, key)
             .map(|mapping| format!("{}: {mapping}", path.display()))
     })
@@ -1069,7 +1068,7 @@ fn xml_attribute(tag: &str, name: &str) -> Option<String> {
 
 fn vscode_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("VSCODE_KEYBINDINGS") {
+    if let Some(path) = crate::recording::env_var_os("VSCODE_KEYBINDINGS") {
         paths.push(PathBuf::from(path));
     }
     let Some(base) = crate::util::config_base() else {
@@ -1083,19 +1082,19 @@ fn vscode_config_paths() -> Vec<PathBuf> {
 
 fn jetbrains_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("JETBRAINS_KEYMAP") {
+    if let Some(path) = crate::recording::env_var_os("JETBRAINS_KEYMAP") {
         paths.push(PathBuf::from(path));
     }
     let Some(base) = crate::util::config_base() else {
         return paths;
     };
     let root = base.join("JetBrains");
-    let Ok(products) = fs::read_dir(root) else {
+    let Ok(products) = crate::recording::read_dir(root) else {
         return paths;
     };
     for product in products.flatten().take(32) {
         let keymaps = product.path().join("keymaps");
-        let Ok(files) = fs::read_dir(keymaps) else {
+        let Ok(files) = crate::recording::read_dir(keymaps) else {
             continue;
         };
         for file in files.flatten().take(64) {
@@ -1110,10 +1109,10 @@ fn jetbrains_config_paths() -> Vec<PathBuf> {
 
 fn nvim_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("MYVIMRC") {
+    if let Some(path) = crate::recording::env_var_os("MYVIMRC") {
         paths.push(PathBuf::from(path));
     }
-    let app_name = std::env::var_os("NVIM_APPNAME").unwrap_or_else(|| "nvim".into());
+    let app_name = crate::recording::env_var_os("NVIM_APPNAME").unwrap_or_else(|| "nvim".into());
     if let Some(app_base) = crate::util::config_base().map(|base| base.join(app_name)) {
         paths.push(app_base.join("init.lua"));
         paths.push(app_base.join("init.vim"));
@@ -1123,7 +1122,7 @@ fn nvim_config_paths() -> Vec<PathBuf> {
 
 fn vim_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("MYVIMRC") {
+    if let Some(path) = crate::recording::env_var_os("MYVIMRC") {
         paths.push(PathBuf::from(path));
     }
     if let Some(base) = crate::util::config_base() {
@@ -1131,7 +1130,7 @@ fn vim_config_paths() -> Vec<PathBuf> {
         paths.push(base.join("vimrc"));
         paths.push(base.join(".vimrc"));
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         let home = PathBuf::from(home);
         paths.push(home.join(".vimrc"));
         paths.push(home.join(".vim/vimrc"));
@@ -1145,7 +1144,7 @@ fn emacs_config_paths() -> Vec<PathBuf> {
         paths.push(base.join("emacs/early-init.el"));
         paths.push(base.join("emacs/init.el"));
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         let home = PathBuf::from(home);
         paths.push(home.join(".emacs"));
         paths.push(home.join(".emacs.d/early-init.el"));
@@ -1161,7 +1160,7 @@ fn helix_config_paths() -> Vec<PathBuf> {
     if let Some(base) = crate::util::config_base() {
         paths.push(base.join("helix/config.toml"));
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         paths.push(PathBuf::from(home).join(".config/helix/config.toml"));
     }
     paths
@@ -1169,13 +1168,13 @@ fn helix_config_paths() -> Vec<PathBuf> {
 
 fn micro_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(base) = std::env::var_os("MICRO_CONFIG_HOME") {
+    if let Some(base) = crate::recording::env_var_os("MICRO_CONFIG_HOME") {
         paths.push(PathBuf::from(base).join("bindings.json"));
     }
     if let Some(base) = crate::util::config_base() {
         paths.push(base.join("micro/bindings.json"));
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         paths.push(PathBuf::from(home).join(".config/micro/bindings.json"));
     }
     paths.push(PathBuf::from("/etc/micro/bindings.json"));
@@ -1187,7 +1186,7 @@ fn kakoune_config_paths() -> Vec<PathBuf> {
     if let Some(base) = crate::util::config_base() {
         paths.push(base.join("kak/kakrc"));
     }
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = crate::recording::env_var_os("HOME") {
         let home = PathBuf::from(home);
         paths.push(home.join(".config/kak/kakrc"));
         paths.push(home.join(".kakrc"));

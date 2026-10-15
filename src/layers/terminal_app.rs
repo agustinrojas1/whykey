@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -59,7 +58,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             vec!["set the terminal's config path or use its defaults".into()],
         );
     };
-    let content = match fs::read_to_string(&path) {
+    let content = match crate::recording::read_to_string(&path) {
         Ok(content) => content,
         Err(error) => {
             return LayerResult::new(
@@ -276,7 +275,7 @@ fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<Term
             None,
         );
     };
-    let content = match fs::read_to_string(&path) {
+    let content = match crate::recording::read_to_string(&path) {
         Ok(content) => content,
         Err(error) => {
             return (
@@ -354,16 +353,18 @@ impl std::fmt::Display for TerminalKind {
 }
 
 pub(crate) fn terminal_kind() -> Option<TerminalKind> {
-    if env::var_os("KONSOLE_PROFILE_NAME").is_some() || env::var_os("KONSOLE_VERSION").is_some() {
+    if crate::recording::env_var_os("KONSOLE_PROFILE_NAME").is_some()
+        || crate::recording::env_var_os("KONSOLE_VERSION").is_some()
+    {
         return Some(TerminalKind::Konsole);
     }
-    if env::var_os("KITTY_WINDOW_ID").is_some() {
+    if crate::recording::env_var_os("KITTY_WINDOW_ID").is_some() {
         return Some(TerminalKind::Kitty);
     }
-    if env::var_os("WEZTERM_PANE").is_some() {
+    if crate::recording::env_var_os("WEZTERM_PANE").is_some() {
         return Some(TerminalKind::WezTerm);
     }
-    if env::var_os("ALACRITTY_SOCKET").is_some() {
+    if crate::recording::env_var_os("ALACRITTY_SOCKET").is_some() {
         return Some(TerminalKind::Alacritty);
     }
     kind_from_program(&terminal_program()?)
@@ -385,7 +386,7 @@ fn kind_from_program(program: &str) -> Option<TerminalKind> {
 /// single identity source shared by the Ghostty and generic terminal
 /// adapters.
 pub(crate) fn terminal_program() -> Option<String> {
-    program_from_env(|name| env::var(name).ok())
+    program_from_env(|name| crate::recording::env_var(name).ok())
 }
 
 fn program_from_env(var: impl Fn(&str) -> Option<String>) -> Option<String> {
@@ -409,21 +410,21 @@ fn program_from_term(term: &str) -> Option<&'static str> {
 
 fn config_path(kind: TerminalKind) -> Option<PathBuf> {
     if let Some(path) = match kind {
-        TerminalKind::Alacritty => env::var_os("ALACRITTY_CONFIG_FILE"),
+        TerminalKind::Alacritty => crate::recording::env_var_os("ALACRITTY_CONFIG_FILE"),
         TerminalKind::Kitty => None,
-        TerminalKind::Foot => env::var_os("FOOT_CONFIG"),
+        TerminalKind::Foot => crate::recording::env_var_os("FOOT_CONFIG"),
         TerminalKind::WezTerm => None,
         TerminalKind::Konsole => None,
     } {
         let path = PathBuf::from(path);
-        if path.is_file() {
+        if path.recorded_is_file() {
             return Some(path);
         }
     }
     let base = crate::util::config_base()?;
     let candidates = match kind {
         TerminalKind::Kitty => {
-            let kitty_base = env::var_os("KITTY_CONFIG_DIRECTORY")
+            let kitty_base = crate::recording::env_var_os("KITTY_CONFIG_DIRECTORY")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| base.join("kitty"));
             vec![kitty_base.join("kitty.conf")]
@@ -437,7 +438,7 @@ fn config_path(kind: TerminalKind) -> Option<PathBuf> {
         TerminalKind::WezTerm => unreachable!("WezTerm uses its effective key command"),
         TerminalKind::Konsole => unreachable!("Konsole resolves its active keytab"),
     };
-    candidates.into_iter().find(|path| path.is_file())
+    candidates.into_iter().find(|path| path.recorded_is_file())
 }
 
 fn parse_bindings(kind: TerminalKind, content: &str) -> Vec<Binding> {
@@ -471,19 +472,19 @@ fn load_wezterm_bindings() -> Result<(Vec<Binding>, String), String> {
 }
 
 fn load_konsole_bindings() -> Result<(Vec<Binding>, String), String> {
-    let profile_name = env::var("KONSOLE_PROFILE_NAME")
+    let profile_name = crate::recording::env_var("KONSOLE_PROFILE_NAME")
         .ok()
         .or_else(konsole_default_profile)
         .unwrap_or_else(|| "default".into());
     let keytab_name = konsole_profile_keytab(&profile_name).unwrap_or_else(|| "default".into());
-    let keytab_path = env::var_os("KONSOLE_KEYTAB")
+    let keytab_path = crate::recording::env_var_os("KONSOLE_KEYTAB")
         .map(PathBuf::from)
-        .filter(|path| path.is_file())
+        .filter(|path| path.recorded_is_file())
         .or_else(|| find_konsole_keytab(&keytab_name))
         .ok_or_else(|| {
             format!("could not find Konsole keytab '{keytab_name}' for profile '{profile_name}'")
         })?;
-    let content = fs::read_to_string(&keytab_path).map_err(|error| {
+    let content = crate::recording::read_to_string(&keytab_path).map_err(|error| {
         format!(
             "could not read Konsole keytab {}: {error}",
             keytab_path.display()
@@ -500,7 +501,7 @@ fn load_konsole_bindings() -> Result<(Vec<Binding>, String), String> {
 
 fn konsole_default_profile() -> Option<String> {
     let base = crate::util::config_base()?;
-    let content = fs::read_to_string(base.join("konsolerc")).ok()?;
+    let content = crate::recording::read_to_string(base.join("konsolerc")).ok()?;
     let profile = ini_value(&content, "DefaultProfile")?;
     Some(profile.trim_end_matches(".profile").to_owned())
 }
@@ -513,7 +514,7 @@ fn konsole_profile_keytab(profile_name: &str) -> Option<String> {
     ];
     candidates
         .into_iter()
-        .find_map(|path| fs::read_to_string(path).ok())
+        .find_map(|path| crate::recording::read_to_string(path).ok())
         .and_then(|content| ini_value(&content, "KeyBindings"))
 }
 
@@ -541,7 +542,7 @@ fn find_konsole_keytab(name: &str) -> Option<PathBuf> {
         .into_iter()
         .flatten()
         .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
-        .find(|path| path.is_file())
+        .find(|path| path.recorded_is_file())
 }
 
 fn parse_wezterm(content: &str) -> Vec<Binding> {

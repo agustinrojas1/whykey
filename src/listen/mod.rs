@@ -143,7 +143,7 @@ pub struct EvdevDeviceInfo {
 /// actionable and to show the path accepted by `listen --device`.
 #[cfg(target_os = "linux")]
 pub fn evdev_devices() -> Vec<EvdevDeviceInfo> {
-    let Ok(entries) = std::fs::read_dir("/dev/input") else {
+    let Ok(entries) = crate::recording::read_dir("/dev/input") else {
         return Vec::new();
     };
     let mut paths = entries

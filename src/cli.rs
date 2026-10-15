@@ -656,6 +656,8 @@ pub(crate) mod doctor_support {
     use std::env;
     use std::process::Command;
 
+    use whykey::recording::PathInputs;
+
     use whykey::command;
 
     pub(crate) struct DoctorState {
@@ -713,9 +715,9 @@ pub(crate) mod doctor_support {
 
     pub(crate) fn shell_snapshot_available(shell: &str) -> bool {
         match shell.rsplit('/').next().unwrap_or(shell) {
-            "bash" => env::var_os("WHYKEY_READLINE_BINDINGS").is_some(),
-            "zsh" => env::var_os("WHYKEY_ZLE_BINDINGS").is_some(),
-            "fish" => env::var_os("WHYKEY_FISH_BINDINGS").is_some(),
+            "bash" => whykey::recording::env_var_os("WHYKEY_READLINE_BINDINGS").is_some(),
+            "zsh" => whykey::recording::env_var_os("WHYKEY_ZLE_BINDINGS").is_some(),
+            "fish" => whykey::recording::env_var_os("WHYKEY_FISH_BINDINGS").is_some(),
             _ => false,
         }
     }
@@ -734,19 +736,24 @@ pub(crate) mod doctor_support {
         };
         let path = std::path::Path::new(program);
         if path.components().count() > 1 {
-            return path.is_file();
+            return path.recorded_is_file();
         }
-        env::var_os("PATH").is_some_and(|path_value| {
-            env::split_paths(&path_value).any(|directory| directory.join(program).is_file())
+        whykey::recording::env_var_os("PATH").is_some_and(|path_value| {
+            env::split_paths(&path_value)
+                .any(|directory| directory.join(program).recorded_is_file())
         })
     }
 
     pub(crate) fn detected_terminal_program() -> Option<String> {
-        let set = |name: &str| env::var(name).ok().filter(|value| !value.is_empty());
+        let set = |name: &str| {
+            whykey::recording::env_var(name)
+                .ok()
+                .filter(|value| !value.is_empty())
+        };
         set("TERM_PROGRAM")
             .or_else(|| set("LC_TERMINAL"))
             .or_else(|| {
-                let term = env::var("TERM").ok()?;
+                let term = whykey::recording::env_var("TERM").ok()?;
                 let normalized = term.to_ascii_lowercase();
                 matches!(
                     normalized.as_str(),
@@ -757,26 +764,28 @@ pub(crate) mod doctor_support {
     }
 
     pub(crate) fn detect_extension(name: &str) -> bool {
-        if let Some(paths) = env::var_os("PATH") {
+        if let Some(paths) = whykey::recording::env_var_os("PATH") {
             for directory in env::split_paths(&paths) {
-                if directory.join(name).is_file() {
+                if directory.join(name).recorded_is_file() {
                     return true;
                 }
             }
         }
-        std::path::Path::new("extensions").join(name).is_file()
+        std::path::Path::new("extensions")
+            .join(name)
+            .recorded_is_file()
     }
 
     pub(crate) fn detect_nvim_server() -> Option<String> {
-        env::var("NVIM_LISTEN_ADDRESS")
+        whykey::recording::env_var("NVIM_LISTEN_ADDRESS")
             .ok()
-            .or_else(|| env::var("NVIM").ok())
+            .or_else(|| whykey::recording::env_var("NVIM").ok())
             .filter(|value| !value.is_empty())
             .or_else(scan_proc_nvim_server)
     }
 
     fn scan_proc_nvim_server() -> Option<String> {
-        let entries = std::fs::read_dir("/proc").ok()?;
+        let entries = whykey::recording::read_dir("/proc").ok()?;
         for entry in entries.flatten() {
             let name = entry.file_name();
             let pid_str = name.to_str()?;
@@ -784,7 +793,7 @@ pub(crate) mod doctor_support {
                 continue;
             }
             let cmdline_path = entry.path().join("cmdline");
-            let Ok(bytes) = std::fs::read(cmdline_path) else {
+            let Ok(bytes) = whykey::recording::read(cmdline_path) else {
                 continue;
             };
             let cmd = String::from_utf8_lossy(&bytes);

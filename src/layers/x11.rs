@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
@@ -16,7 +15,7 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
         "X11 xbindkeys: xbindkeys configuration was not found; runtime X11 bindings remain unknown"
             .to_owned()
     })?;
-    let content = fs::read_to_string(&path)
+    let content = crate::recording::read_to_string(&path)
         .map_err(|error| format!("X11 xbindkeys: config: {}: {error}", path.display()))?;
     Ok(parse_bindings(&content)
         .into_iter()
@@ -57,7 +56,7 @@ impl X11 {
                 ],
             );
         };
-        let content = match fs::read_to_string(&path) {
+        let content = match crate::recording::read_to_string(&path) {
             Ok(content) => content,
             Err(error) => {
                 return LayerResult::new(
@@ -109,21 +108,23 @@ struct Binding {
 }
 
 fn x11_session() -> bool {
-    env::var("XDG_SESSION_TYPE")
+    crate::recording::env_var("XDG_SESSION_TYPE")
         .ok()
         .is_some_and(|value| value.eq_ignore_ascii_case("x11"))
-        || (env::var_os("DISPLAY").is_some() && env::var_os("WAYLAND_DISPLAY").is_none())
+        || (crate::recording::env_var_os("DISPLAY").is_some()
+            && crate::recording::env_var_os("WAYLAND_DISPLAY").is_none())
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("XBINDKEYSRC") {
+    if let Some(path) = crate::recording::env_var_os("XBINDKEYSRC") {
         let path = PathBuf::from(path);
-        if path.is_file() {
+        if path.recorded_is_file() {
             return Some(path);
         }
     }
-    let path = env::var_os("HOME").map(|home| PathBuf::from(home).join(".xbindkeysrc"))?;
-    path.is_file().then_some(path)
+    let path = crate::recording::env_var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".xbindkeysrc"))?;
+    path.recorded_is_file().then_some(path)
 }
 
 fn parse_bindings(content: &str) -> Vec<Binding> {

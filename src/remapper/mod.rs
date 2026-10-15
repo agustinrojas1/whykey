@@ -13,10 +13,8 @@ mod kmonad;
 mod sexp;
 mod xremap;
 
+use crate::recording::PathInputs;
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -191,18 +189,19 @@ fn same_device_name(left: &str, right: &str) -> bool {
 
 /// The kernel name of the evdev device behind a device file.
 fn evdev_device_name(path: &Path) -> Option<String> {
-    let target = fs::canonicalize(path).ok()?;
+    let target = crate::recording::canonicalize(path).ok()?;
     let node = target.file_name()?.to_str()?;
     if !node.starts_with("event") {
         return None;
     }
-    let name = fs::read_to_string(format!("/sys/class/input/{node}/device/name")).ok()?;
+    let name =
+        crate::recording::read_to_string(format!("/sys/class/input/{node}/device/name")).ok()?;
     Some(name.trim().to_owned())
 }
 
 /// Names of the present input devices.
 fn present_device_names() -> Option<Vec<String>> {
-    let content = fs::read_to_string("/proc/bus/input/devices").ok()?;
+    let content = crate::recording::read_to_string("/proc/bus/input/devices").ok()?;
     Some(
         content
             .lines()
@@ -272,7 +271,9 @@ pub fn detect() -> Vec<Detection> {
 }
 
 pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Detection> {
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if crate::recording::env_var_os("SSH_CONNECTION").is_some()
+        || crate::recording::env_var_os("SSH_TTY").is_some()
+    {
         return Vec::new();
     }
     let mut detections: BTreeMap<String, Detection> = BTreeMap::new();
@@ -291,7 +292,7 @@ pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Dete
         config_paths.sort();
         config_paths.dedup();
         for path in config_paths {
-            if !path.is_file() {
+            if !path.recorded_is_file() {
                 continue;
             }
             detection.configurations.push(path.display().to_string());
@@ -876,8 +877,8 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
     let mut located = Located::default();
     match name {
         "keyd" => {
-            let (dir, system) = match env::var_os(config_env).map(PathBuf::from) {
-                Some(path) if path.is_dir() => (path, false),
+            let (dir, system) = match crate::recording::env_var_os(config_env).map(PathBuf::from) {
+                Some(path) if path.recorded_is_dir() => (path, false),
                 Some(path) => {
                     located.groups.push(Group {
                         paths: vec![path],
@@ -887,7 +888,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                 }
                 None => (PathBuf::from("/etc/keyd"), true),
             };
-            match fs::read_dir(&dir) {
+            match crate::recording::read_dir(&dir) {
                 Ok(entries) => {
                     let mut paths: Vec<PathBuf> = entries
                         .flatten()
@@ -913,7 +914,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
             }
             if system {
                 located.keyd_app_config =
-                    expand_home("~/.config/keyd/app.conf").filter(|path| path.is_file());
+                    expand_home("~/.config/keyd/app.conf").filter(|path| path.recorded_is_file());
             }
         }
         "kanata" => {
@@ -932,7 +933,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                 }
             }
             if located.groups.is_empty() && located.unreadable.is_empty() {
-                let candidates = match env::var_os(config_env) {
+                let candidates = match crate::recording::env_var_os(config_env) {
                     Some(path) => vec![PathBuf::from(path)],
                     // A running kanata without `-c` reads kanata.kbd.
                     None if !pids.is_empty() => expand_home("~/.config/kanata/kanata.kbd")
@@ -964,7 +965,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                 }
             }
             if located.groups.is_empty() && located.unreadable.is_empty() {
-                let candidates = match env::var_os(config_env) {
+                let candidates = match crate::recording::env_var_os(config_env) {
                     Some(path) => vec![PathBuf::from(path)],
                     None => files_with_extensions("~/.config/xremap", &["yml", "yaml"]),
                 };
@@ -991,7 +992,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
             // kmonad has no default configuration; a stopped one may run
             // any of these.
             if pids.is_empty() {
-                let candidates = match env::var_os(config_env) {
+                let candidates = match crate::recording::env_var_os(config_env) {
                     Some(path) => vec![PathBuf::from(path)],
                     None => files_with_extensions("~/.config/kmonad", &["kbd"]),
                 };
@@ -1006,7 +1007,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
             match read_config(&config) {
                 Ok(content) => match input_remapper::autoload(&content) {
                     Ok(entries) => {
-                        let groups = fs::read_to_string("/proc/bus/input/devices")
+                        let groups = crate::recording::read_to_string("/proc/bus/input/devices")
                             .ok()
                             .map(|devices| input_remapper::present_groups(&devices));
                         located
@@ -1026,12 +1027,12 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                         .push(format!("{}: {reason}", config.display())),
                 },
                 Err(_)
-                    if fs::metadata(&config)
+                    if crate::recording::metadata(&config)
                         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) => {}
                 Err(reason) => located.unreadable.push(reason),
             }
             let symbols = dir.join("xmodmap.json");
-            located.layout_symbols = symbols.exists().then_some(symbols);
+            located.layout_symbols = symbols.recorded_exists().then_some(symbols);
         }
         _ => {}
     }
@@ -1041,7 +1042,7 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
 fn single_file_groups(paths: Vec<PathBuf>) -> impl Iterator<Item = Group> {
     paths
         .into_iter()
-        .filter(|path| path.exists())
+        .filter(|path| path.recorded_exists())
         .map(|path| Group {
             paths: vec![path],
             ..Group::default()
@@ -1051,13 +1052,13 @@ fn single_file_groups(paths: Vec<PathBuf>) -> impl Iterator<Item = Group> {
 /// input-remapper's configuration directory: `config_env` (a directory or
 /// its `config.json`), else `$XDG_CONFIG_HOME/input-remapper-2`.
 fn input_remapper_dir(config_env: &str) -> Option<PathBuf> {
-    if let Some(path) = env::var_os(config_env).map(PathBuf::from) {
-        if path.is_dir() {
+    if let Some(path) = crate::recording::env_var_os(config_env).map(PathBuf::from) {
+        if path.recorded_is_dir() {
             return Some(path);
         }
         return path.parent().map(Path::to_path_buf);
     }
-    match env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+    match crate::recording::env_var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
         Some(config) => Some(PathBuf::from(config).join("input-remapper-2")),
         None => expand_home("~/.config/input-remapper-2"),
     }
@@ -1121,7 +1122,7 @@ fn xremap_config_args(args: &[String]) -> (Vec<String>, bool) {
 }
 
 fn process_args(pid: u32) -> Option<Vec<String>> {
-    let raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let raw = crate::recording::read(format!("/proc/{pid}/cmdline")).ok()?;
     Some(
         raw.split(|byte| *byte == 0)
             .filter(|part| !part.is_empty())
@@ -1136,7 +1137,7 @@ fn resolve_process_path(pid: u32, path: &str) -> Result<PathBuf, String> {
     if path.is_absolute() {
         return Ok(path);
     }
-    fs::read_link(format!("/proc/{pid}/cwd"))
+    crate::recording::read_link(format!("/proc/{pid}/cwd"))
         .map(|cwd| cwd.join(&path))
         .map_err(|error| {
             format!(
@@ -1148,7 +1149,9 @@ fn resolve_process_path(pid: u32, path: &str) -> Result<PathBuf, String> {
 
 fn expand_home(raw: &str) -> Option<PathBuf> {
     match raw.strip_prefix("~/") {
-        Some(rest) => env::var_os("HOME").map(|home| PathBuf::from(home).join(rest)),
+        Some(rest) => {
+            crate::recording::env_var_os("HOME").map(|home| PathBuf::from(home).join(rest))
+        }
         None => Some(PathBuf::from(raw)),
     }
 }
@@ -1157,7 +1160,7 @@ fn files_with_extensions(dir: &str, extensions: &[&str]) -> Vec<PathBuf> {
     let Some(dir) = expand_home(dir) else {
         return Vec::new();
     };
-    let Ok(entries) = fs::read_dir(dir) else {
+    let Ok(entries) = crate::recording::read_dir(dir) else {
         return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries
@@ -1177,7 +1180,7 @@ fn files_with_extensions(dir: &str, extensions: &[&str]) -> Vec<PathBuf> {
 /// `vendor:product` ids of the present input devices, as keyd's `[ids]`
 /// names them.
 fn present_input_ids() -> Option<Vec<String>> {
-    let content = fs::read_to_string("/proc/bus/input/devices").ok()?;
+    let content = crate::recording::read_to_string("/proc/bus/input/devices").ok()?;
     Some(
         content
             .lines()
@@ -1196,11 +1199,10 @@ fn present_input_ids() -> Option<Vec<String>> {
 
 /// Read a configuration file, keeping the reason when it cannot be read.
 pub(crate) fn read_config(path: &Path) -> Result<String, String> {
-    let file = fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let mut content = String::new();
-    file.take(MAX_CONFIG_BYTES as u64 + 1)
-        .read_to_string(&mut content)
+    let bytes = crate::recording::read_prefix(path, MAX_CONFIG_BYTES)
         .map_err(|error| format!("{}: {error}", path.display()))?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| format!("{}: stream did not contain valid UTF-8", path.display()))?;
     if content.len() > MAX_CONFIG_BYTES {
         return Err(format!("{}: larger than 1 MiB", path.display()));
     }
@@ -1254,27 +1256,27 @@ fn known_remappers() -> [(
 
 fn config_candidates(env_name: &str, defaults: &[&str]) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(path) = env::var_os(env_name) {
+    if let Some(path) = crate::recording::env_var_os(env_name) {
         candidates.push(PathBuf::from(path));
     }
     for raw in defaults {
         let expanded = if let Some(rest) = raw.strip_prefix("~/") {
-            env::var_os("HOME")
+            crate::recording::env_var_os("HOME")
                 .map(PathBuf::from)
                 .map(|home| home.join(rest))
         } else {
             Some(PathBuf::from(raw))
         };
         let Some(path) = expanded else { continue };
-        if path.is_dir() {
-            let Ok(entries) = fs::read_dir(&path) else {
+        if path.recorded_is_dir() {
+            let Ok(entries) = crate::recording::read_dir(&path) else {
                 continue;
             };
             candidates.extend(
                 entries
                     .flatten()
                     .map(|entry| entry.path())
-                    .filter(|path| path.is_file())
+                    .filter(|path| path.recorded_is_file())
                     .take(MAX_CONFIG_FILES),
             );
         } else {
@@ -1440,6 +1442,8 @@ fn parse_xremap_transformations(path: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
 
     #[test]
     fn parses_only_literal_keyd_mappings() {

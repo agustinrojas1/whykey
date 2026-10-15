@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
@@ -73,10 +72,10 @@ pub fn ipc_available() -> bool {
 }
 
 pub fn detect() -> Option<Desktop> {
-    let desktop = env::var("XDG_CURRENT_DESKTOP")
+    let desktop = crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .flat_map(|value| value.split(':').map(str::to_owned).collect::<Vec<_>>())
         .find_map(|name| desktop_from_name(&name));
     desktop.or_else(|| {
@@ -176,14 +175,14 @@ fn desktop_from_name(name: &str) -> Option<Desktop> {
 
 fn config_path(desktop: Desktop) -> Option<PathBuf> {
     for variable in desktop.env_names() {
-        if let Some(path) = env::var_os(variable) {
+        if let Some(path) = crate::recording::env_var_os(variable) {
             let path = PathBuf::from(path);
-            if path.is_file() {
+            if path.recorded_is_file() {
                 return Some(path);
             }
         }
     }
-    let home = env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::recording::env_var_os("HOME").map(PathBuf::from)?;
     let candidates = match desktop {
         Desktop::Awesome => vec![
             home.join(".config/awesome/rc.lua"),
@@ -198,19 +197,20 @@ fn config_path(desktop: Desktop) -> Option<PathBuf> {
             home.join(".xmonad/config.hs"),
         ],
     };
-    candidates.into_iter().find(|path| path.is_file())
+    candidates.into_iter().find(|path| path.recorded_is_file())
 }
 
 fn read_config(path: &PathBuf) -> Result<String, String> {
-    let metadata =
-        fs::metadata(path).map_err(|error| format!("config: {}: {error}", path.display()))?;
-    if metadata.len() > MAX_CONFIG_BYTES as u64 {
+    let metadata = crate::recording::metadata(path)
+        .map_err(|error| format!("config: {}: {error}", path.display()))?;
+    if metadata.size() > MAX_CONFIG_BYTES as u64 {
         return Err(format!(
             "config: {} exceeds the {MAX_CONFIG_BYTES}-byte safety limit",
             path.display()
         ));
     }
-    fs::read_to_string(path).map_err(|error| format!("config: {}: {error}", path.display()))
+    crate::recording::read_to_string(path)
+        .map_err(|error| format!("config: {}: {error}", path.display()))
 }
 
 fn parse(desktop: Desktop, content: &str) -> Vec<Binding> {

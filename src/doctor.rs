@@ -65,7 +65,7 @@ impl EvdevScan {
         if keyboard_devices {
             return Self::KeyboardDevices { readable };
         }
-        match std::fs::read_dir(input_dir) {
+        match crate::recording::read_dir(input_dir) {
             Ok(_) => Self::NoKeyboardDevices,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
                 Self::InputDirectoryDenied

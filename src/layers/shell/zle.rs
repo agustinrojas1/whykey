@@ -7,8 +7,6 @@
 //! `^[[1;5D` (Ctrl+Left) leaves `;5D` on the command line.
 
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -24,7 +22,7 @@ const DEFAULTS_SCRIPT: &str =
 const MAX_CONTINUATIONS: usize = 4;
 
 pub(super) fn inspect(inputs: &[TerminalInput], exe: Option<&Path>) -> LayerResult {
-    let keymaps = match env::var_os("WHYKEY_ZLE_BINDINGS") {
+    let keymaps = match crate::recording::env_var_os("WHYKEY_ZLE_BINDINGS") {
         Some(dump) => Keymaps::live(&dump.to_string_lossy()),
         None => Keymaps::from_startup_files(exe),
     };
@@ -118,7 +116,11 @@ impl Keymaps {
             .filter(|text| !text.trim().is_empty());
         let read: Vec<(PathBuf, String)> = startup_files()
             .into_iter()
-            .filter_map(|path| fs::read_to_string(&path).ok().map(|text| (path, text)))
+            .filter_map(|path| {
+                crate::recording::read_to_string(&path)
+                    .ok()
+                    .map(|text| (path, text))
+            })
             .collect();
         let files: Vec<String> = read
             .iter()
@@ -587,7 +589,7 @@ fn zle_notation(bytes: &[u8]) -> String {
 /// Startup files zsh reads for an interactive shell, in order. `$ZDOTDIR`
 /// relocates the per-user files.
 fn startup_files() -> Vec<PathBuf> {
-    let user = env::var_os("ZDOTDIR")
+    let user = crate::recording::env_var_os("ZDOTDIR")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
         .or_else(home_dir);

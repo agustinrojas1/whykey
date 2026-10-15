@@ -1,6 +1,3 @@
-use std::fs::File;
-use std::os::fd::AsRawFd;
-
 use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
 
 pub struct Terminal;
@@ -319,15 +316,7 @@ struct TtyState {
 }
 
 fn read_tty_state() -> Result<TtyState, String> {
-    let tty =
-        File::open("/dev/tty").map_err(|error| format!("failed to open /dev/tty: {error}"))?;
-    let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
-    if unsafe { libc::tcgetattr(tty.as_raw_fd(), &mut termios) } != 0 {
-        return Err(format!(
-            "failed to read terminal settings: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
+    let termios = crate::recording::tty_termios()?;
     Ok(tty_state_from_termios(&termios))
 }
 

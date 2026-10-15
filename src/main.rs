@@ -74,7 +74,7 @@ fn main() -> ExitCode {
         println!("whykey {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
-    cli::dispatch(
+    let code = cli::dispatch(
         argument,
         arguments.collect(),
         json,
@@ -82,7 +82,9 @@ fn main() -> ExitCode {
         verbose,
         color,
         schema_version,
-    )
+    );
+    // A replay that left recorded answers unused is not a clean run.
+    whykey::recording::finish(code)
 }
 
 /// Turns `println!`'s "failed printing to stdout: Broken pipe" panic into a
@@ -540,9 +542,11 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
     let observation_taps = whykey::doctor::observation_taps(&whykey::doctor::TapInputs {
         native: native_available.then_some(native_backend),
         wayland: (whykey::probe::available_display() == Some("Wayland"))
-            .then(|| env::var("WAYLAND_DISPLAY").ok())
+            .then(|| whykey::recording::env_var("WAYLAND_DISPLAY").ok())
             .flatten(),
-        x11: env::var("DISPLAY").ok().filter(|value| !value.is_empty()),
+        x11: whykey::recording::env_var("DISPLAY")
+            .ok()
+            .filter(|value| !value.is_empty()),
         xwayland: whykey::layers::x11_grab::xwayland_session(),
         remote: ssh,
         tty,

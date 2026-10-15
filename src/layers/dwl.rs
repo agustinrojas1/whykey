@@ -4,8 +4,7 @@
 //! the `static const Key keys[]` table from a local `config.h` and reports
 //! conditional evidence only; it never claims runtime activation.
 
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::Path;
 
 use crate::key::KeyCombo;
@@ -21,20 +20,20 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| name.trim().eq_ignore_ascii_case("dwl"))
         })
-        || config_path().is_some_and(|path| path.is_file())
+        || config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 pub fn ipc_available() -> bool {
-    config_path().is_some_and(|path| path.is_file())
+    config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
@@ -134,7 +133,8 @@ struct Binding {
 }
 
 fn load_bindings(path: &Path) -> Result<Vec<Binding>, String> {
-    let bytes = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let bytes =
+        crate::recording::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
     if bytes.len() > MAX_CONFIG_BYTES {
         return Err(format!(
             "{} exceeds the {MAX_CONFIG_BYTES}-byte config limit",
@@ -147,7 +147,7 @@ fn load_bindings(path: &Path) -> Result<Vec<Binding>, String> {
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
-    if let Some(path) = env::var_os("DWL_CONFIG") {
+    if let Some(path) = crate::recording::env_var_os("DWL_CONFIG") {
         return Some(path.into());
     }
     let base = crate::util::config_base()?;

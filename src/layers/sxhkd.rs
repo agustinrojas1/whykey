@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::{Path, PathBuf};
 
 use crate::key::KeyCombo;
@@ -36,10 +35,10 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
@@ -215,13 +214,13 @@ fn config_files() -> Vec<PathBuf> {
 
 /// The configured sxhkdrc, without looking at running processes.
 fn config_path() -> Option<PathBuf> {
-    override_path().or_else(|| default_config_path().filter(|path| path.is_file()))
+    override_path().or_else(|| default_config_path().filter(|path| path.recorded_is_file()))
 }
 
 fn override_path() -> Option<PathBuf> {
-    env::var_os("SXHKD_CONFIG")
+    crate::recording::env_var_os("SXHKD_CONFIG")
         .map(PathBuf::from)
-        .filter(|path| path.is_file())
+        .filter(|path| path.recorded_is_file())
 }
 
 fn default_config_path() -> Option<PathBuf> {
@@ -231,7 +230,7 @@ fn default_config_path() -> Option<PathBuf> {
 /// Config files of the sxhkd process `pid`, read from its command line.
 /// Relative paths are resolved against that process's working directory.
 fn running_config_files(pid: u32) -> Option<Vec<PathBuf>> {
-    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let cmdline = crate::recording::read(format!("/proc/{pid}/cmdline")).ok()?;
     let cmdline = String::from_utf8_lossy(&cmdline);
     let arguments: Vec<&str> = cmdline
         .strip_suffix('\0')
@@ -240,7 +239,7 @@ fn running_config_files(pid: u32) -> Option<Vec<PathBuf>> {
         .skip(1)
         .collect();
     let (config, extras) = sxhkd_config_arguments(&arguments);
-    let cwd = fs::read_link(format!("/proc/{pid}/cwd")).ok();
+    let cwd = crate::recording::read_link(format!("/proc/{pid}/cwd")).ok();
     let resolve = |path: &str| match &cwd {
         Some(cwd) if Path::new(path).is_relative() => cwd.join(path),
         _ => PathBuf::from(path),

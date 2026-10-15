@@ -1,6 +1,5 @@
+use crate::recording::PathInputs;
 use std::collections::HashSet;
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -461,7 +460,7 @@ fn inspect_config(
 fn load_config_file(path: &Path) -> Result<ConfigState, String> {
     let mut state = ConfigState::default();
     let mut visited = HashSet::new();
-    if path.exists() {
+    if path.recorded_exists() {
         load_file(path, &mut state, &mut visited, false)?;
     }
     Ok(state)
@@ -474,7 +473,7 @@ fn load_file(
     optional: bool,
 ) -> Result<(), String> {
     let path = expand_path(path);
-    let canonical = match fs::canonicalize(&path) {
+    let canonical = match crate::recording::canonicalize(&path) {
         Ok(path) => path,
         Err(error) if optional && error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(format!("failed to resolve {}: {error}", path.display())),
@@ -483,7 +482,7 @@ fn load_file(
         return Ok(());
     }
 
-    let content = fs::read_to_string(&canonical)
+    let content = crate::recording::read_to_string(&canonical)
         .map_err(|error| format!("failed to read {}: {error}", canonical.display()))?;
     state.loaded_files.push(canonical.clone());
     let mut includes = Vec::new();
@@ -634,7 +633,7 @@ fn resolve_include(parent: &Path, include: &Path) -> PathBuf {
 fn expand_path(path: &Path) -> PathBuf {
     let value = path.to_string_lossy();
     if let Some(rest) = value.strip_prefix("~/") {
-        if let Some(home) = env::var_os("HOME") {
+        if let Some(home) = crate::recording::env_var_os("HOME") {
             return PathBuf::from(home).join(rest);
         }
     }
@@ -644,11 +643,15 @@ fn expand_path(path: &Path) -> PathBuf {
 fn default_config_path() -> PathBuf {
     let base = crate::util::config_base().unwrap_or_else(|| PathBuf::from(".config"));
     let modern = base.join("ghostty/config.ghostty");
-    if modern.exists() {
+    if modern.recorded_exists() {
         modern
     } else {
         let legacy = base.join("ghostty/config");
-        if legacy.exists() { legacy } else { modern }
+        if legacy.recorded_exists() {
+            legacy
+        } else {
+            modern
+        }
     }
 }
 

@@ -1,5 +1,3 @@
-use std::env;
-use std::fs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
@@ -173,7 +171,7 @@ fn load_config() -> (Vec<u8>, Vec<(usize, String)>, Option<PathBuf>) {
     let mut lines = Vec::new();
     let mut source = None;
     for path in paths {
-        let Ok(content) = fs::read_to_string(&path) else {
+        let Ok(content) = crate::recording::read_to_string(&path) else {
             continue;
         };
         // The last readable file is the highest-priority source in the
@@ -198,7 +196,7 @@ fn load_config() -> (Vec<u8>, Vec<(usize, String)>, Option<PathBuf>) {
 
 fn screen_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(path) = env::var_os("SYSTEM_SCREENRC") {
+    if let Some(path) = crate::recording::env_var_os("SYSTEM_SCREENRC") {
         paths.push(PathBuf::from(path));
     } else {
         // These are the common install locations; unreadable/nonexistent
@@ -210,9 +208,9 @@ fn screen_config_paths() -> Vec<PathBuf> {
     // Screen uses SCREENRC when set and otherwise falls back to ~/.screenrc.
     // Do not merge both user files: doing so could report bindings that the
     // running Screen process never loaded.
-    if let Some(path) = env::var_os("SCREENRC") {
+    if let Some(path) = crate::recording::env_var_os("SCREENRC") {
         paths.push(PathBuf::from(path));
-    } else if let Some(home) = env::var_os("HOME") {
+    } else if let Some(home) = crate::recording::env_var_os("HOME") {
         paths.push(PathBuf::from(home).join(".screenrc"));
     }
     paths

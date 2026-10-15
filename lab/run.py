@@ -181,6 +181,11 @@ REQUIRED = {"id", "description", "tier", "environment", "ground_truth", "whykey"
 SCENARIO_TIMEOUT = 180
 # Verdicts a scenario may tolerate via whykey.accept, keyed by "fired".
 HONEST_UNCERTAINTY = {True: {"handled-uncertain"}, False: {"uncertain-continues"}}
+# Recordings (`--record`): the format version, and the exit statuses src/recording.rs
+# gives a replay that cannot answer (unrecorded input, unused answers, setup).
+RECORDING_FORMAT = 1
+RECORDING_EXITS = {96: "recording setup failed", 97: "unrecorded input", 98: "recorded input never requested"}
+RECORDINGS = LAB / "recordings"
 
 
 def scenario_image(scenario: dict) -> str:
@@ -365,6 +370,7 @@ def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> l
         "-v", f"{LAB}:/lab:ro",
         "-v", f"{args.binary}:/w/whykey:ro",
         "-e", f"WHYKEY_LAB_KEEP={'1' if keep else '0'}",
+        *(["-e", "WHYKEY_LAB_RECORD=1"] if getattr(args, "record", None) else []),
         image_for(args, scenario),
         "python3", "/lab/driver.py", f"/lab/{path.relative_to(LAB).as_posix()}",
     ]
@@ -596,6 +602,151 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
     return record
 
 
+def replay_blocker(scenario: dict, result: dict) -> str | None:
+    """Why a scenario cannot be replayed from a recording, or None when it can."""
+    whykey = scenario["whykey"]
+    if whykey.get("run", "direct") == "background":
+        return "live input: `listen` runs while the keyboard or a capture socket feeds it"
+    if whykey.get("observation") or whykey.get("silent") or whykey.get("suppress"):
+        return "live input: observation, silent-capture or suppression checks read a live key"
+    if whykey.get("via") or whykey.get("not_via"):
+        return "upstream remapper check: not part of the recording check yet"
+    if result["whykey"].get("recording") is None:
+        return "no recording was taken for this run"
+    return None
+
+
+def recording_document(path: Path, scenario: dict, record: dict, result: dict, identity: dict) -> dict:
+    """What lab/recordings/<scenario>.json holds: how whykey was run, the verdict
+    the lab accepted, the text checks run.py applies, and every answer whykey took."""
+    whykey = scenario["whykey"]
+    layers = whykey.get("layer", [])
+    return {
+        "format": RECORDING_FORMAT,
+        "scenario": scenario["id"],
+        "file": record["file"],
+        "group": path.parent.name,
+        "environment": scenario["environment"],
+        "description": scenario["description"],
+        "recorded_on": identity["recorded_on"],
+        "whykey": {
+            "version": identity["version"],
+            "commit": identity["commit"],
+            "argv": [*whykey["args"], "--json", "--schema-version", "2"],
+            "run": whykey.get("run", "direct"),
+        },
+        "image": identity["image"],
+        "label": record["ground_truth"]["label"],
+        "expect": {
+            "verdicts": record["expected"],
+            "layers": [layers] if isinstance(layers, str) else layers,
+            "summary": whykey.get("summary"),
+            "detail": whykey.get("detail"),
+            "binding": whykey.get("binding"),
+            "stderr": whykey.get("stderr"),
+            "confidence": whykey.get("confidence"),
+        },
+        "inputs": result["whykey"]["recording"],
+    }
+
+
+def write_recording(target: Path, document: dict) -> None:
+    """One input per line, so a refresh shows which answers changed."""
+    head = {key: value for key, value in document.items() if key != "inputs"}
+    lines = ["{"]
+    for key, value in head.items():
+        lines.append(f"  {json.dumps(key)}: {json.dumps(value, ensure_ascii=False)},")
+    lines.append('  "inputs": [')
+    items = [json.dumps(item, ensure_ascii=False, separators=(",", ":")) for item in document["inputs"]]
+    lines += [f"    {item}{',' if index < len(items) - 1 else ''}" for index, item in enumerate(items)]
+    lines += ["  ]", "}"]
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def verify_replay(args, path: Path, scenario: dict, document: dict, live: dict) -> tuple[bool, str]:
+    """Replay the recording on this host, with no environment, and apply the
+    scenario's own verdict rules (evaluate) to the replayed report. The
+    recording is kept only when the replay reproduces the lab's verdict."""
+    args.record.mkdir(parents=True, exist_ok=True)
+    scratch = args.record / f".verify-{scenario['id']}.json"
+    scratch.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    try:
+        completed = subprocess.run(
+            [str(args.binary), *document["whykey"]["argv"]],
+            env={"WHYKEY_REPLAY": str(scratch.resolve())},
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(args.record.resolve()),
+        )
+    finally:
+        scratch.unlink(missing_ok=True)
+    if completed.returncode in RECORDING_EXITS:
+        first = completed.stderr.strip().splitlines()[:1]
+        return False, f"{RECORDING_EXITS[completed.returncode]}: {first[0] if first else ''}"
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        report = None
+    replayed = evaluate(path, scenario, {
+        "ground_truth": live["ground_truth"],
+        "whykey": {
+            "exit_code": completed.returncode,
+            "report": report,
+            "stdout": completed.stdout if report is None else None,
+            "stderr": completed.stderr,
+        },
+    })
+    if replayed["pass"]:
+        return True, ""
+    return False, replayed.get("error") or (
+        f"replay gave {replayed['whykey_verdict']}, expected {'|'.join(replayed.get('expected') or [])}"
+    )
+
+
+def write_recordings(args, records: list[dict], raw: dict, loaded: dict) -> None:
+    """`--record`: store the recording of every passing scenario that replays."""
+    recorded = 0
+    for record in records:
+        path, scenario = loaded[record["file"]]
+        result = raw[record["file"]]
+        if not record["pass"]:
+            record["replay"] = "not recorded: the live run did not pass"
+            continue
+        blocker = replay_blocker(scenario, result)
+        if blocker:
+            record["replay"] = f"not replayable: {blocker}"
+            continue
+        identity = recording_identity(args, scenario)
+        document = recording_document(path, scenario, record, result, identity)
+        ok, reason = verify_replay(args, path, scenario, document, result)
+        if not ok:
+            record["replay"] = f"not replayable: {reason}"
+            continue
+        write_recording(args.record / f"{scenario['id']}.json", document)
+        record["replay"] = "recorded"
+        recorded += 1
+    print(f"\nrecorded {recorded} scenario(s) into {args.record}", file=sys.stderr)
+
+
+def recording_identity(args, scenario: dict) -> dict:
+    """Which whykey and which lab image (the scenario's own image) produced a recording."""
+    version = subprocess.run([str(args.binary), "--version"], capture_output=True, text=True).stdout.strip()
+    commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                            capture_output=True, text=True).stdout.strip() or "unknown"
+    dirty = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain"],
+                           capture_output=True, text=True).stdout.strip()
+    reference = image_for(args, scenario)
+    image = subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}}", reference],
+                           capture_output=True, text=True).stdout.strip()
+    return {
+        "version": version,
+        "commit": commit + ("+uncommitted" if dirty else ""),
+        "image": f"{reference} {image}".strip(),
+        "recorded_on": time.strftime("%Y-%m-%d"),
+    }
+
+
 def print_table(records: list[dict]) -> None:
     rows = [("scenario", "layer", "ground truth", "whykey", "result")]
     for record in records:
@@ -687,6 +838,11 @@ def main() -> int:
                              "content hash (tools/lab_images.py hash NAME)")
     parser.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "whykey")
     parser.add_argument("--results", type=Path, default=LAB / "results.json")
+    parser.add_argument("--record", type=Path, metavar="DIR",
+                        help="store each passing scenario's recording (every answer whykey read) in "
+                             "DIR/<scenario>.json, when a replay of it on this host reproduces the verdict; "
+                             "scenarios that cannot be replayed are reported (see lab/README.md). "
+                             "Ignored by --merge")
     parser.add_argument("--repeat", type=int, default=1, metavar="N",
                         help="run every selected scenario N times at once (flake hunting)")
     parser.add_argument("--retries", type=int, default=2, metavar="N",
@@ -725,6 +881,7 @@ def main() -> int:
         raise SystemExit("no scenario matched")
 
     records = []
+    raw: dict[str, dict] = {}
     jobs = max(1, args.jobs)
     vms = max(1, min(args.vms, jobs))
     with concurrent.futures.ThreadPoolExecutor(max_workers=vms) as vm_pool, \
@@ -738,7 +895,9 @@ def main() -> int:
         }
         for future in concurrent.futures.as_completed(futures):
             path, scenario = futures[future]
-            record = evaluate(path, scenario, future.result())
+            result = future.result()
+            record = evaluate(path, scenario, result)
+            raw[record["file"]] = result
             record["image"] = image_for(args, scenario)
             records.append(record)
             status = ("PASS~" if record.get("tolerated") else "PASS") if record["pass"] else "FAIL"
@@ -753,13 +912,17 @@ def main() -> int:
             break
         for record in errored:
             path, scenario = loaded[record["file"]]
-            retry = evaluate(path, scenario, run_container(args, path, scenario, 0))
+            result = run_container(args, path, scenario, 0)
+            retry = evaluate(path, scenario, result)
+            raw[retry["file"]] = result
             retry["retried"] = attempt
             retry["image"] = image_for(args, scenario)
             records[records.index(record)] = retry
             status = ("PASS~" if retry.get("tolerated") else "PASS") if retry["pass"] else "FAIL"
             print(f"[{status}] {retry['scenario']} (retry {attempt})", file=sys.stderr, flush=True)
 
+    if args.record:
+        write_recordings(args, records, raw, loaded)
     return finish(records, args.results)
 
 

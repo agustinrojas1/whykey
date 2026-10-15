@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::process::Command;
 
 use serde::Serialize;
@@ -95,14 +94,22 @@ pub fn detect() -> Vec<Detection> {
 }
 
 pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Detection> {
-    if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+    if crate::recording::env_var_os("SSH_CONNECTION").is_some()
+        || crate::recording::env_var_os("SSH_TTY").is_some()
+    {
         return Vec::new();
     }
     let mut found: BTreeMap<String, (Vec<String>, Vec<String>)> = BTreeMap::new();
     for (variable, value) in [
-        ("GTK_IM_MODULE", env::var("GTK_IM_MODULE").ok()),
-        ("QT_IM_MODULE", env::var("QT_IM_MODULE").ok()),
-        ("XMODIFIERS", env::var("XMODIFIERS").ok()),
+        (
+            "GTK_IM_MODULE",
+            crate::recording::env_var("GTK_IM_MODULE").ok(),
+        ),
+        (
+            "QT_IM_MODULE",
+            crate::recording::env_var("QT_IM_MODULE").ok(),
+        ),
+        ("XMODIFIERS", crate::recording::env_var("XMODIFIERS").ok()),
     ] {
         let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
             continue;
@@ -446,7 +453,7 @@ fn run_fcitx5_method(method: &str) -> Result<std::process::Output, String> {
 }
 
 fn fcitx5_service_available() -> Result<(), String> {
-    if env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+    if crate::recording::env_var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
         return Err("D-Bus session address is unset; skipped Fcitx5 runtime query".into());
     }
 

@@ -1,7 +1,6 @@
 //! Small, dependency-free terminal presentation helpers shared by text
 //! renderers. Machine-readable output never goes through this module.
 
-use std::env;
 use std::fmt;
 use std::io::IsTerminal;
 use std::str::FromStr;
@@ -73,8 +72,8 @@ impl RenderOptions {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
             ColorChoice::Auto => {
-                env::var_os("NO_COLOR").is_none()
-                    && env::var("TERM").ok().as_deref() != Some("dumb")
+                crate::recording::env_var_os("NO_COLOR").is_none()
+                    && crate::recording::env_var("TERM").ok().as_deref() != Some("dumb")
                     && std::io::stdout().is_terminal()
             }
         }
@@ -115,7 +114,7 @@ impl RenderOptions {
 }
 
 pub fn terminal_width() -> usize {
-    env::var("COLUMNS")
+    crate::recording::env_var("COLUMNS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|width| *width >= 20)

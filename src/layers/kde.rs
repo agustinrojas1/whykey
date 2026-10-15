@@ -6,8 +6,7 @@
 //! grabs them. Without the daemon, `kglobalshortcutsrc`, the file it
 //! persists to, is a configured-only hint.
 
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -30,10 +29,10 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .flat_map(|desktop| desktop.split(':').map(str::to_owned).collect::<Vec<_>>())
         .any(|desktop| {
             matches!(
@@ -105,7 +104,7 @@ fn runtime_inventory() -> Result<Vec<BindingRecord>, String> {
 
 fn file_inventory() -> Result<Vec<BindingRecord>, String> {
     let path = config_path().ok_or("kglobalshortcutsrc was not found")?;
-    let content = fs::read_to_string(&path)
+    let content = crate::recording::read_to_string(&path)
         .map_err(|error| format!("config: {}: {error}", path.display()))?;
     Ok(parse_config(&content)
         .bindings
@@ -141,7 +140,12 @@ impl Kde {
         match runtime_matches(&codes) {
             Ok(matches) => {
                 let owner = wayland_owner_missing_keys();
-                let inhibitable = inhibitable(env::var("XDG_SESSION_TYPE").ok().as_deref(), key);
+                let inhibitable = inhibitable(
+                    crate::recording::env_var("XDG_SESSION_TYPE")
+                        .ok()
+                        .as_deref(),
+                    key,
+                );
                 let mut result = inspect_runtime(&matches, owner.as_deref(), inhibitable);
                 if let Some(alias) = us_shifted_alias(key) {
                     result.details.push(format!(
@@ -299,7 +303,7 @@ fn inspect_file(key: &KeyCombo, runtime_error: &str) -> LayerResult {
             vec![runtime_line, "kglobalshortcutsrc was not found".into()],
         );
     };
-    let content = match fs::read_to_string(&path) {
+    let content = match crate::recording::read_to_string(&path) {
         Ok(content) => content,
         Err(error) => {
             return LayerResult::unavailable(
@@ -378,7 +382,7 @@ fn inspect_file(key: &KeyCombo, runtime_error: &str) -> LayerResult {
 /// name (started first, without XDG_SESSION_TYPE) never sees a key press.
 /// Everything else returns None: the owner is not known to miss keys.
 fn wayland_owner_missing_keys() -> Option<String> {
-    let session = env::var("XDG_SESSION_TYPE").ok();
+    let session = crate::recording::env_var("XDG_SESSION_TYPE").ok();
     if session.as_deref() != Some("wayland") {
         return None;
     }
@@ -410,7 +414,7 @@ fn owner_process_name() -> Option<String> {
         return None;
     }
     let pid = busctl_pid(&output.stdout)?;
-    let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let comm = crate::recording::read_to_string(format!("/proc/{pid}/comm")).ok()?;
     Some(comm.trim_end().to_owned())
 }
 
@@ -817,15 +821,15 @@ struct ParsedConfig {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("KGLOBALSHORTCUTS_CONFIG") {
+    if let Some(path) = crate::recording::env_var_os("KGLOBALSHORTCUTS_CONFIG") {
         let path = PathBuf::from(path);
-        if path.is_file() {
+        if path.recorded_is_file() {
             return Some(path);
         }
     }
     let base = crate::util::config_base()?;
     let path = base.join("kglobalshortcutsrc");
-    path.is_file().then_some(path)
+    path.recorded_is_file().then_some(path)
 }
 
 /// Parse kglobalshortcutsrc. Each entry is a KConfig list

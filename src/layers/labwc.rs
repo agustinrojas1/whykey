@@ -1,5 +1,4 @@
-use std::env;
-use std::fs;
+use crate::recording::PathInputs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
@@ -30,20 +29,20 @@ pub fn applicable() -> bool {
     if super::compositor::remote_session() {
         return false;
     }
-    env::var("XDG_CURRENT_DESKTOP")
+    crate::recording::env_var("XDG_CURRENT_DESKTOP")
         .ok()
         .into_iter()
-        .chain(env::var("XDG_SESSION_DESKTOP").ok())
+        .chain(crate::recording::env_var("XDG_SESSION_DESKTOP").ok())
         .any(|desktop| {
             desktop
                 .split(':')
                 .any(|name| name.trim().eq_ignore_ascii_case("labwc"))
         })
-        || config_path().is_some_and(|path| path.is_file())
+        || config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 pub fn ipc_available() -> bool {
-    config_path().is_some_and(|path| path.is_file())
+    config_path().is_some_and(|path| path.recorded_is_file())
 }
 
 impl Labwc {
@@ -108,21 +107,21 @@ fn load_bindings() -> Result<(PathBuf, Vec<openbox::Binding>), String> {
     let path = config_path().ok_or_else(|| {
         "labwc rc.xml was not found; runtime keybind state remains unknown".to_owned()
     })?;
-    let content = fs::read_to_string(&path)
+    let content = crate::recording::read_to_string(&path)
         .map_err(|error| format!("config: {}: {error}", path.display()))?;
     Ok((path, openbox::parse_bindings(&content)))
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("LABWC_CONFIG") {
+    if let Some(path) = crate::recording::env_var_os("LABWC_CONFIG") {
         let path = PathBuf::from(path);
-        if path.is_file() {
+        if path.recorded_is_file() {
             return Some(path);
         }
     }
     let base = crate::util::config_base()?;
     let path = base.join("labwc/rc.xml");
-    path.is_file().then_some(path)
+    path.recorded_is_file().then_some(path)
 }
 
 #[cfg(test)]

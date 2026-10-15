@@ -8,6 +8,7 @@
 //! mouse). This holds on every compositor because it relies only on the core
 //! client protocol, not on compositor-specific IPC.
 
+use crate::recording::PathInputs;
 use std::io;
 use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
@@ -78,9 +79,9 @@ pub trait ProbeWindow {
 /// environment without connecting: "Wayland" when the Wayland socket exists,
 /// "X11" when DISPLAY is set, else `None`.
 pub fn available_display() -> Option<&'static str> {
-    if wayland::socket_path().is_ok_and(|path| path.exists()) {
+    if wayland::socket_path().is_ok_and(|path| path.recorded_exists()) {
         Some("Wayland")
-    } else if std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty()) {
+    } else if crate::recording::env_var_os("DISPLAY").is_some_and(|value| !value.is_empty()) {
         Some("X11")
     } else {
         None
@@ -92,7 +93,9 @@ pub fn available_display() -> Option<&'static str> {
 /// connection, in which case DISPLAY is tried.
 pub fn planned_display() -> Option<&'static str> {
     match available_display()? {
-        "Wayland" if std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty()) => {
+        "Wayland"
+            if crate::recording::env_var_os("DISPLAY").is_some_and(|value| !value.is_empty()) =>
+        {
             Some("Wayland (falls back to X11 if the connection fails)")
         }
         display => Some(display),
@@ -110,7 +113,8 @@ pub fn open_window(title: &str) -> io::Result<Box<dyn ProbeWindow>> {
     } else {
         None
     };
-    let x11_configured = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty());
+    let x11_configured =
+        crate::recording::env_var_os("DISPLAY").is_some_and(|value| !value.is_empty());
     if !x11_configured {
         return Err(wayland_error.unwrap_or_else(|| {
             io::Error::new(

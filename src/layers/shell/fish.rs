@@ -8,8 +8,6 @@
 //! through to the generic binding (`bind ''`), which inserts printable text.
 
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -26,10 +24,10 @@ const PRESETS: &[&str] = &[
 ];
 
 pub(super) fn inspect(inputs: &[TerminalInput], exe: Option<&Path>) -> LayerResult {
-    let bindings = match env::var_os("WHYKEY_FISH_BINDINGS") {
+    let bindings = match crate::recording::env_var_os("WHYKEY_FISH_BINDINGS") {
         Some(dump) => Bindings::live(
             &dump.to_string_lossy(),
-            env::var("WHYKEY_FISH_MODE")
+            crate::recording::env_var("WHYKEY_FISH_MODE")
                 .ok()
                 .filter(|mode| !mode.is_empty()),
         ),
@@ -88,7 +86,11 @@ impl Bindings {
         let files = config_files();
         let read: Vec<(PathBuf, String)> = files
             .into_iter()
-            .filter_map(|path| fs::read_to_string(&path).ok().map(|text| (path, text)))
+            .filter_map(|path| {
+                crate::recording::read_to_string(&path)
+                    .ok()
+                    .map(|text| (path, text))
+            })
             .collect();
         let universal = universal_key_bindings();
         // The preset is the user's choice when a universal variable or a
@@ -577,7 +579,7 @@ fn named_key(name: &str) -> Option<Vec<u8>> {
 /// `$fish_key_bindings` stored as a universal variable.
 fn universal_key_bindings() -> Option<String> {
     let path = crate::util::config_base()?.join("fish/fish_variables");
-    let text = fs::read_to_string(path).ok()?;
+    let text = crate::recording::read_to_string(path).ok()?;
     text.lines().find_map(|line| {
         line.strip_prefix("SETUVAR fish_key_bindings:")
             .or_else(|| line.strip_prefix("SETUVAR --export fish_key_bindings:"))
@@ -626,7 +628,7 @@ fn config_files() -> Vec<PathBuf> {
     .into_iter()
     .flatten()
     {
-        if let Ok(entries) = fs::read_dir(&dir) {
+        if let Ok(entries) = crate::recording::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path

@@ -15,7 +15,6 @@
 //! selection and never infer missing state from a US layout.
 
 use std::collections::HashMap;
-use std::env;
 use std::process::Command;
 use std::sync::LazyLock;
 
@@ -143,11 +142,11 @@ impl Rmlvo {
 }
 
 fn env_value(primary: &str, fallback: &str) -> Option<String> {
-    env::var(primary)
+    crate::recording::env_var(primary)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            env::var(fallback)
+            crate::recording::env_var(fallback)
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
@@ -316,7 +315,7 @@ pub fn compile_keymap_from_environment() -> Option<String> {
 /// test harness. A compositor remains the authoritative source when it can
 /// expose this state; evdev has no standard way to query it itself.
 pub fn group_from_environment() -> usize {
-    env::var("WHYKEY_XKB_GROUP")
+    crate::recording::env_var("WHYKEY_XKB_GROUP")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0)

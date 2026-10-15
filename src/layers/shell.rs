@@ -10,8 +10,6 @@
 mod fish;
 mod zle;
 
-use std::env;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::layers::{
@@ -96,14 +94,14 @@ pub struct ShellProcess {
 /// among whykey's ancestors (reached only through other shells, e.g. an
 /// `sh -c` wrapper), else `$SHELL`.
 pub fn running_shell() -> Option<ShellProcess> {
-    let snapshot = if env::var_os("WHYKEY_READLINE_BINDINGS").is_some()
-        || env::var_os("WHYKEY_READLINE_MACROS").is_some()
-        || env::var_os("WHYKEY_READLINE_SHELL_BINDINGS").is_some()
+    let snapshot = if crate::recording::env_var_os("WHYKEY_READLINE_BINDINGS").is_some()
+        || crate::recording::env_var_os("WHYKEY_READLINE_MACROS").is_some()
+        || crate::recording::env_var_os("WHYKEY_READLINE_SHELL_BINDINGS").is_some()
     {
         Some("bash")
-    } else if env::var_os("WHYKEY_ZLE_BINDINGS").is_some() {
+    } else if crate::recording::env_var_os("WHYKEY_ZLE_BINDINGS").is_some() {
         Some("zsh")
-    } else if env::var_os("WHYKEY_FISH_BINDINGS").is_some() {
+    } else if crate::recording::env_var_os("WHYKEY_FISH_BINDINGS").is_some() {
         Some("fish")
     } else {
         None
@@ -122,7 +120,7 @@ pub fn running_shell() -> Option<ShellProcess> {
 }
 
 fn login_shell() -> Option<ShellProcess> {
-    let shell = env::var_os("SHELL")?;
+    let shell = crate::recording::env_var_os("SHELL")?;
     let name = Path::new(&shell)
         .file_name()?
         .to_string_lossy()
@@ -138,7 +136,7 @@ fn login_shell() -> Option<ShellProcess> {
 /// an editor, a launcher) ends the walk: keys typed there do not reach a
 /// shell prompt that this process can identify.
 fn parent_shell() -> Option<ShellProcess> {
-    let mut pid = std::os::unix::process::parent_id();
+    let mut pid = crate::recording::parent_process_id();
     for _ in 0..16 {
         let process = ProcessInfo::read(pid)?;
         let name = process.shell_name()?;
@@ -180,13 +178,13 @@ struct ProcessInfo {
 
 impl ProcessInfo {
     fn read(pid: u32) -> Option<Self> {
-        let command = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let command = crate::recording::read(format!("/proc/{pid}/cmdline")).ok()?;
         let argv = command
             .split(|byte| *byte == 0)
             .filter(|part| !part.is_empty())
             .map(|part| String::from_utf8_lossy(part).into_owned())
             .collect();
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let stat = crate::recording::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let close = stat.rfind(") ")?;
         let parent = stat[close + 2..]
             .split_whitespace()
@@ -213,7 +211,7 @@ impl ProcessInfo {
     }
 
     fn exe(&self) -> Option<PathBuf> {
-        fs::read_link(format!("/proc/{}/exe", self.pid)).ok()
+        crate::recording::read_link(format!("/proc/{}/exe", self.pid)).ok()
     }
 }
 
@@ -524,7 +522,7 @@ fn ansi_c_quoted(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, word: &mu
 }
 
 fn home_dir() -> Option<PathBuf> {
-    env::var_os("HOME")
+    crate::recording::env_var_os("HOME")
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
 }

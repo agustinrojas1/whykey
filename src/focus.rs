@@ -87,7 +87,7 @@ fn through_terminal(target: FocusedTarget) -> FocusedTarget {
 /// Whether `pid` has the same controlling terminal as whykey. False when
 /// either has none or `/proc` cannot tell.
 pub fn shares_terminal_with_whykey(pid: u32) -> bool {
-    match (proc_stat(pid), proc_stat(std::process::id())) {
+    match (proc_stat(pid), proc_stat(crate::recording::process_id())) {
         (Some(target), Some(own)) => own.tty != 0 && target.tty == own.tty,
         _ => false,
     }
@@ -135,7 +135,7 @@ fn foreground_choice(children: &[ProcStat]) -> ForegroundChoice {
 fn proc_stat(pid: u32) -> Option<ProcStat> {
     parse_stat(
         pid,
-        &std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?,
+        &crate::recording::read_to_string(format!("/proc/{pid}/stat")).ok()?,
     )
 }
 
@@ -161,13 +161,13 @@ fn parent_pid(stat: &str) -> Option<u32> {
 }
 
 fn child_pids(parent: u32) -> Vec<u32> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    let Ok(entries) = crate::recording::read_dir("/proc") else {
         return Vec::new();
     };
     entries
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
         .filter(|pid| {
-            std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            crate::recording::read_to_string(format!("/proc/{pid}/stat"))
                 .ok()
                 .and_then(|stat| parent_pid(&stat))
                 == Some(parent)

@@ -316,7 +316,7 @@ impl Connection {
     /// Connects to `$DISPLAY`, authenticating with the matching
     /// Xauthority entry (`$XAUTHORITY`, else `~/.Xauthority`).
     pub fn connect_from_env() -> io::Result<Self> {
-        if std::env::var_os("DISPLAY").is_none_or(|value| value.is_empty()) {
+        if crate::recording::env_var_os("DISPLAY").is_none_or(|value| value.is_empty()) {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "DISPLAY is not set",
@@ -723,7 +723,7 @@ impl X11Window {
                 window,
                 net_wm_pid,
                 xproto::AtomEnum::CARDINAL,
-                &[std::process::id()],
+                &[crate::recording::process_id()],
             ),
             conn.change_property32(
                 xproto::PropMode::REPLACE,

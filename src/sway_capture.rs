@@ -6,7 +6,6 @@
 //! for. This keeps `listen` honest while still making Sway a real registry
 //! backend rather than a special case.
 
-use std::env;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -29,7 +28,7 @@ pub fn capture_connect() -> Result<Box<dyn NativeCaptureIo>, String> {
 }
 
 pub fn probe_available() -> bool {
-    env::var_os("SWAYSOCK")
+    crate::recording::env_var_os("SWAYSOCK")
         .filter(|value| !value.is_empty())
         .and_then(|path| UnixStream::connect(path).ok())
         .is_some()
@@ -44,7 +43,8 @@ pub struct SwayCaptureSession {
 
 impl SwayCaptureSession {
     fn connect() -> Result<Self, String> {
-        let path = env::var_os("SWAYSOCK").ok_or_else(|| "SWAYSOCK is not set".to_owned())?;
+        let path = crate::recording::env_var_os("SWAYSOCK")
+            .ok_or_else(|| "SWAYSOCK is not set".to_owned())?;
         let stream = UnixStream::connect(path).map_err(|error| format!("Sway IPC: {error}"))?;
         stream
             .set_nonblocking(true)

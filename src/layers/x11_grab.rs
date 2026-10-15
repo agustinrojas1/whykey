@@ -25,7 +25,6 @@
 //! own bindings are not X grabs, and an X client's grab fires only while an
 //! X11 window has keyboard focus.
 
-use std::env;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
 use std::thread;
@@ -94,7 +93,9 @@ pub fn availability() -> (bool, &'static str) {
 }
 
 fn env_value(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|value| !value.is_empty())
+    crate::recording::env_var(name)
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 /// Whether the Wayland socket accepts connections. Only consulted when the

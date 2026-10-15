@@ -43,19 +43,19 @@ const SEAT_VERSION: u32 = 7;
 
 /// Whether the environment names a Wayland display.
 pub fn display_configured() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
+    crate::recording::env_var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty())
 }
 
 /// `$WAYLAND_DISPLAY` when absolute, else `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY`.
 pub(crate) fn socket_path() -> io::Result<PathBuf> {
-    let display = std::env::var_os("WAYLAND_DISPLAY")
+    let display = crate::recording::env_var_os("WAYLAND_DISPLAY")
         .filter(|value| !value.is_empty())
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "WAYLAND_DISPLAY is not set"))?;
     let display = PathBuf::from(display);
     if display.is_absolute() {
         return Ok(display);
     }
-    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+    let runtime = crate::recording::env_var_os("XDG_RUNTIME_DIR")
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             io::Error::new(

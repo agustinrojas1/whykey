@@ -5,6 +5,7 @@
 //! files it includes, and matched against the mode reported by
 //! `GET_BINDING_STATE`.
 
+use crate::recording::PathInputs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -475,14 +476,17 @@ impl Parser {
                 .push(format!("include {target} matched no files"));
         }
         for path in paths {
-            let identity = path.canonicalize().unwrap_or_else(|_| path.clone());
+            let identity = path
+                .recorded_canonicalize()
+                .unwrap_or_else(|_| path.clone());
             if self.visiting.contains(&identity) {
                 continue;
             }
             let provided = self.provided.iter().position(|source| {
                 source.path.as_deref().is_some_and(|candidate| {
                     candidate == path
-                        || candidate.canonicalize().ok().as_deref() == Some(identity.as_path())
+                        || candidate.recorded_canonicalize().ok().as_deref()
+                            == Some(identity.as_path())
                 })
             });
             let contents = match provided {
@@ -490,7 +494,7 @@ impl Parser {
                     self.used[index] = true;
                     self.provided[index].contents.clone()
                 }
-                None => match std::fs::read_to_string(&path) {
+                None => match crate::recording::read_to_string(&path) {
                     Ok(contents) => {
                         self.out.notes.push(format!(
                             "{} read from disk; it may have changed since the compositor loaded it",
@@ -627,7 +631,7 @@ fn unquote(value: &str) -> String {
 /// The shell expansion Sway/i3 apply to include paths that matters for
 /// locating files: `~` and environment variables.
 fn expand_shell_path(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::recording::env_var("HOME").unwrap_or_default();
     let path = match path.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
         _ => path.to_owned(),
@@ -651,7 +655,7 @@ fn expand_shell_path(path: &str) -> String {
         if name.is_empty() {
             output.push('$');
         } else {
-            output.push_str(&std::env::var(name).unwrap_or_default());
+            output.push_str(&crate::recording::env_var(name).unwrap_or_default());
             rest = after;
         }
     }
@@ -679,7 +683,7 @@ fn expand_glob(path: &Path) -> Result<Vec<PathBuf>, String> {
     if pattern.contains('[') {
         return Err("bracket wildcards are not expanded".into());
     }
-    let entries = match std::fs::read_dir(parent) {
+    let entries = match crate::recording::read_dir(parent) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("{}: {error}", parent.display())),
@@ -830,7 +834,8 @@ pub(crate) fn load(family: &Family) -> Result<LoadedConfig, String> {
             .into_iter()
             .chain((family.config_candidates)())
             .find(|candidate| {
-                std::fs::read_to_string(candidate).is_ok_and(|contents| contents == main.contents)
+                crate::recording::read_to_string(candidate)
+                    .is_ok_and(|contents| contents == main.contents)
             });
     }
     let parsed = parse_config(&main, provided);
@@ -1544,7 +1549,8 @@ mode lab {
 
     #[test]
     fn includes_expand_globs_relative_to_the_including_file() {
-        let base = std::env::temp_dir().join(format!("whykey-tiling-{}", std::process::id()));
+        let base =
+            std::env::temp_dir().join(format!("whykey-tiling-{}", crate::recording::process_id()));
         let conf = base.join("config.d");
         std::fs::create_dir_all(&conf).unwrap();
         std::fs::write(conf.join("10-apps.conf"), "bindsym $mod+b exec browser\n").unwrap();
