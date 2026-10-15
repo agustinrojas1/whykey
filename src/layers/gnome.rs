@@ -123,8 +123,108 @@ pub fn binding_inventory() -> Result<Vec<BindingRecord>, String> {
 
 impl Gnome {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
+        if key.is_alone() {
+            return inspect_alone(key, read_overlay_key());
+        }
         inspect(load(), key, owner_running)
     }
+}
+
+/// `org.gnome.mutter overlay-key`: the modifier that opens the Activities
+/// overview when it is pressed and released on its own. `Ok(None)` when the
+/// schema is not installed.
+fn read_overlay_key() -> Result<Option<String>, String> {
+    let mut gsettings = Command::new("gsettings");
+    gsettings.args(["get", "org.gnome.mutter", "overlay-key"]);
+    let output = command::output(&mut gsettings).map_err(|error| format!("gsettings: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if stderr.contains("No such schema") || stderr.contains("No such key") {
+            return Ok(None);
+        }
+        return Err(super::gsettings::command_error(
+            "gsettings",
+            output.status,
+            &output.stderr,
+        ));
+    }
+    if stderr.contains("'memory' GSettings backend") {
+        return Err(
+            "gsettings fell back to the memory backend (dconf unreachable), so it reports schema defaults, not the session's overlay key".into(),
+        );
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(quoted_values(&text).into_iter().next())
+}
+
+/// A lone modifier on GNOME: mutter's `overlay-key` is the only gesture of
+/// this kind, and it is read live from GSettings.
+fn inspect_alone(key: &KeyCombo, overlay: Result<Option<String>, String>) -> LayerResult {
+    let shown = crate::style::human_key(key);
+    let overlay = match overlay {
+        Ok(overlay) => overlay,
+        Err(error) => {
+            return LayerResult::unavailable(
+                LAYER,
+                LayerId::Compositor,
+                "could not read GNOME's overlay-key from GSettings",
+                vec![error],
+            );
+        }
+    };
+    let mut details =
+        vec!["source: live GSettings (`gsettings get org.gnome.mutter overlay-key`)".to_owned()];
+    let Some(overlay) = overlay else {
+        details.push("the org.gnome.mutter schema or its overlay-key is not installed".into());
+        return LayerResult::new(
+            LAYER,
+            LayerId::Compositor,
+            Outcome::Unknown,
+            "GNOME's overlay-key could not be read",
+            details,
+        );
+    };
+    let names = key.alone_keysyms();
+    let bound = !overlay.is_empty()
+        && overlay != "disabled"
+        && names.contains(&crate::key::normalize_key_str(&overlay).as_str());
+    if !bound {
+        details.push(if overlay.is_empty() || overlay == "disabled" {
+            "overlay-key is disabled".to_owned()
+        } else {
+            format!("overlay-key is '{overlay}'")
+        });
+        return LayerResult::pass(
+            LAYER,
+            LayerId::Compositor,
+            format!("no GNOME lone-key shortcut uses {shown}"),
+            details,
+        )
+        .with_tier(EvidenceTier::LiveQuery);
+    }
+    details.push(format!(
+        "binding: org.gnome.mutter overlay-key = '{overlay}' (mutter opens the Activities overview when it is pressed and released alone)"
+    ));
+    details.push(
+        "mutter acts on the release when no other key was pressed in between; whether the press itself also reaches the focused window is not verified"
+            .into(),
+    );
+    let evidence = BindingEvidence::action(
+        "open the Activities overview".to_owned(),
+        BindingScope::Universal,
+        Some(SourceLocation::new("gsettings org.gnome.mutter", None)),
+    )
+    .with_dispatcher("mutter")
+    .with_description("overlay-key".to_owned());
+    LayerResult::new(
+        LAYER,
+        LayerId::Compositor,
+        Outcome::HandledUncertain,
+        format!("GNOME binds {shown} to the Activities overview on release"),
+        details,
+    )
+    .with_binding(evidence)
+    .with_tier(EvidenceTier::LiveQuery)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -727,5 +827,35 @@ mod tests {
         );
         let kept = inspect(Ok(mutter), &key, |_| Ok(false));
         assert_eq!(kept.outcome, Outcome::Consumed);
+    }
+
+    #[test]
+    fn overlay_key_is_the_super_gesture() {
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let result = inspect_alone(&key, Ok(Some("Super_L".into())));
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+        assert!(result.summary.contains("Activities"), "{}", result.summary);
+        let evidence = result.binding.expect("overlay-key is the binding");
+        assert_eq!(evidence.description.as_deref(), Some("overlay-key"));
+    }
+
+    #[test]
+    fn a_disabled_or_other_overlay_key_leaves_super_free() {
+        let key = KeyCombo::parse_alone("super").unwrap();
+        for value in ["", "disabled", "Alt_L"] {
+            let result = inspect_alone(&key, Ok(Some(value.into())));
+            assert_eq!(result.outcome, Outcome::Pass, "{value}");
+        }
+        let ctrl = KeyCombo::parse_alone("ctrl").unwrap();
+        let result = inspect_alone(&ctrl, Ok(Some("Super_L".into())));
+        assert_eq!(result.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn an_unreadable_overlay_key_is_unavailable() {
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let result = inspect_alone(&key, Err("gsettings: not found".into()));
+        assert_eq!(result.outcome, Outcome::Unavailable);
     }
 }

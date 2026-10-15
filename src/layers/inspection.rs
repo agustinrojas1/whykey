@@ -226,7 +226,11 @@ fn inspect_step(
         )
     });
     let mut results = route_after_remapper(remapper_result, request, |request| {
-        inspect_default_chain_inner_without_remapper(request, session, delivery)
+        if request.key.is_alone() {
+            inspect_alone_without_remapper(request, session)
+        } else {
+            inspect_default_chain_inner_without_remapper(request, session, delivery)
+        }
     });
     let generations_after = session.reload_generations();
     mark_stale_generation_evidence(&mut results, &generations_before, &generations_after);
@@ -473,11 +477,65 @@ pub(crate) fn select_target_endpoint(
     }
 }
 
+/// A modifier pressed and released on its own never reaches the terminal as
+/// bytes, so only the layers that act on the gesture are inspected: the
+/// remapper (tap-hold) and the compositor or desktop shell.
+fn inspect_alone_without_remapper(
+    request: &InspectRequest<'_>,
+    session: &crate::environment::Environment,
+) -> Vec<LayerResult> {
+    let mut acc = RouteAccumulator::new(request.force_continue);
+    if acc.check_deadline() {
+        return acc.finish();
+    }
+    acc.append(
+        inspect_compositor(request.key, request.physical_input.as_ref(), session),
+        ContinuationPolicy::StopOnTerminalInterception,
+    );
+    acc.finish()
+}
+
+/// Desktops whose modifier-only gesture whykey reads.
+const ALONE_DESKTOPS: &[&str] = &["hyprland", "sway", "i3", "gnome", "kde"];
+
+fn alone_unsupported(session: &crate::environment::Environment) -> LayerResult {
+    let name = session
+        .selected_compositor
+        .and_then(|id| {
+            crate::registry::DESKTOPS
+                .iter()
+                .find(|entry| entry.id == id)
+        })
+        .map(|entry| entry.display);
+    let summary = match name {
+        Some(name) => format!("whykey does not read {name}'s modifier-only shortcuts"),
+        None => "no desktop adapter reads modifier-only shortcuts here".to_owned(),
+    };
+    LayerResult::new(
+        "Compositor",
+        LayerId::Compositor,
+        Outcome::Unknown,
+        summary,
+        vec![
+            "modifier-only shortcuts are read for Hyprland (bindr/bindrt), Sway \
+             (bindsym --release), GNOME (overlay-key) and KDE (ModifierOnlyShortcuts)"
+                .into(),
+        ],
+    )
+}
+
 fn inspect_compositor(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
     session: &crate::environment::Environment,
 ) -> LayerResult {
+    if key.is_alone()
+        && !session
+            .selected_compositor
+            .is_some_and(|id| ALONE_DESKTOPS.contains(&id))
+    {
+        return alone_unsupported(session);
+    }
     // Only the selected (highest-scored applicable) manifest runs its
     // bindings command; inapplicable manifests are never executed.
     let extension = || {

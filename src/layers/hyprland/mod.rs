@@ -1609,4 +1609,85 @@ o.bind("SUPER + E", "Real", "exec")
 
         assert!(error.contains("expected an array"));
     }
+
+    fn alone(name: &str) -> KeyCombo {
+        KeyCombo::parse_alone(name).unwrap()
+    }
+
+    #[test]
+    fn bindrn_on_the_modifier_forwards_the_press_and_runs_on_release() {
+        let bindings = r#"[{
+            "modmask": 64, "key": "SUPER_L", "release": true, "non_consuming": true,
+            "dispatcher": "exec", "arg": "walker", "submap": ""
+        }]"#;
+        let result =
+            inspect_json_with_keycode(&alone("super"), bindings, "default", &[], &[], &[], None)
+                .unwrap();
+        assert_eq!(result.status(), LayerStatus::Handled);
+        assert_eq!(result.propagation(), Propagation::Continues);
+        assert!(
+            result.summary.contains("action runs on release"),
+            "{}",
+            result.summary
+        );
+        let evidence = result.binding.expect("the binding is named");
+        assert_eq!(evidence.action.as_deref(), Some("exec walker"));
+    }
+
+    #[test]
+    fn bindr_on_the_modifier_consumes_the_press_and_runs_on_release() {
+        let bindings = r#"[{
+            "modmask": 64, "key": "SUPER_L", "release": true,
+            "dispatcher": "exec", "arg": "walker", "submap": ""
+        }]"#;
+        let result =
+            inspect_json_with_keycode(&alone("super"), bindings, "default", &[], &[], &[], None)
+                .unwrap();
+        assert_eq!(result.propagation(), Propagation::Stops);
+        assert!(
+            result.summary.contains("runs on release") || result.summary.contains("on release")
+        );
+    }
+
+    #[test]
+    fn a_plain_bind_on_the_modifier_runs_on_press_and_consumes() {
+        let bindings = r#"[{
+            "modmask": 0, "key": "Super_L",
+            "dispatcher": "exec", "arg": "menu", "submap": ""
+        }]"#;
+        let result =
+            inspect_json_with_keycode(&alone("super"), bindings, "default", &[], &[], &[], None)
+                .unwrap();
+        assert_eq!(result.propagation(), Propagation::Stops);
+    }
+
+    #[test]
+    fn modifier_combinations_and_other_keys_are_not_a_lone_modifier() {
+        let bindings = r#"[
+            {"modmask": 65, "key": "SUPER_L", "release": true, "dispatcher": "exec", "arg": "a", "submap": ""},
+            {"modmask": 64, "key": "Return", "dispatcher": "exec", "arg": "b", "submap": ""},
+            {"modmask": 4, "key": "CONTROL_L", "release": true, "dispatcher": "exec", "arg": "c", "submap": ""}
+        ]"#;
+        let result =
+            inspect_json_with_keycode(&alone("super"), bindings, "default", &[], &[], &[], None)
+                .unwrap();
+        assert_eq!(result.status(), LayerStatus::NotHandled);
+        assert!(
+            result.summary.contains("no binding on"),
+            "{}",
+            result.summary
+        );
+    }
+
+    #[test]
+    fn a_binding_in_another_submap_is_not_active() {
+        let bindings = r#"[{
+            "modmask": 64, "key": "SUPER_L", "release": true,
+            "dispatcher": "exec", "arg": "x", "submap": "resize"
+        }]"#;
+        let result =
+            inspect_json_with_keycode(&alone("super"), bindings, "default", &[], &[], &[], None)
+                .unwrap();
+        assert_eq!(result.status(), LayerStatus::NotHandled);
+    }
 }

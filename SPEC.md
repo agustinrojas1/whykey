@@ -425,6 +425,41 @@ never discovered or invoked automatically.
 
 Parsing is case-insensitive. JSON keeps the numeric modifier mask. Text output orders modifiers `Ctrl`, `Alt`, `Shift`, `Super`, `Caps`, `Mod2`, `Mod3`, `AltGr` (Mod5), then the key. Kitty's Hyper and Num modifier bits are represented by the existing `MOD3`/`MOD2` masks. Mod5 means AltGr: terminal prediction never encodes it as a Kitty modifier and instead predicts the text the layout's AltGr level produces (see Ghostty inspection).
 
+## Modifier-only queries
+
+`whykey MODIFIER --alone` (also `whykey inspect MODIFIER --alone`) asks what
+happens when one modifier (`ctrl`, `alt`, `shift`, `super`, `hyper`, `altgr`)
+is pressed and released with no other key. Without `--alone` a bare
+modifier is a usage error that names the flag. `--alone` accepts exactly one
+modifier: not a combination and not a key.
+
+The query is a `KeyCombo` whose main key is the modifier (empty modifier mask)
+with an `alone` flag. Such a gesture produces no terminal bytes, so only the
+layers that act on it are inspected: the remapper and the compositor or
+desktop. The route table, glyphs and evidence tiers are the ordinary ones;
+terminal, TTY, input-method, multiplexer and shell rows are not reached.
+Readers, each with its own evidence tier:
+
+| Layer | Source | Tier |
+| --- | --- | --- |
+| keyd | `overload`, `overloadt`, `overloadt2`, `overloadi`, `lettermod` and `timeout` actions on the modifier's key | config file |
+| kanata | `tap-hold*` actions on the modifier's `defsrc` key | config file |
+| kmonad | `tap-hold*` and `tap-next*` buttons | config file |
+| xremap | `modmap` entries with `held` and `alone` | config file |
+| GNOME | `gsettings get org.gnome.mutter overlay-key` (Super only) | live query |
+| KDE Plasma | `[ModifierOnlyShortcuts]` in `kwinrc` (Shift, Control, Alt, Meta) | config file |
+| Hyprland | `bind`/`bindr`/`bindrt` entries from `hyprctl binds -j` whose key is the modifier's keysym (`Super_L`, `Super_R`, …) and whose modifier bits are empty or the key's own bit | live query |
+| Sway and i3 | `bindsym` (with or without `--release`) whose key is the modifier's keysym, same modifier-bit rule | live query |
+
+Remapper tap-hold results are always conditional: the finding names what a
+tap emits and what holding does, and says that timing decides. Other desktops
+report that whykey does not read their modifier-only shortcuts.
+
+Schema v2 adds `input.alone: true` (and `alone: true` on sequence steps) for
+such queries; it is absent otherwise. Schema v1 is unchanged: the key object
+keeps `modifiers` and `key` (the modifier's name, with `modifiers` zero) and
+`key_display` reads `SUPER (alone)`.
+
 ## Hyprland inspection
 
 1. Run `hyprctl binds -j` to read the effective binding set. When an entry has key `""`, keycode 0, and is not a catch-all, also run the text `hyprctl binds` listing.

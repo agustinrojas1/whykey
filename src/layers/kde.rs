@@ -126,6 +126,9 @@ fn file_inventory() -> Result<Vec<BindingRecord>, String> {
 
 impl Kde {
     pub fn inspect(&self, key: &KeyCombo) -> LayerResult {
+        if key.is_alone() {
+            return inspect_alone(key, read_kwinrc());
+        }
         let Some(codes) = encode_qt_key(key) else {
             return LayerResult::pass(
                 LAYER,
@@ -158,6 +161,129 @@ impl Kde {
             Err(error) => inspect_file(key, &error),
         }
     }
+}
+
+/// `kwinrc`, or `Ok(None)` when it does not exist.
+fn read_kwinrc() -> Result<Option<(PathBuf, String)>, String> {
+    let Some(path) = crate::util::config_base().map(|base| base.join("kwinrc")) else {
+        return Ok(None);
+    };
+    if !path.recorded_is_file() {
+        return Ok(None);
+    }
+    crate::recording::read_to_string(&path)
+        .map(|content| Some((path.clone(), content)))
+        .map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// The value of one key in `[ModifierOnlyShortcuts]` of a `kwinrc`.
+fn modifier_only_shortcut(content: &str, name: &str) -> Option<String> {
+    let mut in_group = false;
+    let mut value = None;
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_group = &line[1..line.len() - 1] == "ModifierOnlyShortcuts";
+            continue;
+        }
+        if !in_group {
+            continue;
+        }
+        if let Some((key, found)) = line.split_once('=') {
+            if key.trim() == name {
+                // KConfig: the last assignment wins.
+                value = Some(found.trim().to_owned());
+            }
+        }
+    }
+    value
+}
+
+/// A lone modifier on KDE: KWin's `[ModifierOnlyShortcuts]` group in
+/// `kwinrc` names the D-Bus call it makes when the modifier is pressed and
+/// released on its own (Plasma sets `Meta` to open the launcher).
+fn inspect_alone(key: &KeyCombo, kwinrc: Result<Option<(PathBuf, String)>, String>) -> LayerResult {
+    let shown = crate::style::human_key(key);
+    let name = match key.alone_mask() {
+        crate::key::CTRL_MASK => "Control",
+        crate::key::ALT_MASK => "Alt",
+        crate::key::SHIFT_MASK => "Shift",
+        crate::key::SUPER_MASK => "Meta",
+        _ => {
+            return LayerResult::pass(
+                LAYER,
+                LayerId::Compositor,
+                format!("KWin has no modifier-only shortcut for {shown}"),
+                vec!["KWin's [ModifierOnlyShortcuts] covers Shift, Control, Alt and Meta".into()],
+            );
+        }
+    };
+    let (path, content) = match kwinrc {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            return LayerResult::new(
+                LAYER,
+                LayerId::Compositor,
+                Outcome::Pass,
+                format!("no modifier-only shortcut configured for {shown}"),
+                vec!["kwinrc was not found; KWin then defines no [ModifierOnlyShortcuts]".into()],
+            )
+            .with_tier(EvidenceTier::ConfigFile);
+        }
+        Err(error) => {
+            return LayerResult::unavailable(
+                LAYER,
+                LayerId::Compositor,
+                "could not read KWin's modifier-only shortcuts",
+                vec![error],
+            );
+        }
+    };
+    let mut details = vec![format!("config: {}", path.display())];
+    let value = modifier_only_shortcut(&content, name).filter(|value| !value.is_empty());
+    let Some(value) = value else {
+        details.push(format!("[ModifierOnlyShortcuts] has no {name} entry"));
+        return LayerResult::pass(
+            LAYER,
+            LayerId::Compositor,
+            format!("no modifier-only shortcut configured for {shown}"),
+            details,
+        )
+        .with_tier(EvidenceTier::ConfigFile);
+    };
+    let fields: Vec<&str> = value.split(',').map(str::trim).collect();
+    let action = match fields.as_slice() {
+        [service, object, interface, method, ..] => {
+            format!("{service} {object} {interface}.{method}")
+        }
+        _ => value.clone(),
+    };
+    details.push(format!(
+        "binding: [ModifierOnlyShortcuts] {name}={value} (KWin calls it when {shown} is pressed and released with no other key)"
+    ));
+    details.push(
+        "the configuration is read from the file; a running KWin may have been changed through D-Bus since"
+            .into(),
+    );
+    let evidence = BindingEvidence {
+        dispatcher: Some("KWin".into()),
+        action: Some(action),
+        description: Some(format!("ModifierOnlyShortcuts {name}")),
+        submap: None,
+        scope: BindingScope::Universal,
+        source: Some(SourceLocation::new(path.display().to_string(), None)),
+        has_universal_match: false,
+        uncertainty: Some(UncertaintyReason::EndpointUnavailable),
+    };
+    LayerResult::new(
+        LAYER,
+        LayerId::Compositor,
+        Outcome::HandledUncertain,
+        format!("KWin runs a D-Bus call when {shown} is pressed and released"),
+        details,
+    )
+    .with_binding(evidence)
+    .with_tier(EvidenceTier::ConfigFile)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1214,5 +1340,33 @@ mod tests {
         let parsed = parse_config("[mediacontrol]\nplaypause=Toggle Media Play/Pause,none,Play\n");
         assert!(parsed.bindings.is_empty());
         assert!(parsed.unparsed[0].contains("no XKB keysym"));
+    }
+
+    #[test]
+    fn kwinrc_modifier_only_shortcut_names_the_dbus_call() {
+        let content = "[Windows]\nMeta=nope\n[ModifierOnlyShortcuts]\nMeta=org.kde.plasmashell,/PlasmaShell,org.kde.PlasmaShell,activateLauncherMenu\nAlt=\n";
+        let path = PathBuf::from("/home/u/.config/kwinrc");
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let result = inspect_alone(&key, Ok(Some((path.clone(), content.into()))));
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+        assert_eq!(result.tier, Some(EvidenceTier::ConfigFile));
+        let evidence = result.binding.unwrap();
+        assert_eq!(
+            evidence.action.as_deref(),
+            Some("org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.activateLauncherMenu")
+        );
+        // An empty value and a missing entry both leave the modifier free.
+        for name in ["alt", "ctrl"] {
+            let key = KeyCombo::parse_alone(name).unwrap();
+            let result = inspect_alone(&key, Ok(Some((path.clone(), content.into()))));
+            assert_eq!(result.outcome, Outcome::Pass, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_missing_kwinrc_has_no_modifier_only_shortcuts() {
+        let key = KeyCombo::parse_alone("super").unwrap();
+        let result = inspect_alone(&key, Ok(None));
+        assert_eq!(result.outcome, Outcome::Pass);
     }
 }

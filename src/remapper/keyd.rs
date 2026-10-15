@@ -309,9 +309,20 @@ impl File {
                 "oneshot" | "oneshotm" | "oneshotk" => Effect::Conditional(format!(
                     "one-shot layer {target}: the effect depends on the next key and timing"
                 )),
-                "overload" | "overloadt" | "overloadt2" | "overloadi" | "lettermod" | "timeout" => {
+                "overload" | "overloadt" | "overloadt2" | "overloadi" | "lettermod" => {
+                    let tap = args.split(',').nth(1).unwrap_or("").trim();
                     Effect::Conditional(format!(
-                        "tap-versus-hold action {action}: the result depends on timing"
+                        "tap-hold {action}: a tap emits {tap}, holding activates keyd layer \
+                         {target}; timing decides"
+                    ))
+                }
+                "timeout" => {
+                    let mut parts = args.split(',').map(str::trim);
+                    let tap = parts.next().unwrap_or("");
+                    let held = parts.nth(1).unwrap_or("");
+                    Effect::Conditional(format!(
+                        "tap-hold {action}: a tap emits {tap}, holding past the timeout emits \
+                         {held}"
                     ))
                 }
                 _ => Effect::Conditional(format!("keyd action {action} is not evaluated")),
@@ -751,5 +762,25 @@ mod tests {
         // A listed device that is not present does not apply.
         keymap.present_ids = Some(vec!["1234:5678".into()]);
         assert_eq!(only(keymap.evaluate(Press::new(0, 58))), Effect::Untouched);
+    }
+
+    #[test]
+    fn overload_on_a_modifier_names_its_tap_output() {
+        let keymap = keymap("[ids]\n*\n[main]\nleftmeta = overload(control, esc)\n");
+        let Effect::Conditional(text) = only(keymap.evaluate(Press::new(0, 125))) else {
+            panic!("overload is conditional");
+        };
+        assert!(text.contains("a tap emits esc"), "{text}");
+        assert!(text.contains("keyd layer control"), "{text}");
+    }
+
+    #[test]
+    fn timeout_on_a_modifier_names_tap_and_hold() {
+        let keymap = keymap("[ids]\n*\n[main]\nleftmeta = timeout(esc, 200, leftmeta)\n");
+        let Effect::Conditional(text) = only(keymap.evaluate(Press::new(0, 125))) else {
+            panic!("timeout is conditional");
+        };
+        assert!(text.contains("a tap emits esc"), "{text}");
+        assert!(text.contains("emits leftmeta"), "{text}");
     }
 }

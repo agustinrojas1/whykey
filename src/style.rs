@@ -489,6 +489,9 @@ fn unicode_width(character: char) -> usize {
 }
 
 pub fn human_key(key: &crate::key::KeyCombo) -> String {
+    if key.is_alone() {
+        return format!("{} alone", human_modifiers(key.alone_mask()).join("+"));
+    }
     let mut parts = human_modifiers(key.modmask());
     parts.push(human_key_name(key.key()));
     parts.join("+")

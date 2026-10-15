@@ -360,10 +360,7 @@ impl Config {
                             "fork" | "switch" | "chord" | "release-key" | "on-press" | "on-release"
                         ) =>
                     {
-                        Effect::Conditional(format!(
-                            "kanata action {} depends on timing or other keys",
-                            action.render()
-                        ))
+                        Effect::Conditional(tap_hold_text(head, action))
                     }
                     _ => Effect::Conditional(format!(
                         "kanata action {} is not evaluated",
@@ -516,6 +513,40 @@ fn parse(content: &str) -> Result<Vec<Sexp>, String> {
     sexp::parse(content, Dialect::Kanata)
 }
 
+/// How a timing-dependent kanata action reads: for `tap-hold` variants the
+/// tap and hold outputs (`(tap-hold TAP-MS HOLD-MS TAP HOLD)`, with the two
+/// timeouts and optional `tap-hold-release`-style variants sharing that
+/// shape), for everything else a generic note.
+fn tap_hold_text(head: &str, action: &Sexp) -> String {
+    let Sexp::List(items, _) = action else {
+        return format!(
+            "kanata action {} depends on timing or other keys",
+            action.render()
+        );
+    };
+    if head.starts_with("tap-hold") {
+        // Variants such as tap-hold-press-timeout carry a trailing fallback
+        // action; the first two numbers are the timeouts in every variant
+        // except -timeout ones, so take the first two non-numeric operands.
+        let operands: Vec<String> = items
+            .iter()
+            .skip(1)
+            .filter(|item| !matches!(item, Sexp::Atom(text, _) if text.chars().all(|c| c.is_ascii_digit())))
+            .map(Sexp::render)
+            .collect();
+        if let [tap, hold, ..] = operands.as_slice() {
+            return format!(
+                "kanata {}: a tap emits {tap}, holding emits {hold}; timing decides",
+                action.render()
+            );
+        }
+    }
+    format!(
+        "kanata action {} depends on timing or other keys",
+        action.render()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,6 +626,20 @@ mod tests {
                 &mut unreadable
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn tap_hold_on_a_modifier_names_tap_and_hold() {
+        let config = config(
+            "(defsrc lmet a)\n(defalias m (tap-hold 200 200 esc lmet))\n(deflayer base @m _)\n",
+        );
+        let Effect::Conditional(text) = effect(&config, Press::new(0, 125)) else {
+            panic!("tap-hold is conditional");
+        };
+        assert!(
+            text.contains("a tap emits esc, holding emits lmet"),
+            "{text}"
         );
     }
 }

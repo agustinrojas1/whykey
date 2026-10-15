@@ -32,7 +32,12 @@ fn combo_arg(key: &KeyCombo) -> String {
         .map(|name| name.to_ascii_lowercase())
         .collect();
     parts.push(key.key().to_ascii_lowercase());
-    parts.join("+")
+    let arg = parts.join("+");
+    if key.is_alone() {
+        format!("{arg} --alone")
+    } else {
+        arg
+    }
 }
 
 fn find_layer<'a>(layers: &'a [LayerResult], name: &str) -> Option<&'a LayerResult> {

@@ -127,4 +127,43 @@ mod tests {
         );
         assert!(candidates.contains(&PathBuf::from("/etc/sway/config")));
     }
+
+    fn alone_result(config: &str, modifier: &str) -> LayerResult {
+        use crate::layers::tiling::ConfigSource;
+        let main = ConfigSource {
+            path: Some(PathBuf::from("/home/u/.config/sway/config")),
+            contents: config.into(),
+        };
+        let loaded = LoadedConfig {
+            parsed: parse_config(&main, Vec::new()),
+            active_mode: Some("default".into()),
+        };
+        inspect(
+            &FAMILY,
+            Ok(loaded),
+            &KeyCombo::parse_alone(modifier).unwrap(),
+        )
+    }
+
+    #[test]
+    fn bindsym_release_on_the_modifier_is_the_alone_binding() {
+        let result = alone_result(
+            "set $mod Mod4\nbindsym --release Super_L exec wofi --show drun\nbindsym $mod+Return exec foot\n",
+            "super",
+        );
+        assert_eq!(result.outcome, Outcome::HandledAndPassed);
+        let evidence = result.binding.expect("the binding is named");
+        assert_eq!(evidence.action.as_deref(), Some("exec wofi --show drun"));
+    }
+
+    #[test]
+    fn other_modifiers_and_key_combinations_are_not_the_alone_binding() {
+        let config = "bindsym --release Super_L exec a\nbindsym Mod4+Shift+Super_L exec b\n";
+        assert_eq!(alone_result(config, "ctrl").outcome, Outcome::Pass);
+        let only_combination = "bindsym Mod4+Shift+Super_L exec b\nbindsym Mod4+Return exec c\n";
+        assert_eq!(
+            alone_result(only_combination, "super").outcome,
+            Outcome::Pass
+        );
+    }
 }
