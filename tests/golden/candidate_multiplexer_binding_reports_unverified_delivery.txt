@@ -1,0 +1,17 @@
+Alt+Return
+
+? tmux has a candidate binding, but whykey cannot verify the key reaches it.
+
+Route
+  1  Remapper      v  none detected
+  2  Compositor    -  not inspected
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  tmux          ?  split-window -v
+  7  Shell         -  not inspected
+
+Bound in
+  binding: bind-key -T root M-Enter split-window -v
+
+More  whykey alt+return -v  -  whykey listen

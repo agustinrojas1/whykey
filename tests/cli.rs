@@ -98,6 +98,67 @@ fn bin_path(bin: &Path) -> String {
     format!("{}:{}", bin.display(), current.to_string_lossy())
 }
 
+/// Golden comparison of the host-independent part of a human report: the
+/// verdict (after the header line) and the "Bound in" block. The route table
+/// depends on the machine running the test, so it stays out of the file.
+/// `WHYKEY_UPDATE_GOLDEN=1` rewrites `tests/golden/cli_<name>.txt`.
+fn assert_report_core(name: &str, text: &str) {
+    let mut core = String::new();
+    let mut keep = false;
+    let mut in_verdict = false;
+    for (index, line) in text.lines().enumerate() {
+        if index == 0 {
+            core.push_str("(header)\n");
+            in_verdict = true;
+            continue;
+        }
+        if line == "Route" {
+            in_verdict = false;
+            keep = false;
+            continue;
+        }
+        if line == "Bound in" {
+            keep = true;
+        } else if keep && line.is_empty() {
+            keep = false;
+            core.push('\n');
+            continue;
+        }
+        if in_verdict || keep {
+            // Fixture directories are per-run temporary names.
+            let temp = env::temp_dir()
+                .to_string_lossy()
+                .trim_end_matches('/')
+                .to_owned();
+            let line = match line.find(&format!("{temp}/")) {
+                Some(at) => {
+                    let rest = &line[at + temp.len() + 1..];
+                    let end = rest.find('/').unwrap_or(rest.len());
+                    format!("{}<tmp>{}", &line[..at], &rest[end..])
+                }
+                None => line.to_owned(),
+            };
+            core.push_str(&line);
+            core.push('\n');
+        }
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(format!("cli_{name}.txt"));
+    if env::var_os("WHYKEY_UPDATE_GOLDEN").is_some() {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &core).unwrap();
+        return;
+    }
+    let expected = fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!(
+            "missing golden file {}; run with WHYKEY_UPDATE_GOLDEN=1",
+            path.display()
+        )
+    });
+    assert_eq!(core, expected, "golden file {} differs", path.display());
+}
+
 #[test]
 fn json_output_is_parseable_without_a_controlling_tty() {
     let output = binary().args(["--json", "ctrl+z"]).output().unwrap();
@@ -1045,9 +1106,10 @@ fn inspection_includes_detected_remapper_as_conditional_evidence() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Input remapper"));
-    assert!(text.contains("capslock -> overload(control, esc)"));
-    assert!(text.contains("remapper may transform"));
+    assert_report_core(
+        "inspection_includes_detected_remapper_as_conditional_evidence",
+        &text,
+    );
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2431,9 +2493,7 @@ fn sway_adapter_reads_effective_bindings() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Sway"));
-    assert!(text.contains("Sway is configured to consume the shortcut"));
-    assert!(text.contains("exec copy"));
+    assert_report_core("sway_adapter_reads_effective_bindings", &text);
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2462,9 +2522,7 @@ fn i3_adapter_reads_effective_bindings() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("i3"));
-    assert!(text.contains("i3 is configured to consume the shortcut"));
-    assert!(text.contains("exec copy"));
+    assert_report_core("i3_adapter_reads_effective_bindings", &text);
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2827,9 +2885,7 @@ fn gnome_adapter_reads_media_key_bindings() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("GNOME"));
-    assert!(text.contains("GNOME — Configured to stop: screensaver"));
-    assert!(text.contains("org.gnome.settings-daemon.plugins.media-keys"));
+    assert_report_core("gnome_adapter_reads_media_key_bindings", &text);
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2910,9 +2966,10 @@ fn sxhkd_adapter_reads_static_binding_with_conditional_runtime() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("sxhkd"));
-    assert!(text.contains("sxhkd has a matching binding"));
-    assert!(text.contains("alacritty"));
+    assert_report_core(
+        "sxhkd_adapter_reads_static_binding_with_conditional_runtime",
+        &text,
+    );
     let _ = fs::remove_dir_all(base);
 }
 
@@ -2941,9 +2998,7 @@ fn openbox_adapter_reads_xml_keybinds_conditionally() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("Openbox"));
-    assert!(text.contains("Openbox has a matching binding"));
-    assert!(text.contains("Execute: alacritty"));
+    assert_report_core("openbox_adapter_reads_xml_keybinds_conditionally", &text);
 
     let json = binary()
         .args(["--json", "--schema-version", "2", "super+ctrl+t"])
@@ -2990,9 +3045,7 @@ fn kde_adapter_reads_global_shortcut_configuration() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.contains("KDE Plasma"));
-    assert!(text.contains("KDE Plasma has a matching binding; forwarding is unknown."));
-    assert!(text.contains("Run Command"));
+    assert_report_core("kde_adapter_reads_global_shortcut_configuration", &text);
     let _ = fs::remove_dir_all(base);
 }
 
@@ -3481,13 +3534,9 @@ fn inspect_with_unpredicted_terminal_bytes_exposes_tmux_candidate() {
         .unwrap();
 
     let text = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        text.contains("tmux has a candidate binding, but delivery is unverified."),
-        "tmux candidate must be exposed when bytes are unpredicted; output:\n{text}"
-    );
-    assert!(
-        !text.contains("No inspected layer handles ALT + RETURN."),
-        "must not falsely claim no layer handles the key"
+    assert_report_core(
+        "inspect_with_unpredicted_terminal_bytes_exposes_tmux_candidate",
+        &text,
     );
 
     let _ = fs::remove_dir_all(base);
@@ -3562,5 +3611,67 @@ fn inspect_pid_on_shell_inspects_shell_directly() {
     assert!(
         text.contains("reverse-search-history"),
         "readline binding must be reported for shell target"
+    );
+}
+
+#[test]
+fn ascii_flag_leaves_no_character_outside_ascii() {
+    for argument in ["--ascii", "--color=never"] {
+        let output = binary()
+            .args(["ctrl+z", "--ascii", argument])
+            .env("LC_ALL", "en_US.UTF-8")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.is_ascii(), "{text}");
+        assert!(text.contains("Route"), "{text}");
+    }
+    let unicode = binary()
+        .args(["ctrl+z", "--color=never"])
+        .env("LC_ALL", "en_US.UTF-8")
+        .env_remove("LC_CTYPE")
+        .output()
+        .unwrap();
+    let unicode = String::from_utf8_lossy(&unicode.stdout);
+    assert!(unicode.contains('\u{2193}') || unicode.contains('\u{2715}') || unicode.contains('?'));
+    assert!(!unicode.is_ascii(), "{unicode}");
+    let fallback = binary()
+        .args(["ctrl+z", "--color=never"])
+        .env_remove("LC_ALL")
+        .env_remove("LC_CTYPE")
+        .env("LANG", "C")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&fallback.stdout).is_ascii());
+}
+
+#[test]
+fn plain_text_modes_never_emit_ansi_sequences() {
+    for (arguments, env_name) in [
+        (vec!["ctrl+z", "--color=never"], None),
+        (vec!["ctrl+z"], Some(("NO_COLOR", "1"))),
+        (vec!["ctrl+z"], Some(("TERM", "dumb"))),
+    ] {
+        let mut command = binary();
+        command.args(arguments);
+        if let Some((name, value)) = env_name {
+            command.env(name, value);
+        }
+        let output = command.output().unwrap();
+        assert!(!String::from_utf8_lossy(&output.stdout).contains('\x1b'));
+    }
+}
+
+#[test]
+fn columns_sets_the_report_width_without_a_terminal() {
+    let output = binary()
+        .args(["ctrl+z", "--color=never", "--ascii"])
+        .env("COLUMNS", "50")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.lines().all(|line| line.chars().count() <= 50),
+        "{text}"
     );
 }

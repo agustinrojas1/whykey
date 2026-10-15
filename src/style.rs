@@ -4,6 +4,62 @@
 use std::fmt;
 use std::io::IsTerminal;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static FORCE_ASCII: AtomicBool = AtomicBool::new(false);
+
+/// Record the global `--ascii` flag for the rest of the process.
+pub fn set_force_ascii(force: bool) {
+    FORCE_ASCII.store(force, Ordering::Relaxed);
+}
+
+/// Whether human output must stay ASCII: `--ascii` was given or the locale
+/// (`LC_ALL`, then `LC_CTYPE`, then `LANG`) does not declare UTF-8.
+pub fn ascii_output() -> bool {
+    if FORCE_ASCII.load(Ordering::Relaxed) {
+        return true;
+    }
+    let locale = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .filter_map(|name| crate::recording::env_var(name).ok())
+        .find(|value| !value.is_empty());
+    !locale.is_some_and(|value| {
+        let value = value.to_ascii_lowercase();
+        value.contains("utf-8") || value.contains("utf8")
+    })
+}
+
+/// The semantic state of one route layer. One place defines glyph, ASCII
+/// fallback and color, so the meaning never depends on color alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// The layer keeps the key; nothing after it receives it.
+    Stop,
+    /// The layer lets the key through.
+    Pass,
+    /// The layer rewrites the key or waits for another one.
+    Remap,
+    /// Whykey could not verify what happens.
+    Unsure,
+    /// Not reached or not applicable.
+    Off,
+}
+
+impl Mark {
+    pub const fn glyph(self, ascii: bool) -> &'static str {
+        match (self, ascii) {
+            (Self::Stop, false) => "\u{2715}",
+            (Self::Stop, true) => "x",
+            (Self::Pass, false) => "\u{2193}",
+            (Self::Pass, true) => "v",
+            (Self::Remap, false) => "\u{21aa}",
+            (Self::Remap, true) => ">",
+            (Self::Unsure, _) => "?",
+            (Self::Off, false) => "\u{b7}",
+            (Self::Off, true) => "-",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ColorChoice {
@@ -43,14 +99,23 @@ pub struct RenderOptions {
     pub color: ColorChoice,
     pub verbose: bool,
     pub width: usize,
+    /// Use ASCII glyphs and fold every other character to ASCII.
+    pub ascii: bool,
+    /// Show the environment (compositor, session, shell) in report headers.
+    /// Off for plain rendering so golden output does not depend on the host.
+    pub context: bool,
 }
 
 impl RenderOptions {
+    /// Deterministic rendering: no color, ASCII glyphs, 80 columns, no
+    /// host-dependent context. Tests and golden files use this.
     pub fn plain(verbose: bool) -> Self {
         Self {
             color: ColorChoice::Never,
             verbose,
             width: 80,
+            ascii: true,
+            context: false,
         }
     }
 
@@ -59,7 +124,19 @@ impl RenderOptions {
             color,
             verbose,
             width: terminal_width(),
+            ascii: ascii_output(),
+            context: true,
         }
+    }
+
+    pub fn with_ascii(mut self, ascii: bool) -> Self {
+        self.ascii = ascii;
+        self
+    }
+
+    pub fn with_context(mut self, context: bool) -> Self {
+        self.context = context;
+        self
     }
 
     pub fn with_width(mut self, width: usize) -> Self {
@@ -103,6 +180,50 @@ impl RenderOptions {
         self.paint("32", text)
     }
 
+    /// Semantic palette. `stop` and `pass` color the verdict glyphs; `remap`
+    /// and `unsure` share yellow because both mean "not a plain pass/stop".
+    pub fn stop(self, text: impl AsRef<str>) -> String {
+        self.paint("31", text)
+    }
+
+    pub fn pass(self, text: impl AsRef<str>) -> String {
+        self.paint("32", text)
+    }
+
+    pub fn remap(self, text: impl AsRef<str>) -> String {
+        self.paint("33", text)
+    }
+
+    pub fn unsure(self, text: impl AsRef<str>) -> String {
+        self.paint("33", text)
+    }
+
+    pub fn off(self, text: impl AsRef<str>) -> String {
+        self.paint("2", text)
+    }
+
+    pub fn heading(self, text: impl AsRef<str>) -> String {
+        self.paint("1;36", text)
+    }
+
+    /// The colored glyph of a route mark.
+    pub fn mark(self, mark: Mark) -> String {
+        let glyph = mark.glyph(self.ascii);
+        match mark {
+            Mark::Stop => self.stop(glyph),
+            Mark::Pass => self.pass(glyph),
+            Mark::Remap => self.remap(glyph),
+            Mark::Unsure => self.unsure(glyph),
+            Mark::Off => self.off(glyph),
+        }
+    }
+
+    /// Fold text to ASCII when the options ask for it. Common typographic
+    /// characters get a readable equivalent; anything else becomes `?`.
+    pub fn fold(self, text: String) -> String {
+        if self.ascii { ascii_fold(&text) } else { text }
+    }
+
     fn paint(self, code: &str, text: impl AsRef<str>) -> String {
         let text = text.as_ref();
         if self.colored() {
@@ -113,12 +234,131 @@ impl RenderOptions {
     }
 }
 
+/// Upper bound for prose width: longer lines are harder to read.
+pub const MAX_PROSE_WIDTH: usize = 120;
+
+/// Terminal width: `COLUMNS` override, then the real window size of stdout or
+/// stderr (`TIOCGWINSZ`), then 80. Never wider than [`MAX_PROSE_WIDTH`].
 pub fn terminal_width() -> usize {
     crate::recording::env_var("COLUMNS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|width| *width >= 20)
+        .or_else(window_columns)
         .unwrap_or(80)
+        .min(MAX_PROSE_WIDTH)
+}
+
+fn window_columns() -> Option<usize> {
+    [libc::STDOUT_FILENO, libc::STDERR_FILENO]
+        .into_iter()
+        .find_map(|descriptor| {
+            let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+            // SAFETY: TIOCGWINSZ writes one `winsize` through the pointer and
+            // touches nothing else; the value is read only on success.
+            let status = unsafe { libc::ioctl(descriptor, libc::TIOCGWINSZ, size.as_mut_ptr()) };
+            if status != 0 {
+                return None;
+            }
+            let columns = unsafe { size.assume_init() }.ws_col as usize;
+            (columns >= 20).then_some(columns)
+        })
+}
+
+/// Replace characters outside ASCII with a readable equivalent.
+pub fn ascii_fold(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            _ if character.is_ascii() => folded.push(character),
+            '\u{2014}' | '\u{2013}' => folded.push('-'),
+            '\u{b7}' | '\u{2022}' => folded.push('-'),
+            '\u{2026}' => folded.push_str("..."),
+            '\u{2192}' => folded.push_str("->"),
+            '\u{2190}' => folded.push_str("<-"),
+            '\u{2193}' => folded.push('v'),
+            '\u{2191}' => folded.push('^'),
+            '\u{2715}' | '\u{2717}' => folded.push('x'),
+            '\u{2713}' | '\u{2714}' => folded.push('+'),
+            '\u{21aa}' => folded.push('>'),
+            '\u{2018}' | '\u{2019}' => folded.push('\''),
+            '\u{201c}' | '\u{201d}' => folded.push('"'),
+            '\u{a0}' => folded.push(' '),
+            _ => folded.push('?'),
+        }
+    }
+    folded
+}
+
+/// One row of an aligned table: fixed leading cells, a flexible `detail`
+/// cell that may wrap, and a `trailing` cell aligned to the right edge.
+#[derive(Debug, Clone, Default)]
+pub struct TableRow {
+    pub cells: Vec<String>,
+    pub detail: String,
+    pub trailing: String,
+    /// Extra lines printed under the row, indented to the detail column.
+    pub notes: Vec<String>,
+}
+
+/// Lay out rows with aligned columns inside `width` columns.
+///
+/// Leading cells are padded to the widest cell of their column (ANSI and
+/// Unicode aware). The detail cell is wrapped as prose; a word is never cut,
+/// so a path that does not fit sits whole on its own continuation line.
+/// The trailing cell goes to the right edge of the same line when it fits,
+/// and otherwise on its own line under the detail.
+pub fn layout_table(rows: &[TableRow], width: usize, indent: &str) -> Vec<String> {
+    let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.cells.get(column))
+                .map(|cell| display_width(cell))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let mut lines = Vec::new();
+    for row in rows {
+        let mut prefix = String::from(indent);
+        for (column, size) in widths.iter().enumerate() {
+            let cell = row.cells.get(column).map_or("", String::as_str);
+            prefix.push_str(cell);
+            prefix.push_str(&" ".repeat(size - display_width(cell) + 2));
+        }
+        let prefix_width = display_width(&prefix);
+        let detail_limit = width.saturating_sub(prefix_width).max(10);
+        let continuation = " ".repeat(prefix_width);
+        let trailing_width = display_width(&row.trailing);
+        let mut wrapped = wrap_hanging(&row.detail, detail_limit, "", "");
+        if wrapped.is_empty() {
+            wrapped.push(String::new());
+        }
+        let last = wrapped.len() - 1;
+        let last_width = display_width(&wrapped[last]);
+        let fits = trailing_width == 0 || last_width + 2 + trailing_width <= detail_limit;
+        for (index, line) in wrapped.iter().enumerate() {
+            let mut out = String::new();
+            out.push_str(if index == 0 { &prefix } else { &continuation });
+            out.push_str(line);
+            if index == last && trailing_width > 0 && fits {
+                let gap = detail_limit - last_width - trailing_width;
+                out.push_str(&" ".repeat(gap.max(2)));
+                out.push_str(&row.trailing);
+            }
+            lines.push(out.trim_end().to_owned());
+        }
+        if trailing_width > 0 && !fits {
+            lines.push(format!("{continuation}{}", row.trailing));
+        }
+        for note in &row.notes {
+            for line in wrap_hanging(note, detail_limit, "", "") {
+                lines.push(format!("{continuation}{line}"));
+            }
+        }
+    }
+    lines
 }
 
 /// Wrap ordinary prose with a hanging continuation indent. Long path-like
@@ -382,6 +622,37 @@ const XF86_NAMES: &str = "\
     WakeUp WebCam WheelButton WLAN Word WPSButton WWAN WWW Xfer Yellow ZoomIn ZoomOut \
     ZoomReset";
 
+/// Golden-file comparison for rendered reports. Files live in
+/// `tests/golden/<name>.txt`; `WHYKEY_UPDATE_GOLDEN=1` rewrites them.
+#[cfg(test)]
+mod golden {
+    pub(crate) fn assert_golden(name: &str, actual: &str) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden")
+            .join(format!("{name}.txt"));
+        if std::env::var_os("WHYKEY_UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+        let expected = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "missing golden file {}; run with WHYKEY_UPDATE_GOLDEN=1",
+                path.display()
+            )
+        });
+        assert_eq!(
+            actual,
+            expected,
+            "golden file {} differs; rerun with WHYKEY_UPDATE_GOLDEN=1 to accept",
+            path.display()
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) use golden::assert_golden;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +709,68 @@ mod tests {
     fn display_width_ignores_ansi_and_counts_wide_characters() {
         assert_eq!(display_width("\x1b[33mCtrl+Z\x1b[0m"), 6);
         assert_eq!(display_width("界"), 2);
+    }
+
+    #[test]
+    fn ascii_fold_leaves_no_character_outside_ascii() {
+        let folded = ascii_fold("a \u{2014} b \u{b7} c \u{2026} \u{2193}\u{2715}\u{21aa} \u{754c}");
+        assert!(folded.is_ascii(), "{folded}");
+        assert_eq!(folded, "a - b - c ... vx> ?");
+    }
+
+    #[test]
+    fn marks_have_an_ascii_fallback_and_never_depend_on_color() {
+        for mark in [Mark::Stop, Mark::Pass, Mark::Remap, Mark::Unsure, Mark::Off] {
+            assert!(mark.glyph(true).is_ascii());
+            assert!(!RenderOptions::plain(false).mark(mark).contains('\x1b'));
+        }
+        let colored = RenderOptions {
+            color: ColorChoice::Always,
+            ..RenderOptions::plain(false)
+        };
+        assert!(colored.mark(Mark::Stop).contains("\x1b[31m"));
+    }
+
+    #[test]
+    fn terminal_width_is_clamped_and_overridable() {
+        assert!(terminal_width() <= MAX_PROSE_WIDTH);
+        assert!(terminal_width() >= 20);
+    }
+
+    #[test]
+    fn table_aligns_cells_and_keeps_long_words_whole() {
+        let rows = vec![
+            TableRow {
+                cells: vec!["1".into(), "Remapper".into(), "v".into()],
+                detail: "none detected".into(),
+                ..TableRow::default()
+            },
+            TableRow {
+                cells: vec!["2".into(), "Hyprland".into(), "x".into()],
+                detail: "Terminal".into(),
+                trailing: "live query".into(),
+                ..TableRow::default()
+            },
+        ];
+        let lines = layout_table(&rows, 50, "  ");
+        assert_eq!(lines[0], "  1  Remapper  v  none detected");
+        assert!(lines[1].starts_with("  2  Hyprland  x  Terminal"));
+        assert!(lines[1].ends_with("live query"));
+        assert_eq!(display_width(&lines[1]), 50);
+        let narrow = layout_table(
+            &[TableRow {
+                cells: vec!["1".into(), "A".into(), "x".into()],
+                detail: "/very/long/path/that/does/not/fit/anywhere.lua:2".into(),
+                ..TableRow::default()
+            }],
+            30,
+            "  ",
+        );
+        assert!(
+            narrow
+                .iter()
+                .any(|line| line.contains("/very/long/path/that/does/not/fit/anywhere.lua:2"))
+        );
     }
 
     #[test]

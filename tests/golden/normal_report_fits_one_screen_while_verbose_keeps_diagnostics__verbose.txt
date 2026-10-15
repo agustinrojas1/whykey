@@ -1,0 +1,56 @@
+Ctrl+Super+Return
+
+? Hyprland has a matching binding; its runtime effect is unknown.
+  Whykey temporarily intercepted the compositor event to inspect its
+  configuration. That does not prove the configured action ran.
+  Whykey cannot determine whether the Lua/plugin action passes the key onward.
+  Observed via Hyprland (suppressed).
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      x  Herdr                                             observed
+  3  Terminal      -  not reached
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+Bound in
+  __lua 285 (Lua dispatcher; whykey does not execute it)
+
+Confidence  observed: whykey saw the key at Hyprland. Layers after that point
+            are predicted from configuration.
+
+To confirm
+  whykey listen --suppress  inspect a binding without letting its action run
+
+Technical evidence
+  source: Hyprland
+  disposition: Suppressed
+  observed key: Ctrl+Super+Return
+  event: press
+  raw event: Hyprland XKB keycode=36 evdev=28 (press)
+  encoding: Hyprland XKB key event
+  protocol flags: unavailable
+  physical keycode: EvdevKeycode(28)
+  modifiers pressed: CTRL, SUPER
+  modifiers locked: none
+  modifiers latched: unavailable from compositor
+  alternate key: physical keycode 28 (RETURN)
+  requested key: Ctrl+Super+Return
+  route evidence:
+    1. Hyprland [Handled; Stops]
+       summary: active binding found
+       evidence: binding: __lua 285; Herdr
+       evidence: main keyboard: at-translated-set-2-keyboard
+       evidence: active XKB layout group index: 0
+       evidence: 2 matching binding(s) exist in inactive submap(s); current
+       submap is default
+       binding:
+         dispatcher: __lua
+         action: __lua 285
+         description: Herdr
+         submap: default
+         scope: submap default
+         uncertainty: OpaqueDispatcher
+

@@ -1,0 +1,23 @@
+Ctrl+Super+Return
+
+v Hyprland observed the key; no matching binding was confirmed.
+  The key was observed at Hyprland. Receipt is confirmed; downstream forwarding
+  is a separate question.
+  Observed via Hyprland (pass-through).
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      v  event received at the compositor                  observed
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+Confidence  observed: whykey saw the key at Hyprland. Layers after that point
+            are predicted from configuration.
+
+Next
+  whykey listen --suppress  inspect a binding without letting its action run
+
+More  whykey listen -v

@@ -1,0 +1,19 @@
+Ctrl+P
+
+> Hyprland sends Ctrl+P to another window.
+  The focused window does not receive it.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      >  active binding found; event is redirected to another
+                      window
+  3  Terminal      -  not reached
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+Bound in
+  binding: pass class:example
+
+More  whykey ctrl+p -v

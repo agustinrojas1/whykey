@@ -1,0 +1,9 @@
+(header)
+
+✕ i3 takes Ctrl+C and runs exec copy.
+  Nothing after i3 receives Ctrl+C.
+
+Bound in
+  /home/user/.config/i3/config:2
+  exec copy
+

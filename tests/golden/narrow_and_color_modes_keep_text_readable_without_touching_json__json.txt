@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "key": {
+    "modifiers": 4,
+    "key": "Z"
+  },
+  "key_display": "CTRL + Z",
+  "confidence": "configured",
+  "observed": null,
+  "layers": []
+}

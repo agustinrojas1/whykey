@@ -1,0 +1,27 @@
+Ctrl+Super+Return
+
+? Hyprland has a matching binding; its runtime effect is unknown.
+  Whykey temporarily intercepted the compositor event to inspect its
+  configuration. That does not prove the configured action ran.
+  Whykey cannot determine whether the Lua/plugin action passes the key onward.
+  Observed via Hyprland (suppressed).
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  Herdr                                             observed
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+Bound in
+  __lua 285 (Lua dispatcher; whykey does not execute it)
+
+Confidence  observed: whykey saw the key at Hyprland. Layers after that point
+            are predicted from configuration.
+
+To confirm
+  whykey listen --suppress  inspect a binding without letting its action run
+
+More  whykey listen -v

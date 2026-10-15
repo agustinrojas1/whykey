@@ -1,0 +1,69 @@
+{
+  "assessment": {
+    "confidence": "conditional",
+    "terminal_reached": false
+  },
+  "context": {
+    "compositor_candidates": [
+      {
+        "applicable": true,
+        "id": "hyprland",
+        "ipc": true,
+        "score": 6,
+        "selected": true
+      }
+    ],
+    "desktop": "Hyprland",
+    "display_server": "Wayland",
+    "extension_adapters": [],
+    "session_desktop": "Hyprland",
+    "session_type": "wayland",
+    "shell": "/usr/bin/bash",
+    "ssh": false,
+    "terminal": null
+  },
+  "input": {
+    "key": {
+      "key": "T",
+      "modifiers": 4
+    },
+    "key_display": "CTRL + T",
+    "kind": "key"
+  },
+  "observation": null,
+  "operation": "inspect",
+  "path": [
+    {
+      "evidence": [],
+      "layer": "Kitty",
+      "propagation": "Continues",
+      "status": "NotHandled",
+      "summary": "no Kitty binding",
+      "tier": null
+    },
+    {
+      "binding": {
+        "action": "transpose-chars",
+        "description": null,
+        "dispatcher": null,
+        "has_universal_match": false,
+        "scope": "Unknown",
+        "source": null,
+        "submap": null,
+        "uncertainty": "UnverifiedDefault"
+      },
+      "evidence": [
+        {
+          "kind": "detail",
+          "text": "sequence: 0x14"
+        }
+      ],
+      "layer": "Bash / Readline",
+      "propagation": "Indeterminate",
+      "status": "Handled",
+      "summary": "bound to transpose-chars",
+      "tier": "default"
+    }
+  ],
+  "schema_version": 2
+}

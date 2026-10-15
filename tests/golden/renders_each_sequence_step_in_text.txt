@@ -1,0 +1,31 @@
+Sequence - Inspect
+
+Step 1/2 - Ctrl+X
+
+v Nothing claims Ctrl+X; it continues to the application.
+  No inspected layer has a binding for it.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      v  no binding
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+
+Step 2/2 - Ctrl+S
+
+x Hyprland takes Ctrl+S.
+  Nothing after Hyprland receives Ctrl+S.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      x  binding found
+  3  Terminal      -  not reached
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+

@@ -1,0 +1,34 @@
+Ctrl+Left
+
+x Readline is configured to consume the shortcut.
+  The event reached the terminal, so earlier forwarding is confirmed.
+  Observed via terminal (observe-only).
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  forwarding uncertain                              observed
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Readline      x  bound to backward-word
+
+Confidence  observed: whykey saw the key at terminal. Layers after that point
+            are predicted from configuration.
+
+Technical evidence
+  source: terminal
+  disposition: ObservedOnly
+  observed key: Ctrl+Left
+  event: press
+  probe bytes: ESC [ 1 ; 5 D
+  encoding: CSI sequence
+  protocol flags: unavailable
+  modifiers: unavailable
+  requested key: Ctrl+Left
+  route evidence:
+    1. Hyprland [Indeterminate; Indeterminate]
+       summary: forwarding uncertain
+    2. Readline [Handled; Stops]
+       summary: bound to backward-word
+

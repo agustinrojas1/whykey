@@ -1,0 +1,17 @@
+Ctrl+A
+
+v Readline has no binding for Ctrl+A.
+  Not bound in the current Readline keymap; Readline rings the bell and inserts
+  "A".
+
+Route
+  1  Remapper      v  none detected
+  2  Compositor    -  not inspected
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Readline      v  not bound in the current Readline keymap; Readline rings
+                      the bell and inserts "A"
+
+More  whykey ctrl+a -v

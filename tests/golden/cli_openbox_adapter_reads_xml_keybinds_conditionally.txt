@@ -1,0 +1,7 @@
+(header)
+
+? Openbox matches Ctrl+Super+T, but whykey cannot tell whether it continues.
+
+Bound in
+  binding: Execute: alacritty
+

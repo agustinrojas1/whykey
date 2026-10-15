@@ -1,0 +1,19 @@
+Ctrl+Left
+
+? Ghostty handles Ctrl+Left and passes it on.
+  Some later layers could not be verified.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  binding may run
+  3  Ghostty       v  binding found
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  Shell         -  not inspected
+
+To confirm
+  whykey listen --window
+    press the shortcut in the probe window to see if it arrives
+
+More  whykey ctrl+left -v

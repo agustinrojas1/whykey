@@ -1,0 +1,21 @@
+Super+1
+
+? Hyprland has 10 bindings whose keys whykey could not read.
+  If one of them uses Super+1, Hyprland takes it and nothing after receives it.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  10 bindings with unreported keys
+  3  Kitty         v  no Kitty binding; forwarded to the terminal input
+  4  Terminal      v  not applicable to the current terminal
+  5  TTY driver    ?  terminal byte encoding is unknown; TTY signal checks
+                      unevaluated
+  6  Input method  -  not inspected
+  7  Multiplexer   -  not inspected
+  8  Shell input   ?  terminal byte encoding is unknown; shell line editing
+                      unevaluated
+
+To confirm
+  whykey listen --window  press the shortcut in the probe window to see if it arrives
+
+More  whykey super+1 -v

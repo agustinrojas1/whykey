@@ -44,8 +44,10 @@ fn main() -> ExitCode {
         ndjson,
         verbose,
         color,
+        ascii,
         schema_version,
     } = parsed;
+    whykey::style::set_force_ascii(ascii);
     let mut arguments = raw_arguments.into_iter();
     let Some(argument) = arguments.next() else {
         eprintln!("{}", help_text());

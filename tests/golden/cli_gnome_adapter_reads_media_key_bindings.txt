@@ -1,0 +1,10 @@
+(header)
+
+✕ GNOME takes Super+L and runs screensaver.
+  Nothing after GNOME receives Super+L.
+
+Bound in
+  gsettings org.gnome.settings-daemon.plugins.media-keys
+  gnome-settings-daemon screensaver
+  applies in every submap
+

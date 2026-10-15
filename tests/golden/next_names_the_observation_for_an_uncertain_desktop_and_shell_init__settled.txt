@@ -1,0 +1,20 @@
+Super+T
+
+x Sway takes Super+T.
+  Nothing after Sway receives Super+T.
+
+Route
+  1  Remapper      v  none detected
+  2  Sway          x  active binding found                            live query
+  3  Terminal      -  not reached
+  4  TTY driver    -  not reached
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+Bound in
+  binding: bindsym Mod4+t exec foot (/etc/sway/config:3)
+
+Confidence  live query: Sway answered from the running program. Not observed: run `whykey listen` to watch it.
+
+More  whykey super+t -v

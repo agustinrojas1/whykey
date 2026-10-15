@@ -1,0 +1,15 @@
+Ctrl+S
+
+x TTY driver takes Ctrl+S.
+  Nothing after TTY driver receives Ctrl+S.
+
+Route
+  1  Remapper      v  none detected
+  2  Compositor    -  not inspected
+  3  Terminal      -  not inspected
+  4  TTY driver    x  terminal flow control (IXON); Ctrl+S matches VSTOP
+  5  Input method  -  not reached
+  6  Multiplexer   -  not reached
+  7  Shell         -  not reached
+
+More  whykey ctrl+s -v

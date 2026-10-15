@@ -1,0 +1,25 @@
+Ctrl+T
+
+? Probably bash: its default binds Ctrl+T to transpose-chars.
+  Unverified. Your shell configuration may override it.
+
+Route
+  1  Remapper      v  none detected
+  2  Hyprland      ?  Hyprland IPC is unavailable; effective binding state is
+                      unknown
+  3  Terminal      -  not inspected
+  4  TTY driver    -  not inspected
+  5  Input method  -  not inspected
+  6  Multiplexer   -  not inspected
+  7  bash          ?  transpose-chars                        default, unverified
+
+Bound in
+  sequence: 0x14
+
+Confidence  default: bash's built-in default; your configuration may override it.
+
+To confirm
+  whykey listen --window  press the shortcut in the probe window to see if it arrives
+  eval "$(whykey shell-init bash)"  then run whykey ctrl+t again
+
+More  whykey ctrl+t -v

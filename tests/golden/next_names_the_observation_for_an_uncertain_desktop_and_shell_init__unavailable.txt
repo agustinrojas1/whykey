@@ -1,0 +1,19 @@
+Super+T
+
+? Whykey could not inspect Desktop compositor.
+
+Route
+  1  Remapper            v  none detected
+  2  Desktop compositor  ?  no read-only adapter is available
+  3  Terminal            -  not inspected
+  4  TTY driver          -  not inspected
+  5  Input method        -  not inspected
+  6  Multiplexer         -  not inspected
+  7  Shell               -  not inspected
+
+Confidence  incomplete: Desktop compositor could not be inspected, and no other layer reported a binding.
+
+To confirm
+  whykey listen --window  press the shortcut in the probe window to see if it arrives
+
+More  whykey super+t -v
