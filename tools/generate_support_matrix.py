@@ -61,6 +61,25 @@ LAYER_ENTRIES: dict[str, tuple[str, ...]] = {
     "X11 key grab": ("compositor.x11-grab",),
     "tmux": ("session.multiplexers",),
     "GNU Screen": ("session.multiplexers",),
+    "Zellij": ("session.multiplexers",),
+    "Niri": ("compositor.niri",),
+    "Wayfire": ("compositor.wayfire",),
+    "labwc": ("compositor.labwc",),
+    "dwl": ("compositor.dwl",),
+    "Input method": ("input.ime-context", "input.ime-runtime-engine"),
+    "Input remapper": ("remapper.pre-compositor",),
+    "Kitty": ("terminal.dedicated",),
+    "Alacritty": ("terminal.dedicated",),
+    "Foot": ("terminal.dedicated",),
+    "WezTerm": ("terminal.dedicated",),
+    "Konsole": ("terminal.dedicated",),
+    "Ghostty": ("terminal.dedicated",),
+}
+# Environments whose scenarios also judge an upstream layer: a remap scenario
+# passes only when the remapper redirected (whykey.via) or left the key
+# alone (whykey.not_via) as reality did.
+ENVIRONMENT_ENTRIES: dict[str, tuple[str, ...]] = {
+    "remap": ("remapper.pre-compositor",),
 }
 # Evidence lines of whykey's X11 grab probe (src/layers/x11_grab.rs
 # `evidence`): a verdict carrying them was decided by the X server's grab
@@ -154,6 +173,7 @@ def proven_entries(record: dict[str, object]) -> tuple[set[str], set[str]]:
             entries |= adapter
         if layer in SHELL_LAYERS and whykey_layer.get("tier") == "live_query":
             entries.add(SHELL_ENTRY)
+    entries.update(ENVIRONMENT_ENTRIES.get(str(record.get("environment")), ()))
     args = record.get("whykey_args") or []
     if args and args[0] == "listen":
         forced = [FORCED_CAPTURE[arg] for arg in args if arg in FORCED_CAPTURE]
