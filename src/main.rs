@@ -7,8 +7,8 @@ mod cli;
 use cli::{COMMANDS, COMPLETION_SHELLS};
 use cli::{
     DoctorState, command_program_available, command_succeeds, completions, detect_extension,
-    detect_nvim_server, detected_terminal_program, doctor_next_steps, help_text,
-    print_check_with_options, shell_init, shell_snapshot_available,
+    detect_nvim_server, detected_terminal_program, doctor_next_steps, help_text, shell_init,
+    shell_snapshot_available,
 };
 
 use whykey::bindings;
@@ -708,329 +708,408 @@ fn run_doctor(json: bool, _color: ColorChoice, schema_version: u8) -> ExitCode {
         );
     } else {
         let render_options = RenderOptions::cli(_color, false);
-        let print_check = |name: &str, ok: bool, hint: &str| {
-            print_check_with_options(name, ok, hint, render_options);
-        };
-        println!("{}\n", render_options.accent("whykey doctor"));
-        print_check("controlling TTY", tty, "run inside a terminal");
-        print_check(
-            &format!("Native capture ({native_backend})"),
-            native_available,
-            "run inside a supported compositor session and ensure its IPC is reachable",
-        );
-        if !native_available {
-            let cause = match hyprland_hook_unavailable.as_deref() {
-                Some(reason) => format!("cause: {reason}"),
-                None => format!(
-                    "cause: {} — {}",
-                    native_cause.label(),
-                    native_cause.next_check()
-                ),
-            };
-            for line in whykey::style::wrap_hanging(&cause, render_options.width, "  ", "  ") {
-                println!("{}", render_options.uncertain(line));
-            }
-        }
-        println!(
-            "\n{}",
-            render_options.accent("Live compositor runtime readers")
-        );
-        for reader in &runtime_readers {
-            print_check(reader.id, reader.availability.available(), &reader.evidence);
-        }
-        if !native_available && !native_attempts.is_empty() {
-            let attempted = native_attempts
-                .iter()
-                .filter_map(|entry| entry.get("backend").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join(", ");
-            println!(
-                "{}",
-                render_options.muted(format!(
-                    "  attempted: {attempted} (unavailable: IPC connection unavailable)"
-                ))
-            );
-        }
-        if !environment.extension_adapters.is_empty() {
-            println!(
-                "\n{}",
-                render_options.accent("Compositor extension adapters")
-            );
-            for adapter in &environment.extension_adapters {
-                let applicable = whykey::extension_adapters::applicable_with_context(
-                    adapter,
-                    &environment.compositor_context,
-                );
-                let reachable = command_program_available(&adapter.bindings_cmd);
-                print_check(
-                    &format!("{} manifest", adapter.display),
-                    applicable && reachable,
-                    if !applicable {
-                        "environment or desktop hints do not match"
-                    } else if !reachable {
-                        "bindings command executable was not found"
-                    } else {
-                        "manifest applies; commands are queried only when needed"
-                    },
-                );
-            }
-        }
-        for warning in &environment.extension_warnings {
-            let warning = format!(
-                "FAIL  extension manifest: {} ({})",
-                warning.path.display(),
-                warning.message
-            );
-            for line in whykey::style::wrap_hanging(&warning, render_options.width, "", "  ") {
-                println!("{}", render_options.failure(line));
-            }
-        }
-        // The registry owns desktop detection, IPC status, check labels,
-        // and hints; the first applicable desktop adapter wins.
-        let selected = whykey::registry::DESKTOPS
-            .iter()
-            .find(|entry| entry.doctor.is_some() && environment.desktop(entry.id).applicable);
-        if let Some(entry) = selected {
-            let doctor = entry.doctor.expect("selected desktop has doctor metadata");
-            let status = environment.desktop(entry.id);
-            let ipc = status.applicable && status.ipc;
-            if entry.id == "programmable" {
-                let name = programmable::detect().map_or("programmable X11 WM", |wm| wm.name());
-                print_check(name, ipc, doctor.hint);
-            } else {
-                print_check(doctor.check, ipc, doctor.hint);
-            }
-        } else if ssh {
-            println!(
-                "{}",
-                render_options.success("OK  Hyprland IPC: not applicable in this SSH session")
-            );
-        } else if generic_compositor {
-            let desktop = compositor_context
-                .desktop
-                .as_deref()
-                .unwrap_or("unknown desktop");
-            let session = compositor_context
-                .session_type
-                .as_deref()
-                .or(compositor_context.display_server.as_deref())
-                .unwrap_or("unknown display session");
-            let message = format!(
-                "FAIL  desktop compositor: {desktop} ({session}) detected, but no read-only adapter is available"
-            );
-            for line in whykey::style::wrap_hanging(&message, render_options.width, "", "  ") {
-                println!("{}", render_options.failure(line));
-            }
-        } else {
-            println!(
-                "{}",
-                render_options.failure("FAIL  compositor session: not detected")
-            );
-        }
-        if generic_terminal_fallback {
-            println!(
-                "{}",
-                render_options.success(format!(
-                    "OK  terminal: {} (Ghostty adapter not required; generic fallback available)",
-                    terminal_program.as_deref().unwrap_or("identity unknown")
-                ))
-            );
-            if let Some(adapter) = terminal_adapter {
-                println!(
-                    "{}",
-                    render_options.muted(format!("  terminal adapter: {adapter}"))
-                );
-            }
-        } else {
-            print_check(
-                "Ghostty effective keybinds",
-                ghostty,
-                "install Ghostty or use its config",
-            );
-        }
-        print_check(
-            "XKB symbol compiler",
+        let facts = DoctorRows {
+            environment: &environment,
+            tty,
+            ssh,
             xkb,
-            "install xkbcommon-tools for keycode translation",
-        );
-        print_check(
-            "evdev keyboard capture",
+            ghostty,
             evdev,
-            evdev_next.as_deref().unwrap_or_default(),
-        );
-        if evdev_devices.is_empty() {
-            println!(
-                "{}",
-                render_options.muted(format!("  evdev devices: none ({})", evdev_scan.detail()))
-            );
-        } else {
-            println!("{}", render_options.muted("  evdev devices:"));
-            for device in evdev_devices.iter().take(5) {
-                let state = if device.readable {
-                    "readable"
-                } else {
-                    device.error.as_deref().unwrap_or("not readable")
-                };
-                println!("    {} — {} ({state})", device.path, device.name);
-            }
-            if evdev_devices.len() > 5 {
-                println!("    … {} more", evdev_devices.len() - 5);
-            }
-        }
-        if remappers.is_empty() {
-            println!("{}", render_options.muted("  remappers: none detected"));
-        } else {
-            println!("{}", render_options.muted("  remappers:"));
-            for remapper in &remappers {
-                println!("    {}", remapper.name);
-                for process in &remapper.processes {
-                    println!("      process: {process}");
-                }
-                for configuration in &remapper.configurations {
-                    println!("      config: {configuration}");
-                }
-                for transformation in &remapper.transformations {
-                    println!("      static transformation: {transformation}");
-                }
-            }
-            println!(
-                "{}",
-                render_options
-                    .uncertain("    transformations and virtual-device routing remain conditional")
-            );
-        }
-        if ime.is_empty() {
-            println!("{}", render_options.muted("  input method: none detected"));
-        } else {
-            println!("{}", render_options.muted("  input methods:"));
-            for engine in &ime {
-                println!("    {}", engine.engine);
-                for source in &engine.sources {
-                    println!("      source: {source}");
-                }
-                for process in &engine.processes {
-                    println!("      process: {process}");
-                }
-                if let Some(active_engine) = &engine.active_engine {
-                    println!("      active engine: {active_engine}");
-                }
-                if let Some(state) = &engine.state {
-                    println!("      runtime state: {state}");
-                }
-                if let Some(error) = &engine.query_error {
-                    println!("      runtime query unavailable: {error}");
-                }
-            }
-            let message = "committed text and Compose/dead-key state remain conditional";
-            for line in whykey::style::wrap_hanging(message, render_options.width, "    ", "    ") {
-                println!("{}", render_options.uncertain(line));
-            }
-        }
-        if shell.is_empty() {
-            println!(
-                "{}",
-                render_options.failure("FAIL  shell: SHELL is not set")
-            );
-        } else {
-            println!("{}", render_options.success(format!("OK  shell: {shell}")));
-        }
-        print_check(
-            "shell runtime snapshot",
+            generic_compositor,
+            generic_terminal_fallback,
+            terminal_program: terminal_program.as_deref(),
+            terminal_adapter,
+            native_available,
+            native_backend,
+            native_cause: native_cause.label(),
+            native_next: native_cause.next_check(),
+            hyprland_hook_unavailable: hyprland_hook_unavailable.as_deref(),
+            native_attempts: &native_attempts,
+            evdev_scan,
+            evdev_devices: &evdev_devices,
+            evdev_commands: whykey::doctor::evdev_acl_commands(&evdev_devices).filter(|_| !evdev),
+            runtime_readers: &runtime_readers,
+            observation_taps: &observation_taps,
+            layer_sources: &layer_sources,
+            remappers: &remappers,
+            ime: &ime,
+            shell: &shell,
             shell_snapshot,
-            "run `eval \"$(whykey shell-init <bash|zsh|fish>)\"` in the current shell",
-        );
-        let multiplexer_hint = match multiplexer_names.as_slice() {
-            [] => "none detected",
-            ["tmux"] => "tmux detected (bindings inspected per key)",
-            ["screen"] => "GNU Screen detected (prefix and screenrc bindings inspected per key)",
-            ["zellij"] => "Zellij detected (custom bindings inspected per key)",
-            _ => "nested multiplexers detected (each layer inspected independently)",
+            multiplexer_names: &multiplexer_names,
+            nvim_extension,
+            nvim_server: nvim_server.as_deref(),
         };
-        println!(
-            "{}",
-            render_options.muted(format!("  multiplexer: {multiplexer_hint}"))
-        );
-        if ssh {
-            println!("{}", render_options.muted("  SSH session: yes"));
-        }
-        if nvim_extension {
-            println!(
-                "{}",
-                render_options.success("OK  Neovim extension: installed (whykey-nvim)")
-            );
-            if let Some(server) = &nvim_server {
-                println!(
-                    "{}",
-                    render_options.muted(format!("  Neovim server: reachable ({server})"))
-                );
-            } else {
-                println!(
-                    "{}",
-                    render_options
-                        .muted("  Neovim server: none active (start nvim with --listen)",)
-                );
-            }
+        let context = if render_options.context {
+            facts.context()
         } else {
-            println!(
-                "{}",
-                render_options
-                    .muted("Neovim extension: not found on PATH or extensions/ (whykey-nvim)")
-            );
-        }
-        println!(
-            "\n{}",
-            render_options.accent("Observation taps (what whykey can watch now)")
+            String::new()
+        };
+        print!(
+            "{}",
+            whykey::doctor::render_report(&context, &facts.groups(), render_options)
         );
-        for tap in &observation_taps {
-            let line = format!(
-                "{}  {}: {}",
-                if tap.available { "OK" } else { "FAIL" },
-                tap.name,
-                tap.detail
-            );
-            for wrapped in whykey::style::wrap_hanging(&line, render_options.width, "", "  ") {
-                if tap.available {
-                    println!("{}", render_options.success(wrapped));
-                } else {
-                    println!("{}", render_options.failure(wrapped));
-                }
-            }
-            if let Some(enable) = &tap.enable {
-                for wrapped in
-                    whykey::style::wrap_hanging(enable, render_options.width, "  enable: ", "    ")
-                {
-                    println!("{}", render_options.muted(wrapped));
-                }
-            }
-        }
-        println!(
-            "\n{}",
-            render_options.accent("Layer sources (live query, config file, or none)")
-        );
-        for source in &layer_sources {
-            let line = format!(
-                "{}: {} — {}",
-                source.layer,
-                source.source.label(),
-                source.detail
-            );
-            for wrapped in whykey::style::wrap_hanging(&line, render_options.width, "  ", "    ") {
-                println!("{wrapped}");
-            }
-        }
-        if !next_steps.is_empty() {
-            println!("\n{}", render_options.accent("Next steps"));
-            for step in &next_steps {
-                for line in whykey::style::wrap_hanging(step, render_options.width, "- ", "  ") {
-                    println!("{line}");
-                }
-            }
-        }
     }
     if tty && compositor_context_available && (ghostty || generic_terminal_fallback) {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+/// What doctor found, as the inputs to its human report.
+struct DoctorRows<'a> {
+    environment: &'a whykey::environment::Environment,
+    tty: bool,
+    ssh: bool,
+    xkb: bool,
+    ghostty: bool,
+    evdev: bool,
+    generic_compositor: bool,
+    generic_terminal_fallback: bool,
+    terminal_program: Option<&'a str>,
+    terminal_adapter: Option<&'a str>,
+    native_available: bool,
+    native_backend: &'a str,
+    native_cause: &'a str,
+    native_next: &'a str,
+    hyprland_hook_unavailable: Option<&'a str>,
+    native_attempts: &'a [serde_json::Value],
+    evdev_scan: whykey::doctor::EvdevScan,
+    evdev_devices: &'a [whykey::listen::EvdevDeviceInfo],
+    evdev_commands: Option<(String, String)>,
+    runtime_readers: &'a [whykey::runtime_readers::ReaderStatus],
+    observation_taps: &'a [whykey::doctor::ObservationTap],
+    layer_sources: &'a [whykey::doctor::LayerSource],
+    remappers: &'a [whykey::remapper::Detection],
+    ime: &'a [whykey::ime::Detection],
+    shell: &'a str,
+    shell_snapshot: bool,
+    multiplexer_names: &'a [&'a str],
+    nvim_extension: bool,
+    nvim_server: Option<&'a str>,
+}
+
+impl DoctorRows<'_> {
+    /// `Hyprland · Wayland · bash` for the header.
+    fn context(&self) -> String {
+        let context = &self.environment.compositor_context;
+        let session = context
+            .session_type
+            .as_deref()
+            .or(context.display_server.as_deref())
+            .map(|value| match value {
+                "wayland" => "Wayland",
+                "x11" => "X11",
+                "tty" => "TTY",
+                other => other,
+            });
+        let shell = self
+            .shell
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty());
+        let desktop = self
+            .environment
+            .compositor_candidates
+            .iter()
+            .find(|candidate| candidate.ipc)
+            .and_then(|candidate| {
+                whykey::registry::DESKTOPS
+                    .iter()
+                    .find(|entry| entry.id == candidate.id)
+                    .map(|entry| entry.display)
+            })
+            .or(context.desktop.as_deref());
+        [desktop, session, shell]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ")
+    }
+
+    fn groups(&self) -> Vec<whykey::doctor::Group> {
+        use whykey::doctor::{Group, Row};
+        use whykey::style::Check;
+        let state = |ok: bool| if ok { Check::Ok } else { Check::Fail };
+
+        let mut capture = Vec::new();
+        capture.push(if self.tty {
+            Row::new(Check::Ok, "controlling TTY")
+        } else {
+            Row::new(Check::Fail, "controlling TTY").reason("run whykey inside a terminal")
+        });
+        let mut native = Row::new(
+            state(self.native_available),
+            format!("{} native capture", self.native_backend),
+        );
+        if !self.native_available {
+            native = native.reason(match self.hyprland_hook_unavailable {
+                Some(reason) => reason.to_owned(),
+                None => format!("{}: {}", self.native_cause, self.native_next),
+            });
+            if !self.native_attempts.is_empty() {
+                let attempted = self
+                    .native_attempts
+                    .iter()
+                    .filter_map(|entry| entry.get("backend").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                native = native.note(format!("attempted: {attempted}"));
+            }
+        }
+        capture.push(native);
+        let mut evdev =
+            Row::new(state(self.evdev), "evdev keyboards").reason(self.evdev_scan.detail());
+        if let Some((grant, undo)) = &self.evdev_commands {
+            evdev = evdev.fix(grant.clone()).undo(undo.clone());
+            evdev =
+                evdev.note("the grant is lost when the device is replugged or the system reboots");
+        } else if !self.evdev {
+            if let Some(step) = self.evdev_scan.next_step() {
+                evdev = evdev.note(step);
+            }
+        }
+        for device in self.evdev_devices.iter().take(5) {
+            let status = if device.readable {
+                "readable"
+            } else {
+                device.error.as_deref().unwrap_or("not readable")
+            };
+            evdev = evdev.note(format!(
+                "{} \u{2014} {} ({status})",
+                device.path, device.name
+            ));
+        }
+        if self.evdev_devices.len() > 5 {
+            evdev = evdev.note(format!("\u{2026} {} more", self.evdev_devices.len() - 5));
+        }
+        capture.push(evdev);
+        for tap in self.observation_taps {
+            if matches!(tap.id, "probe-window" | "x11-grab") {
+                capture.push(Row::new(state(tap.available), tap.name).reason(tap.detail.clone()));
+            }
+        }
+
+        let mut live = Vec::new();
+        for reader in self.runtime_readers {
+            use whykey::runtime_readers::Availability;
+            let check = match reader.availability {
+                Availability::Available => Check::Ok,
+                Availability::MalformedResponse => Check::Unknown,
+                Availability::Unavailable | Availability::ApiDoesNotExpose => Check::Skip,
+            };
+            let reason = if check == Check::Ok {
+                String::new()
+            } else {
+                reader.evidence.clone()
+            };
+            live.push(Row::new(check, reader.id).reason(reason));
+        }
+        let selected = whykey::registry::DESKTOPS
+            .iter()
+            .find(|entry| entry.doctor.is_some() && self.environment.desktop(entry.id).applicable);
+        if let Some(entry) = selected {
+            let doctor = entry.doctor.expect("selected desktop has doctor metadata");
+            let status = self.environment.desktop(entry.id);
+            let ipc = status.applicable && status.ipc;
+            let name = if entry.id == "programmable" {
+                programmable::detect().map_or("programmable X11 WM", |wm| wm.name())
+            } else {
+                doctor.check
+            };
+            let row = Row::new(state(ipc), name);
+            live.push(if ipc { row } else { row.reason(doctor.hint) });
+        } else if self.ssh {
+            live.push(
+                Row::new(Check::Skip, "Hyprland IPC").reason("not applicable in this SSH session"),
+            );
+        } else if self.generic_compositor {
+            let context = &self.environment.compositor_context;
+            let desktop = context.desktop.as_deref().unwrap_or("unknown desktop");
+            let session = context
+                .session_type
+                .as_deref()
+                .or(context.display_server.as_deref())
+                .unwrap_or("unknown display session");
+            live.push(Row::new(Check::Fail, "desktop compositor").reason(format!(
+                "{desktop} ({session}) detected, but no read-only adapter is available"
+            )));
+        } else {
+            live.push(Row::new(Check::Fail, "compositor session").reason("not detected"));
+        }
+        for adapter in &self.environment.extension_adapters {
+            let applicable = whykey::extension_adapters::applicable_with_context(
+                adapter,
+                &self.environment.compositor_context,
+            );
+            let reachable = command_program_available(&adapter.bindings_cmd);
+            let (check, reason) = if !applicable {
+                (Check::Skip, "environment or desktop hints do not match")
+            } else if !reachable {
+                (Check::Fail, "bindings command executable was not found")
+            } else {
+                (
+                    Check::Ok,
+                    "manifest applies; commands are queried only when needed",
+                )
+            };
+            live.push(Row::new(check, format!("{} manifest", adapter.display)).reason(reason));
+        }
+        for warning in &self.environment.extension_warnings {
+            live.push(Row::new(Check::Fail, "extension manifest").reason(format!(
+                "{} ({})",
+                warning.path.display(),
+                warning.message
+            )));
+        }
+
+        let mut input = Vec::new();
+        input.push(if self.xkb {
+            Row::new(Check::Ok, "XKB symbol compiler")
+        } else {
+            Row::new(Check::Fail, "XKB symbol compiler")
+                .reason("install xkbcommon-tools for keycode translation")
+        });
+        if self.remappers.is_empty() {
+            input.push(Row::new(Check::Skip, "remappers").reason("none detected"));
+        } else {
+            let mut row = Row::new(Check::Ok, "remappers").reason(
+                self.remappers
+                    .iter()
+                    .map(|remapper| remapper.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            for remapper in self.remappers {
+                for process in &remapper.processes {
+                    row = row.note(format!("{}: process {process}", remapper.name));
+                }
+                for configuration in &remapper.configurations {
+                    row = row.note(format!("{}: config {configuration}", remapper.name));
+                }
+                for transformation in &remapper.transformations {
+                    row = row.note(format!(
+                        "{}: static transformation {transformation}",
+                        remapper.name
+                    ));
+                }
+            }
+            input.push(row.note("transformations and virtual-device routing remain conditional"));
+        }
+        if self.ime.is_empty() {
+            input.push(Row::new(Check::Skip, "input method").reason("none detected"));
+        } else {
+            let mut row = Row::new(Check::Ok, "input method").reason(
+                self.ime
+                    .iter()
+                    .map(|engine| engine.engine.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            for engine in self.ime {
+                for source in &engine.sources {
+                    row = row.note(format!("{}: source {source}", engine.engine));
+                }
+                for process in &engine.processes {
+                    row = row.note(format!("{}: process {process}", engine.engine));
+                }
+                if let Some(active) = &engine.active_engine {
+                    row = row.note(format!("{}: active engine {active}", engine.engine));
+                }
+                if let Some(state) = &engine.state {
+                    row = row.note(format!("{}: runtime state {state}", engine.engine));
+                }
+                if let Some(error) = &engine.query_error {
+                    row = row.note(format!(
+                        "{}: runtime query unavailable: {error}",
+                        engine.engine
+                    ));
+                }
+            }
+            input.push(row.note("committed text and Compose/dead-key state remain conditional"));
+        }
+
+        let mut shell = Vec::new();
+        if self.generic_terminal_fallback {
+            let mut row = Row::new(Check::Ok, "terminal").reason(format!(
+                "{} (generic fallback; no Ghostty adapter needed)",
+                self.terminal_program.unwrap_or("identity unknown")
+            ));
+            if let Some(adapter) = self.terminal_adapter {
+                row = row.note(format!("terminal adapter: {adapter}"));
+            }
+            shell.push(row);
+        } else {
+            let row = Row::new(state(self.ghostty), "Ghostty keybinds");
+            shell.push(if self.ghostty {
+                row
+            } else {
+                row.reason("install Ghostty or use its config")
+            });
+        }
+        let shell_name = self.shell.rsplit('/').next().unwrap_or_default();
+        if self.shell.is_empty() {
+            shell.push(Row::new(Check::Fail, "shell").reason("SHELL is not set"));
+        } else {
+            let mut row = Row::new(Check::Ok, shell_name).reason(self.shell);
+            if self.ssh {
+                row = row.note("SSH session: yes");
+            }
+            shell.push(row);
+        }
+        let init_shell = match shell_name {
+            "bash" | "zsh" | "fish" => shell_name,
+            _ => "<bash|zsh|fish>",
+        };
+        let snapshot = Row::new(state(self.shell_snapshot), "live shell bindings");
+        shell.push(if self.shell_snapshot {
+            snapshot
+        } else {
+            snapshot.fix(format!("eval \"$(whykey shell-init {init_shell})\""))
+        });
+        let multiplexer = match self.multiplexer_names {
+            [] => None,
+            ["tmux"] => Some("tmux detected (bindings inspected per key)"),
+            ["screen"] => {
+                Some("GNU Screen detected (prefix and screenrc bindings inspected per key)")
+            }
+            ["zellij"] => Some("Zellij detected (custom bindings inspected per key)"),
+            _ => Some("nested multiplexers detected (each layer inspected independently)"),
+        };
+        shell.push(match multiplexer {
+            Some(text) => Row::new(Check::Ok, "multiplexer").reason(text),
+            None => Row::new(Check::Skip, "multiplexer").reason("none detected"),
+        });
+        shell.push(if self.nvim_extension {
+            Row::new(Check::Ok, "Neovim extension").reason(match self.nvim_server {
+                Some(server) => format!("whykey-nvim installed; server reachable ({server})"),
+                None => "whykey-nvim installed; no server listening (start nvim with --listen)"
+                    .to_owned(),
+            })
+        } else {
+            Row::new(Check::Skip, "Neovim extension")
+                .reason("whykey-nvim not found on PATH or extensions/")
+        });
+
+        let sources = self
+            .layer_sources
+            .iter()
+            .map(|source| {
+                Row::plain(source.layer).reason(format!(
+                    "{} \u{2014} {}",
+                    source.source.label(),
+                    source.detail
+                ))
+            })
+            .collect();
+
+        vec![
+            Group::new("Capture", capture),
+            Group::new("Live readers", live),
+            Group::new("Input stack", input),
+            Group::new("Shell and editors", shell),
+            Group::new("Where each layer's answer comes from", sources),
+        ]
     }
 }
 

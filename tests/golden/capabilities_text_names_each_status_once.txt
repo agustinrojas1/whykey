@@ -1,0 +1,12 @@
+whykey capabilities
+
+  cli.one       available
+    cli.one evidence
+
+  desktop.two   unavailable
+    desktop.two evidence
+
+  future.three  planned
+    future.three evidence
+
+Summary  1 available, 1 unavailable, 1 planned

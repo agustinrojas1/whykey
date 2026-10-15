@@ -1608,6 +1608,16 @@ xkb_symbols "pc" {
     }
 
     #[test]
+    fn chain_verdicts_map_to_states() {
+        use super::output::stage_state;
+        use crate::style::Check;
+        assert_eq!(stage_state("selected: Hyprland IPC").0, Check::Ok);
+        assert_eq!(stage_state("unavailable: no session").0, Check::Fail);
+        assert_eq!(stage_state("not needed").0, Check::Skip);
+        assert_eq!(stage_state("not tried: --suppress").1, "--suppress");
+    }
+
+    #[test]
     fn waiting_message_names_the_keys_sway_native_capture_cannot_see() {
         use super::output::{exit_keys, waiting_mode};
         let sway = crate::capture::NativeBackendId::Sway.display();

@@ -258,6 +258,37 @@ as
 Other matching binds that fire together are shown as
 .BR "also fires" ;
 release and long-press binds are not, because they do not run on press.
+.SH READING A REPORT
+A report starts with the key and the environment that was evaluated, then a
+verdict line and a route that lists every layer in the order the key travels.
+The glyph in front of each route row says what the layer does to the key:
+.TS
+tab(|);
+l l l.
+Glyph|ASCII|Meaning
+\[u2715]|x|the layer keeps the key; nothing after it receives it
+\[u2193]|v|the layer lets the key through
+\[u21AA]|>|the layer rewrites the key or waits for another one
+?|?|whykey could not verify what happens
+\[u00B7]|\-|not reached or not applicable
+.TE
+.PP
+The last column of a row names the evidence tier:
+.B observed
+(the key was seen arriving),
+.B live query
+(the running program was asked),
+.B config file
+(a file was read but not confirmed loaded) or
+.B default
+(built-in behavior that configuration may override).
+.B doctor
+marks its rows \[u2713] available, \[u2717] unavailable, \[u2013] not
+applicable in this session and ? unknown.
+With
+.B \-\-ascii
+or a non-UTF-8 locale the ASCII glyphs are used; color is never the only
+carrier of meaning.
 .SH COMMANDS
 .TP
 .BI combination

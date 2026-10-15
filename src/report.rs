@@ -1105,15 +1105,8 @@ fn render_verbose_evidence(
             "       ",
             "       ",
         );
-        for detail in layer.all_details() {
-            push_wrapped(
-                output,
-                &format!("evidence: {detail}"),
-                options,
-                "       ",
-                "       ",
-            );
-        }
+        let details: Vec<&String> = layer.all_details().collect();
+        push_grouped_details(output, &details, options);
         if let Some(binding) = &layer.binding {
             output.push_str("       binding:\n");
             if let Some(dispatcher) = &binding.dispatcher {
@@ -1193,6 +1186,102 @@ fn render_verbose_evidence(
         }
     }
     output.push('\n');
+}
+
+/// The topic of one free-form evidence line in `--verbose`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EvidenceTopic {
+    Binding,
+    KeyboardLayout,
+    Policy,
+}
+
+impl EvidenceTopic {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Binding => "binding",
+            Self::KeyboardLayout => "keyboard and layout",
+            Self::Policy => "policy notes",
+        }
+    }
+
+    fn of(detail: &str) -> Self {
+        let lowered = detail.to_ascii_lowercase();
+        if ["keyboard", "xkb", "keymap", "layout"]
+            .iter()
+            .any(|word| lowered.contains(word))
+        {
+            return Self::KeyboardLayout;
+        }
+        const BINDING_PREFIXES: &[&str] = &[
+            "source:",
+            "config:",
+            "binding:",
+            "action:",
+            "active submap",
+            "submap",
+            "lua source hint",
+        ];
+        if BINDING_PREFIXES
+            .iter()
+            .any(|prefix| lowered.starts_with(prefix))
+        {
+            return Self::Binding;
+        }
+        Self::Policy
+    }
+}
+
+/// `main keyboard: NAME, keymap KEYMAP, main; N additional keyboard(s): ...`
+/// as `main: NAME (KEYMAP); N more`; `None` when the line has another shape.
+fn collapse_keyboards(detail: &str) -> Option<String> {
+    let rest = detail.strip_prefix("main keyboard: ")?;
+    let (head, tail) = match rest.split_once("; ") {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (rest, None),
+    };
+    let (name, keymap) = head.split_once(", keymap ")?;
+    let keymap = keymap.strip_suffix(", main").unwrap_or(keymap);
+    let mut collapsed = format!("main: {name} ({keymap})");
+    if let Some(count) = tail
+        .and_then(|tail| tail.split_once(" additional keyboard"))
+        .and_then(|(count, _)| count.parse::<usize>().ok())
+    {
+        collapsed.push_str(&format!("; {count} more"));
+    }
+    Some(collapsed)
+}
+
+/// Evidence lines under subtitles, in a fixed order. The keyboard list is
+/// collapsed to one line; the full text follows it, dimmed.
+fn push_grouped_details(output: &mut String, details: &[&String], options: RenderOptions) {
+    for topic in [
+        EvidenceTopic::Binding,
+        EvidenceTopic::KeyboardLayout,
+        EvidenceTopic::Policy,
+    ] {
+        let lines: Vec<&String> = details
+            .iter()
+            .copied()
+            .filter(|detail| EvidenceTopic::of(detail) == topic)
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+        output.push_str(&format!("       {}\n", options.bold(topic.title())));
+        for detail in lines {
+            match collapse_keyboards(detail) {
+                Some(collapsed) => {
+                    push_wrapped(output, &collapsed, options, "         ", "         ");
+                    if collapsed.contains(" more") {
+                        output.push_str(&options.muted(format!("         {detail}")));
+                        output.push('\n');
+                    }
+                }
+                None => push_wrapped(output, detail, options, "         ", "         "),
+            }
+        }
+    }
 }
 
 fn push_wrapped(
@@ -1775,6 +1864,20 @@ fn confidence_label(layers: &[LayerResult], observed: bool) -> &'static str {
 mod tests {
     use super::*;
     use crate::layers::{BindingScope, LayerId, Outcome};
+
+    #[test]
+    fn verbose_keyboard_list_collapses_to_the_main_keyboard() {
+        let detail = "main keyboard: kbd-a, keymap English (US), main; 8 additional keyboard(s): kbd-b, keymap English (US), ...";
+        assert_eq!(
+            collapse_keyboards(detail).as_deref(),
+            Some("main: kbd-a (English (US)); 8 more")
+        );
+        assert_eq!(
+            collapse_keyboards("main keyboard: kbd-a, keymap Czech, main").as_deref(),
+            Some("main: kbd-a (Czech)")
+        );
+        assert_eq!(collapse_keyboards("main keyboard: kbd-a"), None);
+    }
 
     #[test]
     fn renders_a_forwarded_result() {

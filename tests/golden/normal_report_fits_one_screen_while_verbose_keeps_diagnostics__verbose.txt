@@ -41,11 +41,14 @@ Technical evidence
   route evidence:
     1. Hyprland [Handled; Stops]
        summary: active binding found
-       evidence: binding: __lua 285; Herdr
-       evidence: main keyboard: at-translated-set-2-keyboard
-       evidence: active XKB layout group index: 0
-       evidence: 2 matching binding(s) exist in inactive submap(s); current
-       submap is default
+       binding
+         binding: __lua 285; Herdr
+       keyboard and layout
+         main keyboard: at-translated-set-2-keyboard
+         active XKB layout group index: 0
+       policy notes
+         2 matching binding(s) exist in inactive submap(s); current submap is
+         default
        binding:
          dispatcher: __lua
          action: __lua 285

@@ -506,7 +506,7 @@ fn invalid_combinations_have_a_cli_error_status() {
     let output = binary().arg("ctrl+shift").output().unwrap();
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("non-modifier key"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("has no main key"));
 }
 
 #[cfg(unix)]
@@ -896,11 +896,11 @@ fn doctor_lists_observation_taps_and_layer_sources() {
 
     let human = binary().arg("doctor").output().unwrap();
     let stdout = String::from_utf8_lossy(&human.stdout);
-    assert!(stdout.contains("Observation taps (what whykey can watch now)"));
-    assert!(
-        stdout.contains("FAIL probe window: no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY")
-    );
-    assert!(stdout.contains("Layer sources (live query, config file, or none)"));
+    assert!(stdout.contains("\nCapture\n"));
+    assert!(stdout.contains("probe window"));
+    assert!(stdout.contains("no Wayland socket (WAYLAND_DISPLAY) or X11 DISPLAY"));
+    assert!(stdout.contains("Where each layer's answer comes from"));
+    assert!(stdout.contains("\nSummary  "));
 }
 
 #[test]
@@ -3288,7 +3288,7 @@ fn listen_dry_run_selects_without_arming() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("capture chain: skipped; --terminal forces one backend"));
+    assert!(stdout.contains("skipped; --terminal forces one backend"));
     assert!(stdout.contains("Terminal (dry-run; not armed)"));
 }
 
@@ -3297,12 +3297,10 @@ fn listen_dry_run_shows_the_default_chain_and_why() {
     let output = binary().args(["listen", "--dry-run"]).output().unwrap();
     assert!(output.status.success(), "output: {output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("capture chain (first usable backend wins):"));
-    assert!(
-        stdout.contains("1. native compositor: unavailable: no Hyprland or Sway session detected")
-    );
-    assert!(stdout.contains("2. probe window: unavailable: no Wayland socket"));
-    assert!(stdout.contains("3. terminal:"));
+    assert!(stdout.contains("Capture chain  first usable backend wins"));
+    assert!(stdout.contains("no Hyprland or Sway session detected"));
+    assert!(stdout.contains("no Wayland socket"));
+    assert!(stdout.contains("terminal"));
 }
 
 #[test]
@@ -3315,11 +3313,11 @@ fn listen_dry_run_selects_the_probe_window_before_the_terminal() {
         .unwrap();
     assert!(output.status.success(), "output: {output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("2. probe window: selected: opens a probe window (X11)"));
-    assert!(stdout.contains("3. terminal: used only if the probe window cannot be opened"));
-    assert!(stdout.contains(
-        "capture backend: Probe window via X11 (dry-run; not armed; policy=pass-through)"
-    ));
+    assert!(stdout.contains("opens a probe window (X11)"));
+    assert!(stdout.contains("used only if the probe window cannot be opened"));
+    assert!(
+        stdout.contains("Backend  Probe window via X11 (dry-run; not armed; policy=pass-through)")
+    );
 }
 
 #[test]
@@ -3330,9 +3328,9 @@ fn listen_explain_capture_reports_detection_table() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("capture detection"));
-    assert!(stdout.contains("capture_factory="));
-    assert!(stdout.contains("selected compositor:"));
+    assert!(stdout.contains("Capture detection"));
+    assert!(stdout.contains("can capture keys"));
+    assert!(stdout.contains("Selected compositor"));
 }
 
 #[test]

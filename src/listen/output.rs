@@ -1,6 +1,7 @@
 use super::protocol::{flush_input, remaining_millis};
 use super::terminal::{SignalGuard, TerminalBackend, TerminalSession};
 use super::*;
+use std::io::IsTerminal as _;
 
 /// One stage of the default capture chain and why it is (not) used.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,17 +113,32 @@ pub(super) fn plan_default_chain(
     CapturePlan { stages, selected }
 }
 
+/// A stage verdict as a state glyph and the words after its keyword.
+pub(super) fn stage_state(verdict: &str) -> (crate::style::Check, &str) {
+    use crate::style::Check;
+    for (keyword, check) in [
+        ("selected: ", Check::Ok),
+        ("unavailable: ", Check::Fail),
+        ("not usable: ", Check::Fail),
+        ("not tried: ", Check::Skip),
+    ] {
+        if let Some(reason) = verdict.strip_prefix(keyword) {
+            return (check, reason);
+        }
+    }
+    (Check::Skip, verdict)
+}
+
 /// Print the capture chain for `--dry-run`/`--explain-capture`. Nothing is
 /// armed; native capture is only probed by connecting to its IPC.
 pub(super) fn print_capture_plan(environment: &crate::environment::Environment, options: &Options) {
+    let render = crate::style::RenderOptions::cli(options.color, false);
+    // JSON mode keeps the plain one-line-per-fact text on stderr.
     let write_line = |line: String| {
         if options.json {
             eprintln!("{line}");
         } else {
-            println!(
-                "{}",
-                crate::style::RenderOptions::cli(options.color, false).accent(line)
-            );
+            println!("{line}");
         }
     };
     let armed = if options.dry_run {
@@ -146,8 +162,19 @@ pub(super) fn print_capture_plan(environment: &crate::environment::Environment, 
         None
     };
     if let Some((backend, flag)) = forced {
-        write_line(format!("capture chain: skipped; {flag} forces one backend"));
-        write_line(format!("capture backend: {backend} ({armed})"));
+        if options.json {
+            write_line(format!("capture chain: skipped; {flag} forces one backend"));
+            write_line(format!("capture backend: {backend} ({armed})"));
+        } else {
+            write_line(format!(
+                "{}  skipped; {flag} forces one backend",
+                render.heading("Capture chain")
+            ));
+            write_line(format!(
+                "{}  {backend} ({armed})",
+                render.heading("Backend")
+            ));
+        }
         return;
     }
     #[cfg(target_os = "linux")]
@@ -163,22 +190,57 @@ pub(super) fn print_capture_plan(environment: &crate::environment::Environment, 
         options.capture_policy,
         options.events_all,
     );
-    write_line("capture chain (first usable backend wins):".to_owned());
+    if options.json {
+        write_line("capture chain (first usable backend wins):".to_owned());
+        for (index, stage) in plan.stages.iter().enumerate() {
+            write_line(format!(
+                "  {}. {}: {}",
+                index + 1,
+                stage.name,
+                stage.verdict
+            ));
+        }
+        match plan.selected {
+            Ok(backend) => write_line(format!(
+                "capture backend: {backend} ({armed}; policy={})",
+                options.capture_policy
+            )),
+            Err(reason) => write_line(format!("capture backend: none ({armed}; {reason})")),
+        }
+        return;
+    }
+    let name_width = plan
+        .stages
+        .iter()
+        .map(|stage| stage.name.len())
+        .max()
+        .unwrap_or(0);
+    let mut text = format!(
+        "{}  {}\n",
+        render.heading("Capture chain"),
+        render.muted("first usable backend wins")
+    );
     for (index, stage) in plan.stages.iter().enumerate() {
-        write_line(format!(
-            "  {}. {}: {}",
+        let (check, reason) = stage_state(&stage.verdict);
+        text.push_str(&format!(
+            "  {}  {}  {:<name_width$}  {reason}\n",
+            render.check(check),
             index + 1,
             stage.name,
-            stage.verdict
         ));
     }
     match plan.selected {
-        Ok(backend) => write_line(format!(
-            "capture backend: {backend} ({armed}; policy={})",
+        Ok(backend) => text.push_str(&format!(
+            "{}  {backend} ({armed}; policy={})\n",
+            render.heading("Backend"),
             options.capture_policy
         )),
-        Err(reason) => write_line(format!("capture backend: none ({armed}; {reason})")),
+        Err(reason) => text.push_str(&format!(
+            "{}  none ({armed}; {reason})\n",
+            render.heading("Backend")
+        )),
     }
+    print!("{}", render.fold(text));
 }
 
 pub(super) fn print_capture_explanation(
@@ -187,35 +249,84 @@ pub(super) fn print_capture_explanation(
     color: crate::style::ColorChoice,
     json: bool,
 ) {
-    let write_line = |line: String| {
-        if json {
-            eprintln!("{line}");
-        } else {
-            println!(
-                "{}",
-                crate::style::RenderOptions::cli(color, false).accent(line)
+    if json {
+        eprintln!("capture detection (policy={policy})");
+        for status in &environment.desktops {
+            let capture = crate::registry::DESKTOPS
+                .iter()
+                .find(|entry| entry.id == status.id)
+                .is_some_and(|entry| entry.capture.is_some());
+            eprintln!(
+                "- {}: applicable={} ipc={} capture_factory={}",
+                status.id, status.applicable, status.ipc, capture
             );
         }
-    };
-    write_line(format!("capture detection (policy={policy})"));
+        eprintln!("selected compositor: {:?}", environment.selected_compositor);
+        eprintln!(
+            "compositor candidates: {:?}",
+            environment.compositor_candidates
+        );
+        return;
+    }
+    use crate::style::Check;
+    let render = crate::style::RenderOptions::cli(color, false);
+    let width = environment
+        .desktops
+        .iter()
+        .map(|status| status.id.len())
+        .max()
+        .unwrap_or(0);
+    let mut text = format!(
+        "{}  {}\n",
+        render.heading("Capture detection"),
+        render.muted(format!("policy={policy}"))
+    );
     for status in &environment.desktops {
         let capture = crate::registry::DESKTOPS
             .iter()
             .find(|entry| entry.id == status.id)
             .is_some_and(|entry| entry.capture.is_some());
-        write_line(format!(
-            "- {}: applicable={} ipc={} capture_factory={}",
-            status.id, status.applicable, status.ipc, capture
+        let (check, reason) = match (status.applicable, status.ipc) {
+            (false, _) => (Check::Skip, "not applicable in this session"),
+            (true, true) => (Check::Ok, "applicable, IPC reachable"),
+            (true, false) => (Check::Fail, "applicable, IPC unreachable"),
+        };
+        text.push_str(&format!(
+            "  {}  {:<width$}  {reason}{}\n",
+            render.check(check),
+            status.id,
+            if capture { "; can capture keys" } else { "" },
         ));
     }
-    write_line(format!(
-        "selected compositor: {:?}",
-        environment.selected_compositor
+    let selected = environment.selected_compositor.unwrap_or("none");
+    let candidates = environment
+        .compositor_candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{} (score {}, IPC {})",
+                candidate.id,
+                candidate.score,
+                if candidate.ipc {
+                    "reachable"
+                } else {
+                    "unreachable"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    text.push_str(&format!(
+        "{}  {selected}\n{}  {}\n",
+        render.heading("Selected compositor"),
+        render.heading("Candidates"),
+        if candidates.is_empty() {
+            "none"
+        } else {
+            &candidates
+        }
     ));
-    write_line(format!(
-        "compositor candidates: {:?}",
-        environment.compositor_candidates
-    ));
+    print!("{}", render.fold(text));
 }
 
 /// What the waiting message says the capture observes.
@@ -251,6 +362,39 @@ pub(super) fn exit_keys(backend: &str) -> &'static str {
     }
 }
 
+/// The erasable "waiting" block on stderr: how many lines it takes and
+/// whether stderr is a terminal that can erase them.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Waiting {
+    lines: usize,
+    erasable: bool,
+}
+
+impl Waiting {
+    /// Remove the waiting block once a key arrived (or the capture ended).
+    pub(super) fn clear(self) {
+        if self.erasable && self.lines > 0 {
+            eprint!("\x1b[{}A\r\x1b[J", self.lines);
+            let _ = io::stderr().flush();
+        }
+    }
+}
+
+/// A short label for how the capture treats the key, for the waiting line.
+fn waiting_label(backend: &str, policy: CapturePolicy, physical_observation: bool) -> &'static str {
+    if physical_observation {
+        "observe only"
+    } else if backend == CaptureBackendId::Window.display() {
+        "probe window"
+    } else if backend == CaptureBackendId::Terminal.display() {
+        "terminal"
+    } else if policy == CapturePolicy::Suppress {
+        "suppressing"
+    } else {
+        "pass-through"
+    }
+}
+
 fn print_waiting_message(
     backend: &str,
     policy: CapturePolicy,
@@ -258,23 +402,45 @@ fn print_waiting_message(
     json: bool,
     color: crate::style::ColorChoice,
     physical_observation: bool,
-) {
+) -> Waiting {
     let mode = waiting_mode(backend, policy, physical_observation);
     let exit_keys = exit_keys(backend);
     if json {
         eprintln!(
             "whykey listen: capturing via {backend} ({mode}); Waiting for input. {exit_keys} exits"
         );
-        return;
+        return Waiting::default();
     }
     let options = crate::style::RenderOptions::cli(color, false);
-    println!("{}", options.accent(format!("Capture ready · {backend}")));
-    println!("  {mode}.");
-    if repeat {
-        println!("  Repeat mode keeps each report in scrollback.");
+    let label = waiting_label(backend, policy, physical_observation);
+    let repeat = if repeat { ", repeat" } else { "" };
+    let mut lines = vec![format!(
+        "Waiting for a key\u{2026} ({backend} capture, {label}{repeat}; {exit_keys} cancels)"
+    )];
+    // Caveats the short label cannot carry: they decide what will be seen.
+    if matches!(label, "probe window" | "suppressing")
+        || backend == crate::capture::NativeBackendId::Sway.display()
+    {
+        lines.push(format!("{mode}."));
     }
-    println!("  Waiting for input.");
-    println!("  Press {exit_keys} to exit.");
+    let erasable = io::stderr().is_terminal();
+    // Wrap before printing so the number of rows to erase is known.
+    let mut count = 0;
+    for (index, line) in lines.into_iter().enumerate() {
+        let line = options.fold(line);
+        for row in crate::style::wrap_hanging(&line, options.width, "", "  ") {
+            if index == 0 {
+                eprintln!("{}", options.heading(row));
+            } else {
+                eprintln!("{}", options.muted(row));
+            }
+            count += 1;
+        }
+    }
+    Waiting {
+        lines: count,
+        erasable,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -389,7 +555,7 @@ pub(super) fn run_native(
         }
     }
 
-    print_waiting_message(
+    let waiting = print_waiting_message(
         capture_session.display(),
         options.capture_policy,
         options.repeat,
@@ -447,6 +613,7 @@ pub(super) fn run_native(
                 .next_event(options.events_all)
                 .map_err(ListenError::Message)?
             {
+                waiting.clear();
                 if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
                     if options.json {
                         eprintln!("Stopped.");
@@ -637,7 +804,7 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
 ) -> Result<(), ListenError> {
     let mut export = open_export(options.output.as_deref())?;
     let mut capture_stdout = io::BufWriter::new(io::stdout());
-    print_waiting_message(
+    let mut waiting = print_waiting_message(
         backend.display(),
         CapturePolicy::PassThrough,
         options.repeat,
@@ -673,6 +840,7 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
         else {
             continue;
         };
+        waiting.clear();
         if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
             backend.close().map_err(ListenError::Io)?;
             if options.json {
@@ -724,7 +892,7 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
                     .muted("--- next capture ---")
             );
         }
-        print_waiting_message(
+        waiting = print_waiting_message(
             backend.display(),
             CapturePolicy::PassThrough,
             options.repeat,
