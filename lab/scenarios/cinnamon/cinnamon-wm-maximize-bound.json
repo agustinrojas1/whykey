@@ -1,0 +1,26 @@
+{
+  "id": "cinnamon-wm-maximize-bound",
+  "description": "muffin's toggle-maximized, bound to Super+q in org.cinnamon.desktop.keybindings.wm, maximizes the focused X11 probe window and consumes the key; muffin keeps this per-window binding on the focused window's frame, not on the root",
+  "tier": "observed",
+  "environment": "cinnamon",
+  "expect": "fired",
+  "session_setup": [
+    "gsettings set org.cinnamon.desktop.keybindings.wm toggle-maximized \"['<Super>q']\""
+  ],
+  "probe": "x11",
+  "actions": [
+    {"wait_grab": {"keysym": "q", "modmask": 64}},
+    {"xdotool": ["keydown", "Super_L", "keydown", "q", "keyup", "q", "keyup", "Super_L"]}
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "xprop -name whykey-probe _NET_WM_STATE | grep -q MAXIMIZED_VERT"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["super+q"],
+    "layer": "Cinnamon",
+    "detail": "toggle-maximized"
+  }
+}

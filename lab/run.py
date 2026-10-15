@@ -56,6 +56,10 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   "reached" is then required ("fired" = the fired check
                   already proves it). Every scenario needs "delivered" or
                   "reached"; observation scenarios need "delivered".
+    expect        optional "fired": the bind must have fired. When the "fired"
+                  check is false the run is a LAB ERROR (retried, never a
+                  pass), not "not fired, delivered -> pass": a bound scenario
+                  whose bind silently did not register proves nothing.
     whykey        {"args": [...], "layer": name or [names], "env": {...},
                    "run": "direct" | "pty" | "background", "command": "whykey",
                    "accept": [...], "summary": "text", "detail": "text",
@@ -125,6 +129,8 @@ ROOT = LAB.parent
 SCENARIOS = LAB / "scenarios"
 RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
 TIERS = {"observed"}
+# Scenario "expect": what must have happened for the run to count (see the docstring).
+EXPECTATIONS = {"fired"}
 REQUIRED = {"id", "description", "tier", "environment", "ground_truth", "whykey"}
 # VM environments (Hyprland) boot a guest inside the container (lab/driver.py).
 SCENARIO_TIMEOUT = 180
@@ -149,6 +155,8 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
             raise SystemExit(f"{path}: unknown environment {scenario['environment']!r}")
         if scenario["tier"] not in TIERS:
             raise SystemExit(f"{path}: unknown tier {scenario['tier']!r}")
+        if scenario.get("expect", "fired") not in EXPECTATIONS:
+            raise SystemExit(f"{path}: unknown expect {scenario['expect']!r}; known: {sorted(EXPECTATIONS)}")
         allowed = HONEST_UNCERTAINTY[True] | HONEST_UNCERTAINTY[False]
         if not set(scenario["whykey"].get("accept", [])) <= allowed:
             raise SystemExit(f"{path}: whykey.accept may only list {sorted(allowed)}")
@@ -328,6 +336,16 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         return record
     truth = result["ground_truth"]
     whykey = result["whykey"]
+    if scenario.get("expect") == "fired" and not truth["fired"]:
+        # The bind did not register or did not run: nothing about whykey is known.
+        record.update(ground_truth={"label": "expected to fire, did not", **truth},
+                      expected=None, whykey_verdict="lab-error")
+        record["pass"] = False
+        record["error"] = (
+            f"the scenario expects the binding to fire, but it did not ({truth['fired_evidence']})"
+        )
+        record["logs"] = result.get("logs")
+        return record
     summary = scenario["whykey"].get("summary")
     detail = scenario["whykey"].get("detail")
     combo = scenario["whykey"].get("combo")

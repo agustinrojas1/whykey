@@ -1,0 +1,29 @@
+{
+  "id": "cinnamon-custom-bound",
+  "description": "a Cinnamon custom shortcut (Super+t, `touch /tmp/fired`) runs its command under a running Cinnamon session, and the key does not reach the X11 probe",
+  "tier": "observed",
+  "environment": "cinnamon",
+  "expect": "fired",
+  "session_setup": [
+    "gsettings set org.cinnamon.desktop.keybindings.custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/custom0/ name 'Lab fire'",
+    "gsettings set org.cinnamon.desktop.keybindings.custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/custom0/ command 'touch /tmp/fired'",
+    "gsettings set org.cinnamon.desktop.keybindings.custom-keybinding:/org/cinnamon/desktop/keybindings/custom-keybindings/custom0/ binding \"['<Super>t']\"",
+    "gsettings set org.cinnamon.desktop.keybindings custom-list \"['custom0']\""
+  ],
+  "probe": "x11",
+  "actions": [
+    {"wait_grab": {"keysym": "t", "modmask": 64}},
+    {"xdotool": ["keydown", "Super_L", "keydown", "t", "keyup", "t", "keyup", "Super_L"]}
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Cinnamon",
+    "detail": "custom-keybinding custom0"
+  }
+}
