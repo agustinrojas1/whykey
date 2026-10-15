@@ -1,0 +1,67 @@
+{
+  "id": "zellij-clear-defaults-unbound",
+  "description": "with keybinds clear-defaults=true, Zellij's built-in Alt-n (NewPane) is gone; the key reaches the pane's shell. whykey cannot parse every KDL form, so it answers uncertain-continues (tolerated, not verified)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/zellij/config.kdl": [
+      "show_release_notes false",
+      "show_startup_tips false",
+      "keybinds clear-defaults=true {",
+      "    normal {",
+      "        bind \"Ctrl y\" {",
+      "            NewPane",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "echo started >> /tmp/shells-started",
+      "bind -x '\"\\C-v\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-y\": touch /tmp/reached-shell'",
+      "bind -x '\"\\en\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zellij",
+      "-s",
+      "lab"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    },
+    "settle": 3
+  },
+  "actions": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\en"
+    },
+    {
+      "sleep": 2
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test \"$(wc -l < /tmp/shells-started)\" -ge 2"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "alt+n"
+    ],
+    "layer": "Zellij",
+    "run": "pty",
+    "command": "/w/whykey",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

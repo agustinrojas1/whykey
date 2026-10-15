@@ -1,0 +1,57 @@
+{
+  "id": "kakoune-unbound-f7",
+  "description": "F7 has no map in ~/.config/kak/kakrc; Kakoune reads the key and nothing fires. whykey cannot see Kakoune's built-in keymap or plugins, so it answers uncertain-continues (tolerated, not verified)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/kak/kakrc": [
+      "map global normal <c-y> ': nop %sh{ touch /tmp/other }<ret>'"
+    ],
+    "/root/run-whykey.sh": [
+      "/w/whykey f7 --json --schema-version 2 >/tmp/whykey.out 2>/tmp/whykey.err",
+      "touch /tmp/whykey.done"
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "kak",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "\\e[18~"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\33[18~'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "f7"
+    ],
+    "layer": "Kakoune",
+    "run": "pty",
+    "command": ":nop %sh{ sh /root/run-whykey.sh }",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

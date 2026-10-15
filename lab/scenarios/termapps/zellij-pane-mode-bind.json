@@ -1,0 +1,76 @@
+{
+  "id": "zellij-pane-mode-bind",
+  "description": "Ctrl-y bound in Zellij's pane mode opens a pane (NewPane) after Ctrl-p switches to pane mode; Zellij consumes the key, and whykey, told the mode with WHYKEY_ZELLIJ_MODE=pane, agrees",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/zellij/config.kdl": [
+      "show_release_notes false",
+      "show_startup_tips false",
+      "keybinds {",
+      "    pane {",
+      "        bind \"Ctrl y\" {",
+      "            NewPane",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "echo started >> /tmp/shells-started",
+      "bind -x '\"\\C-v\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-y\": touch /tmp/reached-shell'",
+      "bind -x '\"\\en\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zellij",
+      "-s",
+      "lab"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    },
+    "settle": 3
+  },
+  "actions": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x10"
+    },
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x19"
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "type": "\\x1b"
+    },
+    {
+      "sleep": 2
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test \"$(wc -l < /tmp/shells-started)\" -ge 2"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+y"
+    ],
+    "layer": "Zellij",
+    "run": "pty",
+    "command": "WHYKEY_ZELLIJ_MODE=pane /w/whykey"
+  }
+}

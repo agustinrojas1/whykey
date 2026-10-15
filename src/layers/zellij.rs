@@ -85,11 +85,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     LayerResult::new(
         "Zellij",
         LayerId::Multiplexer,
-        if complete {
-            Outcome::Pass
-        } else {
-            Outcome::Unknown
-        },
+        unbound_outcome(complete),
         if complete {
             "no matching Zellij binding; forwarded to the pane"
         } else {
@@ -98,6 +94,19 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         details,
     )
     .with_tier(tier)
+}
+
+/// The verdict when no parsed binding matches. Complete defaults plus config
+/// mean the key is forwarded. Otherwise the parse may have missed a binding,
+/// but the key still continues unless one matches, as for a shell without its
+/// init file (`UncertainContinues`, not `Unknown`, which would not say whether
+/// the key continues at all).
+fn unbound_outcome(complete: bool) -> Outcome {
+    if complete {
+        Outcome::Pass
+    } else {
+        Outcome::UncertainContinues
+    }
 }
 
 fn unavailable(message: String) -> LayerResult {
@@ -314,6 +323,12 @@ mod tests {
         let key: KeyCombo = "ctrl+q".parse().unwrap();
         let binding = find_binding(content, &key, "pane").unwrap();
         assert!(binding.contains("CloseFocus"));
+    }
+
+    #[test]
+    fn unbound_key_continues_unless_the_binding_set_is_incomplete() {
+        assert_eq!(unbound_outcome(true), Outcome::Pass);
+        assert_eq!(unbound_outcome(false), Outcome::UncertainContinues);
     }
 
     #[test]

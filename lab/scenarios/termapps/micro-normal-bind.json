@@ -1,0 +1,67 @@
+{
+  "id": "micro-normal-bind",
+  "description": "Ctrl-x bound in ~/.config/micro/bindings.json to the micro command `textfilter touch /tmp/fired` runs touch; Micro consumes the key, and whykey's Micro adapter reports the binding as possibly consuming it",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/micro/bindings.json": [
+      "{\"Ctrl-x\": \"command:textfilter touch /tmp/fired\"}"
+    ],
+    "/root/run-whykey.sh": [
+      "/w/whykey ctrl+x --json --schema-version 2 >/tmp/whykey.out 2>/tmp/whykey.err",
+      "touch /tmp/whykey.done"
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "micro",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "\\x18"
+    },
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x05"
+    },
+    {
+      "sleep": 1
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(5, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\30'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+x"
+    ],
+    "layer": "Micro",
+    "run": "pty",
+    "command": "term sh /root/run-whykey.sh",
+    "accept": [
+      "handled-uncertain"
+    ],
+    "summary": "mapping found; Micro may consume the key"
+  }
+}

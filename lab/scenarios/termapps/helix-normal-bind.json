@@ -1,0 +1,55 @@
+{
+  "id": "helix-normal-bind",
+  "description": "C-x bound in [keys.normal] of ~/.config/helix/config.toml runs :sh touch; Helix consumes the key, and whykey's Helix adapter reports the config mapping as possibly consuming it",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/helix/config.toml": [
+      "[keys.normal]",
+      "\"C-x\" = \":sh touch /tmp/fired\""
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "hx",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "\\x18"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\30'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+x"
+    ],
+    "layer": "Helix",
+    "run": "pty",
+    "command": ":sh /w/whykey",
+    "accept": [
+      "handled-uncertain"
+    ],
+    "summary": "mapping found; Helix may consume the key"
+  }
+}

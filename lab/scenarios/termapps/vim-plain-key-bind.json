@@ -1,0 +1,55 @@
+{
+  "id": "vim-plain-key-bind",
+  "description": "a plain letter mapped in ~/.vimrc (nnoremap x) runs writefile(); Vim consumes the key, and whykey's Vim adapter matches the literal key rather than the notation <X>",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.vimrc": [
+      "nnoremap x :call writefile(['fired'], '/tmp/fired')<CR>"
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "vim",
+      "-n",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "x"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF 'x'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "x"
+    ],
+    "layer": "Vim",
+    "run": "pty",
+    "command": ":!/w/whykey",
+    "accept": [
+      "handled-uncertain"
+    ],
+    "summary": "mapping found; Vim may consume the key"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "id": "kakoune-normal-bind",
+  "description": "<c-x> mapped in normal mode by ~/.config/kak/kakrc runs touch through %sh; Kakoune consumes the key, and whykey's Kakoune adapter reports the mapping as possibly consuming it",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/kak/kakrc": [
+      "map global normal <c-x> ': nop %sh{ touch /tmp/fired }<ret>'"
+    ],
+    "/root/run-whykey.sh": [
+      "/w/whykey ctrl+x --json --schema-version 2 >/tmp/whykey.out 2>/tmp/whykey.err",
+      "touch /tmp/whykey.done"
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "kak",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "\\x18"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\30'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+x"
+    ],
+    "layer": "Kakoune",
+    "run": "pty",
+    "command": ":nop %sh{ sh /root/run-whykey.sh }",
+    "accept": [
+      "handled-uncertain"
+    ],
+    "summary": "mapping found; Kakoune may consume the key"
+  }
+}
