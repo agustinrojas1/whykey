@@ -35,24 +35,12 @@ On Linux, a key press does not go straight to the application. It passes
 through a chain of programs, and **any one of them can take the key and stop
 it there**:
 
-```mermaid
-flowchart TB
-    subgraph top [" "]
-        direction LR
-        K(["⌨️ Key press"]) --> R["Remapper<br/><sub>keyd · kanata · xremap</sub>"]
-        R --> C["Compositor / WM<br/><sub>Hyprland · Sway · GNOME · KDE · i3</sub>"]
-        C --> T["Terminal<br/><sub>kitty · foot · Ghostty · WezTerm</sub>"]
-    end
-    subgraph bottom [" "]
-        direction LR
-        I["Input method<br/><sub>Fcitx5 · IBus</sub>"] --> Y["TTY driver<br/><sub>Ctrl+C · Ctrl+Z · Ctrl+S</sub>"]
-        Y --> M["Multiplexer<br/><sub>tmux · Screen · Zellij</sub>"]
-        M --> A(["Application / shell<br/><sub>bash · zsh · fish · Vim · Emacs</sub>"])
-    end
-    top --> bottom
-    style top fill:none,stroke:none
-    style bottom fill:none,stroke:none
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/key-path-dark.svg">
+    <img src="docs/assets/key-path-light.svg" alt="The path of a key press on Linux: remapper, compositor or window manager, terminal, TTY driver, input method, multiplexer, and finally the application or shell. Every layer is a checkpoint that can stop the key, pass it on, or rewrite it." width="820">
+  </picture>
+</p>
 
 When `Ctrl+Left` does nothing in your editor, the culprit could be a global
 desktop shortcut, a terminal keybinding, a tmux prefix, or a line-editor

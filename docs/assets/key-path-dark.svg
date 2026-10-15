@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="706" viewBox="0 0 820 706" role="img" aria-labelledby="t d" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif'>
+<title id="t">The path of a key press on Linux</title>
+<desc id="d">A key press passes, in order, through a remapper, the compositor or window manager, the terminal, the TTY driver, the input method, a multiplexer, and finally the application or shell. Each layer is a checkpoint: it can stop the key, pass it on, or rewrite it into another key.</desc>
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6e7681"/></marker></defs>
+<rect width="820" height="706" rx="12" fill="#0d1117"/>
+<rect x="131.0" y="36" width="150" height="40" rx="10" fill="#e6edf3"/>
+<text x="206.0" y="61" text-anchor="middle" font-size="15" font-weight="700" fill="#0d1117">Key press</text>
+<text x="374" y="61" font-size="13" fill="#8b949e">e.g. Ctrl+Left, Super+Return</text>
+<line x1="206.0" y1="78" x2="206.0" y2="98" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="100" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="129" font-size="15" font-weight="600" fill="#e6edf3">Remapper</text>
+<text x="374" y="129" font-size="13" fill="#8b949e">keyd · kanata · xremap · kmonad</text>
+<text x="40" y="129" text-anchor="end" font-size="12" fill="#8b949e">1</text>
+<line x1="206.0" y1="148" x2="206.0" y2="168" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="170" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="199" font-size="15" font-weight="600" fill="#e6edf3">Compositor / window manager</text>
+<text x="374" y="199" font-size="13" fill="#8b949e">Hyprland · Sway · GNOME · KDE · i3 · niri</text>
+<text x="40" y="199" text-anchor="end" font-size="12" fill="#8b949e">2</text>
+<line x1="206.0" y1="218" x2="206.0" y2="238" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="240" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="269" font-size="15" font-weight="600" fill="#e6edf3">Terminal</text>
+<text x="374" y="269" font-size="13" fill="#8b949e">kitty · foot · Ghostty · WezTerm · Alacritty</text>
+<text x="40" y="269" text-anchor="end" font-size="12" fill="#8b949e">3</text>
+<line x1="206.0" y1="288" x2="206.0" y2="308" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="310" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="339" font-size="15" font-weight="600" fill="#e6edf3">TTY driver</text>
+<text x="374" y="339" font-size="13" fill="#8b949e">Ctrl+C · Ctrl+Z · Ctrl+S (stty settings)</text>
+<text x="40" y="339" text-anchor="end" font-size="12" fill="#8b949e">4</text>
+<line x1="206.0" y1="358" x2="206.0" y2="378" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="380" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="409" font-size="15" font-weight="600" fill="#e6edf3">Input method</text>
+<text x="374" y="409" font-size="13" fill="#8b949e">Fcitx5 · IBus · dead keys · Compose</text>
+<text x="40" y="409" text-anchor="end" font-size="12" fill="#8b949e">5</text>
+<line x1="206.0" y1="428" x2="206.0" y2="448" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="450" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="479" font-size="15" font-weight="600" fill="#e6edf3">Multiplexer</text>
+<text x="374" y="479" font-size="13" fill="#8b949e">tmux · Screen · Zellij</text>
+<text x="40" y="479" text-anchor="end" font-size="12" fill="#8b949e">6</text>
+<line x1="206.0" y1="498" x2="206.0" y2="518" stroke="#6e7681" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="56" y="520" width="300" height="46" rx="8" fill="#161b22" stroke="#30363d"/>
+<text x="72" y="549" font-size="15" font-weight="600" fill="#e6edf3">Application / shell</text>
+<text x="374" y="549" font-size="13" fill="#8b949e">bash · zsh · fish · Vim · Emacs</text>
+<text x="40" y="549" text-anchor="end" font-size="12" fill="#8b949e">7</text>
+<line x1="56" y1="582" x2="796" y2="582" stroke="#30363d"/>
+<text x="56" y="604" font-size="13" font-weight="700" fill="#e6edf3">Every layer is a checkpoint.</text>
+<text x="252" y="604" font-size="13" fill="#8b949e">With its own binding, each one can:</text>
+<text x="56" y="632" font-size="15" font-weight="700" fill="#ff7b72">✕</text>
+<text x="78" y="632" font-size="13" fill="#e6edf3" xml:space="preserve"><tspan font-weight="600">stop the key</tspan><tspan fill="#8b949e">  the next layer never sees it</tspan></text>
+<text x="56" y="656" font-size="15" font-weight="700" fill="#3fb950">↓</text>
+<text x="78" y="656" font-size="13" fill="#e6edf3" xml:space="preserve"><tspan font-weight="600">pass it on</tspan><tspan fill="#8b949e">  handled or not, it continues</tspan></text>
+<text x="56" y="680" font-size="15" font-weight="700" fill="#d29922">↪</text>
+<text x="78" y="680" font-size="13" fill="#e6edf3" xml:space="preserve"><tspan font-weight="600">rewrite it</tspan><tspan fill="#8b949e">  a different key continues</tspan></text>
+</svg>
