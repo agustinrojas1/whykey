@@ -1,0 +1,27 @@
+{
+  "id": "kwin-default-close",
+  "description": "KWin's default Window Close shortcut (Alt+F4, no kglobalshortcutsrc override) closes the focused probe window",
+  "tier": "observed",
+  "environment": "kwin",
+  "probe": "wayland",
+  "actions": [
+    {
+      "qkbd": [
+        "alt+F4"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "! pgrep -f 'lab/[k]eylog.py'"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "alt+f4"
+    ],
+    "layer": "KDE Plasma",
+    "detail": "Window Close"
+  }
+}

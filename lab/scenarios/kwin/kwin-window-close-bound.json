@@ -1,0 +1,33 @@
+{
+  "id": "kwin-window-close-bound",
+  "description": "KWin's own Window Close shortcut, rebound to Meta+Y in kglobalshortcutsrc, closes the focused probe window: KWin, registered as the kwin component with kglobalacceld, consumes the key",
+  "tier": "observed",
+  "environment": "kwin",
+  "files": {
+    "/root/.config/kglobalshortcutsrc": [
+      "[kwin]",
+      "Window Close=Meta+Y,Alt+F4,Close Window"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "qkbd": [
+        "super+y"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "! pgrep -f 'lab/[k]eylog.py'"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+y"
+    ],
+    "layer": "KDE Plasma",
+    "detail": "Window Close"
+  }
+}
