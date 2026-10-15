@@ -171,9 +171,10 @@ Three workflows run the lab. It is not a required check: `ci.yml` (`check`,
   selects, pipe its changed paths (`git diff --name-only origin/main...HEAD`)
   into the script.
 
-`shard_size` in `lab/affected.json` sizes the shards: 22 scenarios for `vm`
-(Hyprland boots a VM per scenario), 60 for the others. A full run is 8 shards:
-`vm` 3, `tty` 2, and `wayland`, `x11` and `gnome` 1 each.
+`shard_size` in `lab/affected.json` sizes the shards: 11 scenarios for `vm`
+(each boots a VM, about 40 s apiece on a hosted runner), 60 for the others. A
+full run is 11 shards: `vm` 6, `tty` 2, and `wayland`, `x11` and `gnome` 1
+each.
 
 A pull request from a fork gets a read-only token and cannot push images. Its
 `images` job fails only when an image it needs is missing from GHCR. The GHCR

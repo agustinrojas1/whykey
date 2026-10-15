@@ -168,7 +168,7 @@ class SelectionTest(unittest.TestCase):
         for shard in plan["shards"]:
             self.assertIsNone(shard["only"])
             counts[shard["image"]] = counts.get(shard["image"], 0) + 1
-        self.assertEqual(counts["vm"], 3)
+        self.assertEqual(counts["vm"], 6)
         self.assertEqual(counts["tty"], 2)
         self.assertEqual(counts["wayland"], 1)
         self.assertEqual(counts["x11"], 1)
@@ -194,7 +194,7 @@ class SelectionTest(unittest.TestCase):
     def test_vm_shards_are_small(self):
         plan = lab_select.make_plan(None, True)
         for shard in plan["shards"]:
-            limit = 22 if shard["image"] == "vm" else 60
+            limit = 11 if shard["image"] == "vm" else 60
             self.assertLessEqual(shard["count"], limit, shard["name"])
 
     def test_partial_vm_selection_is_one_shard(self):
