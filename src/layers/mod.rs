@@ -173,6 +173,7 @@ mod tests {
             active_engine: None,
             state: None,
             query_error: None,
+            no_engine: false,
             text_reconstruction: Default::default(),
         }];
         let results = inspect_with_environment(&request, &session);

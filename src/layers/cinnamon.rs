@@ -9,6 +9,15 @@ pub struct Cinnamon;
 
 const SCHEMA_PREFIX: &str = "org.cinnamon.desktop.keybindings";
 
+/// The shell's own schema and its child schemas: muffin's window bindings
+/// (`.wm`) and the media keys (`.media-keys`). `gsettings list-recursively`
+/// on the parent prints only the parent's keys, so each child is read too.
+const SCHEMAS: &[&str] = &[
+    SCHEMA_PREFIX,
+    "org.cinnamon.desktop.keybindings.wm",
+    "org.cinnamon.desktop.keybindings.media-keys",
+];
+
 /// Cinnamon's relocatable custom shortcuts; `command` holds the command.
 const CUSTOM: gsettings::CustomKeybindings = gsettings::CustomKeybindings {
     list_schema: "org.cinnamon.desktop.keybindings",
@@ -65,9 +74,26 @@ impl Cinnamon {
 }
 
 fn load_bindings() -> Result<Vec<GsettingsBinding>, String> {
-    let output = gsettings::run_list(&["list-recursively", SCHEMA_PREFIX])?;
-    let mut bindings = parse_bindings(&output);
+    let mut bindings =
+        bindings_from_listings(|schema| gsettings::run_list(&["list-recursively", schema]))?;
     bindings.extend(gsettings::custom_bindings(&CUSTOM)?);
+    Ok(bindings)
+}
+
+/// Bindings from `list-recursively` output for each schema in `SCHEMAS`.
+fn bindings_from_listings(
+    list: impl Fn(&str) -> Result<String, String>,
+) -> Result<Vec<GsettingsBinding>, String> {
+    let mut bindings = Vec::new();
+    for schema in SCHEMAS {
+        match list(schema) {
+            Ok(output) => bindings.extend(parse_bindings(&output)),
+            // A child schema comes with its package (cinnamon-settings-daemon
+            // for the media keys); without it there are no such bindings.
+            Err(error) if *schema != SCHEMA_PREFIX && error.contains("No such schema") => {}
+            Err(error) => return Err(error),
+        }
+    }
     Ok(bindings)
 }
 
@@ -118,6 +144,35 @@ mod tests {
         assert_eq!(bindings[0].combo, "super+1".parse().unwrap());
         assert!(bindings[0].action.contains("switch-to-workspace-1"));
         assert_eq!(bindings[1].combo, "ctrl+alt+t".parse().unwrap());
+    }
+
+    #[test]
+    fn reads_muffin_bindings_from_their_child_schema() {
+        // `gsettings list-recursively` on the parent prints only its own keys,
+        // so muffin's `.wm` bindings are read from their own schema.
+        let bindings = bindings_from_listings(|schema| match schema {
+            "org.cinnamon.desktop.keybindings" => Ok(
+                "org.cinnamon.desktop.keybindings looking-glass-keybinding ['<Super>l']\n".into(),
+            ),
+            "org.cinnamon.desktop.keybindings.wm" => {
+                Ok("org.cinnamon.desktop.keybindings.wm toggle-maximized ['<Super>q']\n".into())
+            }
+            _ => Err(
+                "gsettings: No such schema 'org.cinnamon.desktop.keybindings.media-keys'".into(),
+            ),
+        })
+        .unwrap();
+        assert!(bindings.iter().any(|binding| {
+            binding.combo == "super+q".parse().unwrap()
+                && binding.action == "org.cinnamon.desktop.keybindings.wm toggle-maximized"
+        }));
+        assert!(
+            bindings
+                .iter()
+                .any(|binding| binding.combo == "super+l".parse().unwrap())
+        );
+        // A missing parent schema is still an error.
+        assert!(bindings_from_listings(|_| Err("gsettings: boom".into())).is_err());
     }
 
     #[test]

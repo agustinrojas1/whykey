@@ -1,0 +1,4 @@
+# Pre-compositor remappers. keyd, kanata, xremap and kmonad are upstream
+# release artifacts or source pinned in remap.sh; input-remapper is the
+# Fedora 44 package, pinned to the version the lab was checked against.
+input-remapper-2.2.1-1.fc44

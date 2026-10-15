@@ -1,0 +1,54 @@
+{
+  "id": "vim-unbound-f7",
+  "description": "<F7> has no mapping in ~/.vimrc; Vim reads the key and nothing fires. whykey cannot see Vim's built-in or plugin mappings, so it answers uncertain-continues (tolerated, not verified)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.vimrc": [
+      "\" no mappings"
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "vim",
+      "-n",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "\\e[18~"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\33[18~'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "f7"
+    ],
+    "layer": "Vim",
+    "run": "pty",
+    "command": ":!/w/whykey",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "remap-kanata-overload-tap-consumed",
+  "description": "kanata '(defsrc caps)' with '(tap-hold 200 200 esc lctl)': a quick tap of CapsLock on the VM kernel keyboard is emitted as Escape, which Hyprland's Escape bind consumes. kanata cannot know tap from hold before the timeout, so whykey answers handled-uncertain (tolerated, PASS~) with the tap-hold named",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["kanata", "-c", "/root/kanata.kbd"], "ready": "kanata"}},
+  "files": {
+    "/root/kanata.kbd": ["(defcfg)", "(defsrc caps)", "(deflayer base (tap-hold 200 200 esc lctl))"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"Escape\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["capslock"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["CAPS_LOCK"],
+    "layer": ["Input remapper"],
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

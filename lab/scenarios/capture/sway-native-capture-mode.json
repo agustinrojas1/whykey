@@ -1,0 +1,27 @@
+{
+  "id": "sway-native-capture-mode",
+  "description": "listen (Sway native capture) while mode lab is active reports the t binding that exists only in that mode; it fires and Sway consumes the key",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {
+    "/root/.config/sway/config": [
+      "bindsym Mod4+r mode lab",
+      "mode lab {",
+      "    bindsym t exec touch /tmp/fired",
+      "    bindsym Escape mode default",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+r"]}, {"start_whykey": true}, {"vkbd": ["t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["listen", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Sway",
+    "combo": {"key": "T", "modifiers": 0},
+    "binding": "touch /tmp/fired",
+    "tty": true
+  }
+}

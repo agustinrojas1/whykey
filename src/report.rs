@@ -554,6 +554,18 @@ fn render_inner(
     output
 }
 
+const HELD_UNBOUND_TEXT: &str = "No compositor binding matched, so normally the key continues as shown below. --suppress held it during this capture, so the application did not receive it this time.";
+
+/// Under `--suppress` the hook's catch-all holds every key, but a compositor
+/// layer that passes still describes the normal route (see
+/// `listen::output::note_suppressed_hold`).
+fn suppressed_unbound(layers: &[LayerResult]) -> bool {
+    layers
+        .iter()
+        .find(|layer| layer.id == LayerId::Compositor)
+        .is_some_and(|layer| layer.outcome == Outcome::Pass)
+}
+
 fn diagnosis_text(
     key: &KeyCombo,
     layers: &[LayerResult],
@@ -571,6 +583,9 @@ fn diagnosis_text(
             observation.disposition,
             crate::listen::CaptureDisposition::Suppressed
         ) {
+            if suppressed_unbound(layers) {
+                return HELD_UNBOUND_TEXT.into();
+            }
             if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Compositor) {
                 if layer
                     .binding
@@ -766,6 +781,9 @@ fn effect_text(
     if let Some(observation) = observation {
         match observation.disposition {
             crate::listen::CaptureDisposition::Suppressed => {
+                if suppressed_unbound(layers) {
+                    return "Whykey held the key while --suppress captured it, so the application did not receive it this time; the layers below show where it goes without whykey.".into();
+                }
                 return "Whykey temporarily intercepted the compositor event to inspect its configuration. That does not prove the configured action ran.".into();
             }
             crate::listen::CaptureDisposition::PassedThrough => {
@@ -2649,6 +2667,48 @@ mod tests {
         assert!(!output.contains("executed"));
         assert!(!output.contains("would handle and consume"));
         assert!(!output.contains("earlier forwarding is confirmed"));
+    }
+
+    #[test]
+    fn suppressed_key_without_a_binding_keeps_its_route_and_names_the_hold() {
+        // The catch-all held the key during capture, but without whykey it
+        // continues: the report says both.
+        let key: KeyCombo = "super+x".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=45 evdev=37 (press)".into()),
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(37)),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        };
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "no active binding found",
+            vec![],
+        )];
+
+        // The renderer wraps lines; compare the words, not the wrapping.
+        let output = render_observed(&observed, &layers, false)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(output.contains("normally the key continues"), "{output}");
+        assert!(output.contains("--suppress held it during this capture"));
+        assert!(!output.contains("temporarily intercepted"));
+        assert!(!output.contains("configured to consume"));
+        assert!(output.contains("No matching binding"));
     }
 
     #[test]

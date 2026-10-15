@@ -158,7 +158,7 @@ fn inspect_for_pid_with_source_inner(
         return LayerResult::new(
             "Neovim",
             LayerId::Application,
-            Outcome::Unknown,
+            Outcome::UncertainContinues,
             "Neovim is active; application handling cannot be proven",
             details,
         );
@@ -193,7 +193,7 @@ fn inspect_for_pid_with_source_inner(
         return LayerResult::new(
             "Vim",
             LayerId::Application,
-            Outcome::Unknown,
+            Outcome::UncertainContinues,
             "Vim is active; application handling cannot be proven",
             details,
         );
@@ -252,7 +252,7 @@ fn inspect_for_pid_with_source_inner(
         return LayerResult::new(
             "Helix",
             LayerId::Application,
-            Outcome::Unknown,
+            Outcome::UncertainContinues,
             "Helix is active; application handling cannot be proven",
             details,
         );
@@ -275,7 +275,7 @@ fn inspect_for_pid_with_source_inner(
         return LayerResult::new(
             "Micro",
             LayerId::Application,
-            Outcome::Unknown,
+            Outcome::UncertainContinues,
             "Micro is active; application handling cannot be proven",
             details,
         );
@@ -298,7 +298,7 @@ fn inspect_for_pid_with_source_inner(
         return LayerResult::new(
             "Kakoune",
             LayerId::Application,
-            Outcome::Unknown,
+            Outcome::UncertainContinues,
             "Kakoune is active; application handling cannot be proven",
             details,
         );
@@ -743,7 +743,7 @@ pub fn nvim_server_from_command(command: &str) -> Option<String> {
 }
 
 fn nvim_static_mapping(key: &KeyCombo) -> Option<String> {
-    static_mapping(nvim_config_paths(), nvim_key_notations(key), |line| {
+    vim_static_mapping_in(nvim_config_paths(), key, |line| {
         line.contains("keymap")
             || line.contains("set_keymap")
             || line
@@ -754,26 +754,121 @@ fn nvim_static_mapping(key: &KeyCombo) -> Option<String> {
 }
 
 fn vim_static_mapping(key: &KeyCombo) -> Option<String> {
-    static_mapping(vim_config_paths(), nvim_key_notations(key), |line| {
-        line.split_whitespace().next().is_some_and(|command| {
-            matches!(
-                command,
-                "map"
-                    | "nmap"
-                    | "imap"
-                    | "vmap"
-                    | "xmap"
-                    | "cmap"
-                    | "omap"
-                    | "map!"
-                    | "nnoremap"
-                    | "inoremap"
-                    | "vnoremap"
-                    | "xnoremap"
-                    | "cnoremap"
-            )
+    vim_static_mapping_in(vim_config_paths(), key, |line| {
+        line.split_whitespace()
+            .next()
+            .is_some_and(is_vim_map_command)
+    })
+}
+
+fn is_vim_map_command(command: &str) -> bool {
+    matches!(
+        command,
+        "map"
+            | "nmap"
+            | "imap"
+            | "vmap"
+            | "xmap"
+            | "cmap"
+            | "omap"
+            | "map!"
+            | "nnoremap"
+            | "inoremap"
+            | "vnoremap"
+            | "xnoremap"
+            | "cnoremap"
+    )
+}
+
+/// Modifiers that `:map` accepts between the command and its left-hand side.
+fn is_vim_map_option(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "<buffer>" | "<silent>" | "<expr>" | "<unique>" | "<nowait>" | "<script>" | "<special>"
+    )
+}
+
+/// The first line of a Vim or Neovim config that maps `key`, where the mapping
+/// line satisfies `predicate` (the command or the Lua API that defines it).
+fn vim_static_mapping_in<F>(paths: Vec<PathBuf>, key: &KeyCombo, predicate: F) -> Option<String>
+where
+    F: Fn(&str) -> bool,
+{
+    paths.into_iter().find_map(|path| {
+        let content = fs::read_to_string(&path).ok()?;
+        content.lines().find_map(|raw_line| {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('"') || line.starts_with("--") {
+                return None;
+            }
+            (predicate(line) && vim_mapping_line_matches(line, key))
+                .then(|| format!("{}: {line}", path.display()))
         })
     })
+}
+
+/// Whether one mapping line binds `key`: the left-hand side of a `:map`
+/// command after its `<buffer>`-style options, or else a string argument of a
+/// Lua keymap call (the second one, after the mode).
+fn vim_mapping_line_matches(line: &str, key: &KeyCombo) -> bool {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let Some(command) = tokens.first() else {
+        return false;
+    };
+    if is_vim_map_command(command) {
+        return tokens[1..]
+            .iter()
+            .find(|token| !is_vim_map_option(token))
+            .is_some_and(|lhs| vim_lhs_matches(lhs, key));
+    }
+    let strings = quoted_strings(line);
+    // In `vim.keymap.set(mode, lhs, rhs)` the first string is the mode.
+    let lhs_strings = if line.contains("keymap") {
+        &strings[strings.len().min(1)..]
+    } else {
+        &strings[..]
+    };
+    lhs_strings.iter().any(|lhs| vim_lhs_matches(lhs, key))
+}
+
+/// Vim's special key names are case-insensitive (`<C-x>` and `<c-x>` bind the
+/// same key), while a plain key is spelled literally: `nnoremap j gj` binds
+/// `j`, and `nnoremap J` binds `shift+j`.
+fn vim_lhs_matches(lhs: &str, key: &KeyCombo) -> bool {
+    const SHIFT: u32 = 1;
+    let name = key.key();
+    let plain = key.modmask() & !SHIFT == 0 && name.chars().count() == 1;
+    if lhs.len() > 2 && lhs.starts_with('<') && lhs.ends_with('>') {
+        return !plain
+            && nvim_key_notations(key)
+                .iter()
+                .any(|notation| notation.eq_ignore_ascii_case(lhs));
+    }
+    if !plain {
+        return false;
+    }
+    let spelled = if key.modmask() & SHIFT != 0 {
+        name.to_owned()
+    } else {
+        name.to_ascii_lowercase()
+    };
+    lhs == spelled
+}
+
+/// Text between matching single or double quotes, in order.
+fn quoted_strings(line: &str) -> Vec<&str> {
+    let mut strings = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find(['\'', '"']) {
+        let quote = rest.as_bytes()[start];
+        let after = &rest[start + 1..];
+        let Some(end) = after.find(quote as char) else {
+            break;
+        };
+        strings.push(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    strings
 }
 
 fn emacs_static_mapping(key: &KeyCombo) -> Option<String> {
@@ -970,23 +1065,6 @@ fn xml_attribute(tag: &str, name: &str) -> Option<String> {
     let start = tag.find(&marker)? + marker.len();
     let end = tag[start..].find('"')?;
     Some(tag[start..start + end].to_owned())
-}
-
-fn static_mapping<F>(paths: Vec<PathBuf>, notations: Vec<String>, predicate: F) -> Option<String>
-where
-    F: Fn(&str) -> bool,
-{
-    paths.into_iter().find_map(|path| {
-        let content = fs::read_to_string(&path).ok()?;
-        content.lines().find_map(|raw_line| {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('"') || line.starts_with("--") {
-                return None;
-            }
-            (predicate(line) && notations.iter().any(|notation| line.contains(notation)))
-                .then(|| format!("{}: {line}", path.display()))
-        })
-    })
 }
 
 fn vscode_config_paths() -> Vec<PathBuf> {
@@ -1380,5 +1458,67 @@ mod tests {
         assert!(is_jetbrains_name("idea"));
         assert!(is_interactive_editor("code"));
         assert!(!is_jetbrains_name("code"));
+    }
+
+    #[test]
+    fn unmapped_vim_keeps_the_key_flowing_as_uncertain() {
+        use std::os::unix::process::CommandExt;
+        // A process whose argv[0] is `vim` gives the adapter a Vim ancestor.
+        // The chord is one no config maps, so the verdict is the no-mapping one.
+        let key: KeyCombo = "ctrl+alt+shift+f11".parse().unwrap();
+        let mut child = Command::new("sleep").arg0("vim").arg("30").spawn().unwrap();
+        let result = inspect_for_pid(&key, child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(result.layer, "Vim");
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(result.summary.contains("cannot be proven"));
+    }
+
+    #[test]
+    fn vim_special_key_names_are_case_insensitive() {
+        let ctrl_x: KeyCombo = "ctrl+x".parse().unwrap();
+        assert!(vim_mapping_line_matches(
+            "nnoremap <C-x> :call writefile(['fired'], '/tmp/fired')<CR>",
+            &ctrl_x
+        ));
+        assert!(vim_mapping_line_matches(
+            "nnoremap <buffer> <silent> <c-x> :echo 1<CR>",
+            &ctrl_x
+        ));
+        assert!(!vim_mapping_line_matches(
+            "nnoremap <C-y> :echo 1<CR>",
+            &ctrl_x
+        ));
+        let f7: KeyCombo = "f7".parse().unwrap();
+        assert!(vim_mapping_line_matches("nnoremap <f7> :echo 1<CR>", &f7));
+    }
+
+    #[test]
+    fn vim_plain_keys_match_only_their_own_spelling() {
+        let j: KeyCombo = "j".parse().unwrap();
+        assert!(vim_mapping_line_matches("nnoremap j gj", &j));
+        assert!(!vim_mapping_line_matches("nnoremap J :echo 1<CR>", &j));
+        assert!(!vim_mapping_line_matches("nnoremap gj :echo 1<CR>", &j));
+        assert!(!vim_mapping_line_matches("nnoremap <C-j> :echo 1<CR>", &j));
+        let shift_j: KeyCombo = "shift+j".parse().unwrap();
+        assert!(vim_mapping_line_matches("nnoremap J :echo 1<CR>", &shift_j));
+        assert!(!vim_mapping_line_matches("nnoremap j gj", &shift_j));
+    }
+
+    #[test]
+    fn neovim_lua_keymaps_bind_their_left_hand_side_only() {
+        let ctrl_x: KeyCombo = "ctrl+x".parse().unwrap();
+        assert!(vim_mapping_line_matches(
+            "vim.keymap.set('n', '<C-x>', function() end)",
+            &ctrl_x
+        ));
+        assert!(vim_mapping_line_matches(
+            "vim.keymap.set({'n', 'v'}, '<c-x>', f)",
+            &ctrl_x
+        ));
+        let n: KeyCombo = "n".parse().unwrap();
+        assert!(!vim_mapping_line_matches("vim.keymap.set('n', 'x', f)", &n));
+        assert!(vim_mapping_line_matches("vim.keymap.set('n', 'n', f)", &n));
     }
 }

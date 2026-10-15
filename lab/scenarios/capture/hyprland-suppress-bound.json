@@ -1,0 +1,35 @@
+{
+  "id": "hyprland-suppress-bound",
+  "description": "listen --suppress on the VM kernel keyboard: the Lua bind Super+T does NOT run while whykey holds the key (the bind's marker is missing), the probe never gets the key, and whykey reports the consumed binding it would have run",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"pgrep -f '[/]w/whykey listen' >/dev/null && echo during >> /tmp/fired || echo after >> /tmp/fired\"), { description = \"Lab fire\" })",
+      "hl.on(\"input.keyboard.key\", function(kc, ts, state) hl.dispatch(hl.dsp.exec_cmd(\"touch /tmp/reached\")) end)"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"sh": "rm -f /tmp/fired /tmp/reached; true"},
+    {"start_whykey": true},
+    {"sh": "rm -f /tmp/reached; true"},
+    {"qkbd": ["super+t"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe",
+    "reached": {"file": "/tmp/reached"}
+  },
+  "whykey": {
+    "args": ["listen", "--suppress", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Hyprland",
+    "suppress": "consumed",
+    "combo": {"key": "T", "modifiers": 64},
+    "detail": "Lab fire",
+    "stderr": "temporary suppression",
+    "tty": true
+  }
+}

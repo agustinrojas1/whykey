@@ -1,0 +1,25 @@
+{
+  "id": "niri-mod-key-nested-super",
+  "description": "input { mod-key-nested \"Super\" } makes Mod Super under nested niri, so Super+T runs the Mod+T command and the key is consumed; tolerated uncertainty as with niri-bind-consumed",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "input {",
+      "    mod-key-nested \"Super\"",
+      "}",
+      "binds {",
+      "    Mod+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Niri",
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

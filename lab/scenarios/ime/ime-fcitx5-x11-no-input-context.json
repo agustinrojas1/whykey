@@ -1,0 +1,40 @@
+{
+  "id": "ime-fcitx5-x11-no-input-context",
+  "description": "Fcitx5 running with no focused input context (xev has no XIM client): CurrentInputMethod is empty and State is 0 (closed), and the key reaches xev unchanged",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "fcitx5",
+    "session": "x11",
+    "env": {
+      "GTK_IM_MODULE": "fcitx",
+      "QT_IM_MODULE": "fcitx",
+      "XMODIFIERS": "@im=fcitx"
+    }
+  },
+  "probe": "x11",
+  "actions": [
+    {
+      "xdotool": ["key", "a"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "false"
+    },
+    "delivered": "probe",
+    "reached": {
+      "probe": "any"
+    }
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": "Input method",
+    "summary": "is closed",
+    "detail": "closed (no focused input context)",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "x11",
+      "XDG_SESSION_TYPE": "x11"
+    }
+  }
+}

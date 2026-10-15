@@ -1,0 +1,27 @@
+{
+  "id": "remap-keyd-ids-mismatch-passes",
+  "description": "keyd runs with '[ids] 1234:5678' and '[main] f9 = f12'; the VM keyboard is QEMU 0627:0001, which keyd does not grab, so F9 reaches Hyprland unchanged: Hyprland's F12 bind does not fire and the probe receives the key. whykey must not report a remap",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["keyd"], "ready": "keyd virtual keyboard"}},
+  "files": {
+    "/etc/keyd/default.conf": ["[ids]", "1234:5678", "", "[main]", "f9 = f12"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["f9"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["f9"],
+    "layer": ["Hyprland"],
+    "not_via": "Input remapper",
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

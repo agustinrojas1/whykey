@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """whykey reality lab runner.
 
-Every scenario runs in a fresh `whykey-lab` container with the whykey binary
-mounted at /w/whykey. lab/driver.py (inside the container) starts the real
-programs, performs real synthetic input, records ground truth from the
-programs' reaction, and runs `whykey <args> --json --schema-version 2`. This
-runner compares whykey's verdict for the scenario's layer with that ground
-truth, prints a table, writes lab/results.json and exits 1 on any mismatch.
+Every scenario runs in a fresh container of the lab image for its environment,
+with the whykey binary mounted at /w/whykey. The images are one base image and
+a few group images built from it (lab/images.json; tools/lab_images.py builds
+them). lab/driver.py (inside the container) starts the real programs, performs
+real synthetic input, records ground truth from the programs' reaction, and
+runs `whykey <args> --json --schema-version 2`. This runner compares whykey's
+verdict for the scenario's layer with that ground truth, prints a table,
+writes lab/results.json and exits 1 on any mismatch.
 
-    docker build -t whykey-lab lab/
+    python3 tools/lab_images.py build
     cargo build --release --locked
-    python3 lab/run.py [--only GLOB]... [-j N] [--vms N] [--keep]
+    python3 lab/run.py [--only GLOB]... [--group IMAGE] [--shard I/N]
+                       [-j N] [--vms N] [--keep]
+                       [--image-tag TAG|hash] [--image-prefix P]
+    python3 lab/run.py --merge RESULTS.json...   (combine shard results)
 
 Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
 (the file stem must equal "id").
@@ -23,6 +28,10 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   x11, pty, ...); its docstring documents its own fields
                   (e.g. sway.config, x11.daemons, pty.command), actions and
                   checks. A session D-Bus is always started.
+    image         optional: the group image to run in (a name in
+                  lab/images.json), when it is not the one the environment
+                  belongs to. The x11 "kde" scenarios need kglobalacceld, which
+                  lives in the vm image with KWin.
     files         {path: text or list of lines} written before anything starts
     setup         shell commands run before the session starts
     session_setup shell commands run after the environment is up
@@ -37,6 +46,10 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   {"sh": "cmd"}  {"sleep": seconds}  {"wait_quiet": seconds}
                   {"start_whykey": true}  start a "run": "background" whykey
                   here instead of before the first action
+                  {"wait_whykey": true}  wait for the background whykey to
+                  exit; later keys go to the restored session
+                  {"mark_probe": true}  "delivered": "probe" counts only the
+                  keys the probe received before this point
                   {key: ...} for a key in the environment's ACTIONS
                   ("type" accepts \\xNN, \\e, \\r escapes; optional "settle")
     ground_truth  {"fired": CHECK, "delivered": "probe" | CHECK,
@@ -45,6 +58,8 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                         | {"sh": "cmd"} (exit 0 = true)
                         | {"probe": "any"} (the probe received any key
                           press, modifiers included)
+                        | {"probe": "after_mark"} (the probe received a
+                          non-modifier key after the mark_probe action)
                         | {key: ...} for a key in the environment's CHECKS
                   "fired": did the layer under test act on the key.
                   "delivered": did the key continue past it ("probe": the
@@ -56,12 +71,37 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                   "reached" is then required ("fired" = the fired check
                   already proves it). Every scenario needs "delivered" or
                   "reached"; observation scenarios need "delivered".
+    expect        optional "fired": the bind must have fired. When the "fired"
+                  check is false the run is a LAB ERROR (retried, never a
+                  pass), not "not fired, delivered -> pass": a bound scenario
+                  whose bind silently did not register proves nothing.
     whykey        {"args": [...], "layer": name or [names], "env": {...},
+                   "via": {"layer": NAME, "summary": text, "binding": text}
+                   (a pre-compositor remapper must have redirected the key:
+                   that layer's entry is Redirected, with the texts in its
+                   summary and binding action), "not_via": NAME (that layer
+                   must be absent from the path: it passed the key silently),
                    "run": "direct" | "pty" | "background", "command": "whykey",
                    "accept": [...], "summary": "text", "detail": "text",
                    "binding": "text", "observation": bool, "combo": {...},
-                   "stderr": "text", "confidence": "label"}
+                   "stderr": "text", "confidence": "label", "silent": bool,
+                   "suppress": bool}
                   "pty" types the command into the scenario's shell.
+                  "silent": the capture backend cannot see this key (Sway IPC
+                  reports only keys that ran a binding), so the pass condition
+                  is no report at all: whykey exits non-zero with the "stderr"
+                  text (its capture timed out). Needs an unfired ground truth
+                  that still reached the session, so the key is not lost.
+                  "suppress": "consumed" | "pass": the key was held by
+                  `listen --suppress` (fired false, not delivered, reached),
+                  and whykey must report this normal-route verdict, which
+                  the hold does not change. "pass" also needs a "restored"
+                  check proving the key reaches the client after whykey
+                  exits; "consumed" is backed by the same bind firing after
+                  exit (hyprland-suppress-restored).
+                  ground_truth "restored" (optional CHECK, evaluated after a
+                  `wait_whykey` action) must hold: e.g. the compositor submap
+                  is back to its original state.
                   "background" starts whykey (`listen`) before the actions or
                   at a start_whykey action, waits for "ready" ("window": its
                   probe window has focus; {"stderr": regex}), and collects its
@@ -122,9 +162,20 @@ from envs import ENVIRONMENTS
 
 LAB = Path(__file__).resolve().parent
 ROOT = LAB.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import lab_images  # noqa: E402  (tools/lab_images.py: the image layout, lab/images.json)
+import lab_select  # noqa: E402  (tools/lab_select.py: the shard split, shared with CI)
+
 SCENARIOS = LAB / "scenarios"
+# Environment -> group image (lab/images.json is the single source of truth).
+MANIFEST = lab_images.load_manifest()
+ENV_IMAGE = lab_images.environment_images(MANIFEST)
+IMAGE_NAMES = set(lab_images.image_names(MANIFEST))
+DEFAULT_IMAGE_PREFIX = lab_images.DEFAULT_PREFIX
 RESULT_MARKER = "@@WHYKEY-LAB-RESULT@@"
 TIERS = {"observed"}
+# Scenario "expect": what must have happened for the run to count (see the docstring).
+EXPECTATIONS = {"fired"}
 REQUIRED = {"id", "description", "tier", "environment", "ground_truth", "whykey"}
 # VM environments (Hyprland) boot a guest inside the container (lab/driver.py).
 SCENARIO_TIMEOUT = 180
@@ -132,7 +183,12 @@ SCENARIO_TIMEOUT = 180
 HONEST_UNCERTAINTY = {True: {"handled-uncertain"}, False: {"uncertain-continues"}}
 
 
-def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
+def scenario_image(scenario: dict) -> str:
+    """The group image a scenario runs in (its "image" field, else its environment's)."""
+    return scenario.get("image") or ENV_IMAGE[scenario["environment"]]
+
+
+def load_scenarios(patterns: list[str], group: str | None = None) -> list[tuple[Path, dict]]:
     scenarios = []
     seen: set[str] = set()
     for path in sorted(SCENARIOS.rglob("*.json")):
@@ -147,8 +203,12 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
             raise SystemExit(f"{path}: duplicate id {identifier!r}")
         if scenario["environment"] not in ENVIRONMENTS:
             raise SystemExit(f"{path}: unknown environment {scenario['environment']!r}")
+        if "image" in scenario and scenario["image"] not in IMAGE_NAMES:
+            raise SystemExit(f"{path}: unknown image {scenario['image']!r}; known: {sorted(IMAGE_NAMES)}")
         if scenario["tier"] not in TIERS:
             raise SystemExit(f"{path}: unknown tier {scenario['tier']!r}")
+        if scenario.get("expect", "fired") not in EXPECTATIONS:
+            raise SystemExit(f"{path}: unknown expect {scenario['expect']!r}; known: {sorted(EXPECTATIONS)}")
         allowed = HONEST_UNCERTAINTY[True] | HONEST_UNCERTAINTY[False]
         if not set(scenario["whykey"].get("accept", [])) <= allowed:
             raise SystemExit(f"{path}: whykey.accept may only list {sorted(allowed)}")
@@ -166,6 +226,8 @@ def load_scenarios(patterns: list[str]) -> list[tuple[Path, dict]]:
             fnmatch.fnmatch(identifier, pattern) or fnmatch.fnmatch(relative, pattern)
             for pattern in patterns
         ):
+            continue
+        if group is not None and scenario_image(scenario) != group:
             continue
         scenarios.append((path, scenario))
     return scenarios
@@ -200,6 +262,25 @@ def expected_verdicts(truth: dict) -> tuple[str, set[str]]:
     raise PositiveControlFailed("the key neither fired nor was delivered past the layer")
 
 
+def suppressed_verdicts(truth: dict, expected: str) -> tuple[str, set[str]]:
+    """`whykey.suppress`: the capture held the key (`listen --suppress`). The
+    bind must not have run and the key must not have reached the client;
+    whykey must then report the normal route the scenario declares
+    (`expected`), because the hold is whykey's own doing. "pass" is only
+    earned when a "restored" check shows the key reaching the client after
+    whykey exits. A bind that ran anyway is a mismatch, never a tolerated
+    uncertainty."""
+    if expected not in ("consumed", "pass"):
+        raise ValueError(f'whykey.suppress must be "consumed" or "pass", not {expected!r}')
+    if truth["fired"]:
+        return "bind ran despite suppression", set()
+    if expected == "pass" and truth.get("restored") is None:
+        raise PositiveControlFailed('suppress "pass" needs a "restored" check after whykey exits')
+    if truth["delivered"] is False and truth.get("reached"):
+        return f"held by suppression; normally {expected}", {expected}
+    return expected_verdicts(truth)
+
+
 def report_path(report: dict | None) -> list[dict]:
     """The layer path of a report; for a key sequence (`steps`), the last
     key's path, which carries the sequence's verdict."""
@@ -212,6 +293,28 @@ def report_path(report: dict | None) -> list[dict]:
         return report["path"]
     steps = report.get("steps") or []
     return steps[-1].get("path", []) if steps else []
+
+
+def via_check(spec: dict | None, report: dict | None) -> tuple[bool, str]:
+    """`whykey.via`: an upstream layer that must have redirected the key
+    (a pre-compositor remapper). {"layer": NAME, "summary": text,
+    "binding": text}: the layer's entry in the path must have propagation
+    Redirected, and its summary and binding action must contain the texts.
+    The scenario's verdict is still the layer named by "layer"."""
+    if not spec:
+        return True, ""
+    for entry in report_path(report or {}):
+        if entry.get("layer") != spec["layer"]:
+            continue
+        texts = [entry.get("summary") or ""] + [item.get("text", "") for item in entry.get("evidence", [])]
+        action = ((entry.get("binding") or {}).get("action")) or ""
+        ok = (
+            entry.get("propagation") == "Redirected"
+            and (spec.get("summary") is None or any(spec["summary"] in text for text in texts))
+            and (spec.get("binding") is None or spec["binding"] in action)
+        )
+        return ok, f"{spec['layer']} redirects the key (binding {action!r})"
+    return False, f"no {spec['layer']} layer redirected the key"
 
 
 def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | None]:
@@ -238,6 +341,20 @@ def layer_verdict(report: dict | None, layers: list[str]) -> tuple[str, dict | N
     return "absent", None
 
 
+def image_for(args, scenario: dict) -> str:
+    """The docker image reference a scenario runs in. --image forces one
+    reference for every scenario; otherwise the scenario's group image
+    (its "image" field, else its environment's) as <prefix><name>:<tag>, where
+    --image-tag "hash" resolves each image's content hash."""
+    if args.image:
+        return args.image
+    name = scenario_image(scenario)
+    tag = args.image_tag
+    if tag == "hash":
+        tag = lab_images.content_hash(name, MANIFEST)
+    return f"{args.image_prefix}{name}:{tag}"
+
+
 def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> list[str]:
     command = ["docker", "run", "--name", name, "--network", "none", "--init"]
     command += ["-d"] if keep else ["--rm"]
@@ -248,7 +365,7 @@ def docker_command(args, path: Path, scenario: dict, name: str, keep: bool) -> l
         "-v", f"{LAB}:/lab:ro",
         "-v", f"{args.binary}:/w/whykey:ro",
         "-e", f"WHYKEY_LAB_KEEP={'1' if keep else '0'}",
-        args.image,
+        image_for(args, scenario),
         "python3", "/lab/driver.py", f"/lab/{path.relative_to(LAB).as_posix()}",
     ]
     return command
@@ -304,8 +421,46 @@ def observation_verdict(report: dict | None) -> tuple[str, dict | None]:
 
 def truth_evidence(truth: dict) -> str:
     return "; ".join(
-        truth[key] for key in ("fired_evidence", "delivered_evidence", "reached_evidence") if truth.get(key)
+        truth[key] for key in ("fired_evidence", "delivered_evidence", "reached_evidence", "restored_evidence")
+        if truth.get(key)
     )
+
+
+def evaluate_silent(record: dict, scenario: dict, truth: dict, whykey: dict, result: dict) -> dict:
+    """`whykey.silent`: the backend cannot see this key, so whykey must give no
+    report and stop with the scenario's `stderr` text (its capture timed out).
+    The key must have reached the session (positive control) and nothing may
+    have fired; anything else is a lab error, never a pass."""
+    reached = bool(truth["delivered"] or truth.get("reached"))
+    if truth["fired"] or not reached:
+        record.update(ground_truth={"label": "no positive control", **truth}, expected=None,
+                      whykey_verdict="lab-error")
+        record["pass"] = False
+        record["error"] = (f"silent scenario needs an unfired key that reached the session "
+                           f"({truth_evidence(truth)})")
+        record["logs"] = result.get("logs")
+        return record
+    verdict = "silent" if whykey["report"] is None else "reported"
+    stderr = scenario["whykey"].get("stderr")
+    passed = (verdict == "silent" and (stderr is None or stderr in whykey["stderr"])
+              and truth.get("restored", True))
+    record.update(
+        ground_truth={"label": "not fired, reached", **truth},
+        expected=["silent"],
+        expected_summary=f"stderr containing {stderr!r}" if stderr else "",
+        whykey_verdict=verdict,
+        whykey_layer=None,
+    )
+    record["pass"] = passed
+    record["tolerated"] = False
+    if not passed:
+        record["whykey_stderr"] = whykey["stderr"][-2000:] or None
+        if whykey.get("stdout"):
+            record["whykey_stdout"] = whykey["stdout"][-2000:]
+        record["logs"] = result.get("logs")
+    if result.get("container"):
+        record["container"] = result["container"]
+    return record
 
 
 def evaluate(path: Path, scenario: dict, result: dict) -> dict:
@@ -328,6 +483,18 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         return record
     truth = result["ground_truth"]
     whykey = result["whykey"]
+    if scenario.get("expect") == "fired" and not truth["fired"]:
+        # The bind did not register or did not run: nothing about whykey is known.
+        record.update(ground_truth={"label": "expected to fire, did not", **truth},
+                      expected=None, whykey_verdict="lab-error")
+        record["pass"] = False
+        record["error"] = (
+            f"the scenario expects the binding to fire, but it did not ({truth['fired_evidence']})"
+        )
+        record["logs"] = result.get("logs")
+        return record
+    if scenario["whykey"].get("silent"):
+        return evaluate_silent(record, scenario, truth, whykey, result)
     summary = scenario["whykey"].get("summary")
     detail = scenario["whykey"].get("detail")
     combo = scenario["whykey"].get("combo")
@@ -344,6 +511,8 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
             accepted = {label}
         else:
             label, accepted = expected_verdicts(truth)
+            if scenario["whykey"].get("suppress"):
+                label, accepted = suppressed_verdicts(truth, scenario["whykey"]["suppress"])
     except PositiveControlFailed as failure:
         record.update(ground_truth={"label": "no positive control", **truth}, expected=None, whykey_verdict="lab-error")
         record["pass"] = False
@@ -365,9 +534,27 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         summary_ok = (summary is None or (entry is not None and summary in texts[0])) and (
             detail is None or any(detail in text for text in texts)
         ) and (binding is None or binding in reported_binding)
+        via_ok, via_text = via_check(scenario["whykey"].get("via"), whykey["report"])
+        summary_ok = summary_ok and via_ok
+        not_via = scenario["whykey"].get("not_via")
+        if not_via is not None:
+            # A passing layer is omitted from the report path, so the layer must
+            # be absent: any entry (a redirect, a consume, or an uncertain
+            # "may change") means whykey claims the layer acts on the key.
+            claimed = [
+                entry.get("summary") or ""
+                for entry in report_path(whykey["report"])
+                if entry.get("layer") == not_via
+            ]
+            summary_ok = summary_ok and not claimed
+            via_text = f"{via_text}; " if via_text else ""
+            via_text += f"{not_via} passes the key" + (f" (reported: {claimed[0]})" if claimed else "")
         if binding is not None:
             detail = f"{detail}; " if detail else ""
             detail += f"binding action containing {binding!r} (reported {reported_binding!r})"
+        if via_text:
+            detail = f"{detail}; " if detail else ""
+            detail += via_text
     stderr = scenario["whykey"].get("stderr")
     stderr_ok = stderr is None or stderr in whykey["stderr"]
     if combo is not None:
@@ -379,9 +566,10 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
     if confidence is not None:
         summary = f"{summary}; " if summary else ""
         summary += f"confidence {confidence!r} (reported {reported_confidence!r})"
+    restored_ok = truth.get("restored", True)
     passed = (
         (verdict in accepted or verdict in tolerated)
-        and summary_ok and combo_ok and stderr_ok and confidence_ok
+        and summary_ok and combo_ok and stderr_ok and confidence_ok and restored_ok
     )
     record.update(
         ground_truth={"label": label, **truth},
@@ -428,71 +616,10 @@ def print_table(records: list[dict]) -> None:
             print("  ".join("-" * width for width in widths))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--only", action="append", default=[], metavar="GLOB",
-                        help="scenario id or scenarios/-relative path glob (repeatable)")
-    parser.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1))
-    parser.add_argument("--vms", type=int,
-                        default=max(1, (os.cpu_count() or 1) // (3 if os.path.exists("/dev/kvm") else 4)),
-                        help="VM scenarios (Hyprland; 2 vCPUs each) run at once, within --jobs "
-                             "(default: a third of the CPUs with KVM, a quarter without; "
-                             "starved guests time out)")
-    parser.add_argument("--keep", action="store_true",
-                        help="leave each container running after the scenario for docker exec")
-    parser.add_argument("--image", default="whykey-lab")
-    parser.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "whykey")
-    parser.add_argument("--results", type=Path, default=LAB / "results.json")
-    parser.add_argument("--repeat", type=int, default=1, metavar="N",
-                        help="run every selected scenario N times at once (flake hunting)")
-    parser.add_argument("--retries", type=int, default=2, metavar="N",
-                        help="rerun a scenario up to N times, one at a time, when the lab "
-                             "could not establish ground truth (lab error); a mismatch "
-                             "with reality is never retried")
-    args = parser.parse_args()
-    args.binary = args.binary.resolve()
-    if not args.binary.is_file():
-        raise SystemExit(f"{args.binary} not found; run `cargo build --release --locked`")
-    scenarios = load_scenarios(args.only)
-    if not scenarios:
-        raise SystemExit("no scenario matched")
-
-    records: list[dict] = []
-    jobs = max(1, args.jobs)
-    vms = max(1, min(args.vms, jobs))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=vms) as vm_pool, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs - vms)) as pool:
-        futures = {
-            (vm_pool if getattr(ENVIRONMENTS[scenario["environment"]], "VM", None) else pool).submit(
-                run_container, args, path, scenario, copy
-            ): (path, scenario)
-            for path, scenario in scenarios
-            for copy in range(max(1, args.repeat))
-        }
-        for future in concurrent.futures.as_completed(futures):
-            path, scenario = futures[future]
-            record = evaluate(path, scenario, future.result())
-            records.append(record)
-            status = ("PASS~" if record.get("tolerated") else "PASS") if record["pass"] else "FAIL"
-            print(f"[{status}] {record['scenario']}", file=sys.stderr, flush=True)
-
-    # A lab error means the oracle failed (slow start, lost first key), not
-    # that whykey disagreed with reality. Rerun those alone, without load.
-    loaded = {path.relative_to(ROOT).as_posix(): (path, scenario) for path, scenario in scenarios}
-    for attempt in range(1, max(0, args.retries) + 1):
-        errored = [record for record in records if record.get("error")]
-        if not errored:
-            break
-        for record in errored:
-            path, scenario = loaded[record["file"]]
-            retry = evaluate(path, scenario, run_container(args, path, scenario, 0))
-            retry["retried"] = attempt
-            records[records.index(record)] = retry
-            status = ("PASS~" if retry.get("tolerated") else "PASS") if retry["pass"] else "FAIL"
-            print(f"[{status}] {retry['scenario']} (retry {attempt})", file=sys.stderr, flush=True)
-
+def finish(records: list[dict], results: Path) -> int:
+    """Write the records, print the table and the failures; 1 on any mismatch."""
     records.sort(key=lambda record: record["file"])
-    args.results.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    results.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     print()
     print_table(records)
     failed = [record for record in records if not record["pass"]]
@@ -500,7 +627,7 @@ def main() -> int:
     print(
         f"\n{len(records) - len(failed) - len(tolerated)}/{len(records)} scenarios match reality; "
         f"{len(tolerated)} only tolerated (PASS~: whykey honestly answered uncertain; "
-        f"not lab-verified); {len(failed)} failed; results: {args.results}"
+        f"not lab-verified); {len(failed)} failed; results: {results}"
     )
     for record in tolerated:
         print(f"  PASS~ {record['scenario']}: {record['whykey_verdict']} where reality was "
@@ -522,9 +649,118 @@ def main() -> int:
             print(f"    {line}")
         if record.get("whykey_stderr"):
             print(f"  stderr: {record['whykey_stderr'].strip()}")
-    if args.keep:
-        print("\nkept containers:", " ".join(r["container"] for r in records if r.get("container")))
+    kept = [record["container"] for record in records if record.get("container")]
+    if kept:
+        print("\nkept containers:", " ".join(kept))
     return 1 if failed else 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--only", action="append", default=[], metavar="GLOB",
+                        help="scenario id or scenarios/-relative path glob (repeatable)")
+    parser.add_argument("--group", metavar="IMAGE", default=None,
+                        help="only scenarios that run in this group image (lab/images.json), "
+                             "e.g. vm; CI runs one group per shard")
+    parser.add_argument("--shard", metavar="I/N", default=None,
+                        help="run shard I of N of the selected scenarios, split round-robin by "
+                             "sorted id (tools/lab_select.py plans the CI shards with the same split)")
+    parser.add_argument("--merge", nargs="+", type=Path, metavar="FILE", default=None,
+                        help="do not run anything: merge these results files, print the combined "
+                             "table, write --results, and exit 1 on any failure (CI summary job)")
+    parser.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1))
+    parser.add_argument("--vms", type=int,
+                        default=max(1, (os.cpu_count() or 1) // (3 if os.path.exists("/dev/kvm") else 4)),
+                        help="VM scenarios (Hyprland; 2 vCPUs each) run at once, within --jobs "
+                             "(default: a third of the CPUs with KVM, a quarter without; "
+                             "starved guests time out)")
+    parser.add_argument("--keep", action="store_true",
+                        help="leave each container running after the scenario for docker exec")
+    parser.add_argument("--image", metavar="REF", default=None,
+                        help="run every scenario in this docker image reference, as is (overrides "
+                             "each scenario's group image, --image-prefix and --image-tag; e.g. the "
+                             "old single image 'whykey-lab')")
+    parser.add_argument("--image-prefix", default=DEFAULT_IMAGE_PREFIX, metavar="P",
+                        help=f"prefix of the group images, <P><name>:<tag> (default {DEFAULT_IMAGE_PREFIX!r})")
+    parser.add_argument("--image-tag", default="latest", metavar="TAG",
+                        help="tag of the group images (default: latest); 'hash' uses each image's "
+                             "content hash (tools/lab_images.py hash NAME)")
+    parser.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "whykey")
+    parser.add_argument("--results", type=Path, default=LAB / "results.json")
+    parser.add_argument("--repeat", type=int, default=1, metavar="N",
+                        help="run every selected scenario N times at once (flake hunting)")
+    parser.add_argument("--retries", type=int, default=2, metavar="N",
+                        help="rerun a scenario up to N times, one at a time, when the lab "
+                             "could not establish ground truth (lab error); a mismatch "
+                             "with reality is never retried")
+    args = parser.parse_args()
+
+    if args.merge is not None:
+        records: list[dict] = []
+        for path in args.merge:
+            records.extend(json.loads(path.read_text(encoding="utf-8")))
+        if not records:
+            raise SystemExit("no records in " + " ".join(str(path) for path in args.merge))
+        return finish(records, args.results)
+
+    args.binary = args.binary.resolve()
+    if not args.binary.is_file():
+        raise SystemExit(f"{args.binary} not found; run `cargo build --release --locked`")
+    if args.group is not None and args.group not in IMAGE_NAMES:
+        raise SystemExit(f"--group {args.group!r}: unknown image; known: {sorted(IMAGE_NAMES)}")
+    shard = None
+    if args.shard is not None:
+        try:
+            shard = lab_select.parse_shard(args.shard)
+        except ValueError as error:
+            raise SystemExit(str(error))
+    scenarios = load_scenarios(args.only, args.group)
+    if shard is not None:
+        scenarios.sort(key=lambda item: item[1]["id"])
+        selected = len(scenarios)
+        scenarios = lab_select.shard_slice(scenarios, *shard)
+        print(f"shard {args.shard}: {len(scenarios)} of {selected} selected scenarios",
+              file=sys.stderr, flush=True)
+    if not scenarios:
+        raise SystemExit("no scenario matched")
+
+    records = []
+    jobs = max(1, args.jobs)
+    vms = max(1, min(args.vms, jobs))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=vms) as vm_pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs - vms)) as pool:
+        futures = {
+            (vm_pool if getattr(ENVIRONMENTS[scenario["environment"]], "VM", None) else pool).submit(
+                run_container, args, path, scenario, copy
+            ): (path, scenario)
+            for path, scenario in scenarios
+            for copy in range(max(1, args.repeat))
+        }
+        for future in concurrent.futures.as_completed(futures):
+            path, scenario = futures[future]
+            record = evaluate(path, scenario, future.result())
+            record["image"] = image_for(args, scenario)
+            records.append(record)
+            status = ("PASS~" if record.get("tolerated") else "PASS") if record["pass"] else "FAIL"
+            print(f"[{status}] {record['scenario']}", file=sys.stderr, flush=True)
+
+    # A lab error means the oracle failed (slow start, lost first key), not
+    # that whykey disagreed with reality. Rerun those alone, without load.
+    loaded = {path.relative_to(ROOT).as_posix(): (path, scenario) for path, scenario in scenarios}
+    for attempt in range(1, max(0, args.retries) + 1):
+        errored = [record for record in records if record.get("error")]
+        if not errored:
+            break
+        for record in errored:
+            path, scenario = loaded[record["file"]]
+            retry = evaluate(path, scenario, run_container(args, path, scenario, 0))
+            retry["retried"] = attempt
+            retry["image"] = image_for(args, scenario)
+            records[records.index(record)] = retry
+            status = ("PASS~" if retry.get("tolerated") else "PASS") if retry["pass"] else "FAIL"
+            print(f"[{status}] {retry['scenario']} (retry {attempt})", file=sys.stderr, flush=True)
+
+    return finish(records, args.results)
 
 
 if __name__ == "__main__":

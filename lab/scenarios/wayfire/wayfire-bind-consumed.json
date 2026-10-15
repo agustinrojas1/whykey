@@ -1,12 +1,12 @@
 {
   "id": "wayfire-bind-consumed",
-  "description": "a [command] binding Super+T in wayfire.ini runs its command and Wayfire consumes the key",
+  "description": "a [command] binding Super+T in wayfire.ini runs its command and Wayfire consumes the key; whykey asks the running compositor (ipc-rules) for its live option and confirms the command plugin is mapped into it",
   "tier": "observed",
   "environment": "wayfire",
   "files": {
     "/root/.config/wayfire.ini": [
       "[core]",
-      "plugins = command",
+      "plugins = ipc ipc-rules command",
       "",
       "[command]",
       "binding_terminal = <super> KEY_T",
@@ -19,7 +19,6 @@
   "whykey": {
     "args": ["super+t"],
     "layer": "Wayfire",
-    "accept": ["handled-uncertain"],
     "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
   }
 }

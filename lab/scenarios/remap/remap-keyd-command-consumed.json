@@ -1,0 +1,23 @@
+{
+  "id": "remap-keyd-command-consumed",
+  "description": "keyd '[main] capslock = command(touch /tmp/fired)' consumes CapsLock: keyd runs the shell command and emits nothing, so the probe never receives a key. whykey must report keyd consuming the key",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["keyd"], "ready": "keyd virtual keyboard"}},
+  "files": {
+    "/etc/keyd/default.conf": ["[ids]", "*", "", "[main]", "capslock = command(touch /tmp/fired)"]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["capslock"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["CAPS_LOCK"],
+    "layer": ["Input remapper"],
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

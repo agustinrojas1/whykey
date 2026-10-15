@@ -1,6 +1,6 @@
 {
   "id": "niri-bind-consumed",
-  "description": "a Super+T bind in config.kdl runs its command and niri consumes the key",
+  "description": "a Super+T bind in config.kdl runs its command and niri consumes the key; tolerated uncertainty because niri's IPC does not report its active binds, so whykey can only read the file",
   "tier": "observed",
   "environment": "niri",
   "files": {

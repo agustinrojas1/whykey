@@ -1,0 +1,38 @@
+{
+  "id": "remap-kmonad-redirect-bound",
+  "description": "kmonad (0.4.5, /root/kmonad.kbd reads the VM kernel keyboard's evdev node and writes a uinput sink) maps F9 to F12 with defsrc/deflayer; Hyprland's bind on F12 fires and consumes the key. The config is limited to the device kmonad reads, and whykey inspects F9 without a captured device, so it cannot know the key comes from that device: it answers handled-uncertain (tolerated, PASS~) and names the F9 to F12 remap. It does not follow the remap to F12, because that is conditional",
+  "tier": "observed",
+  "environment": "remap",
+  "setup": [
+    "dev=$(grep -l 'QEMU Virtio Keyboard' /sys/class/input/event*/device/name | head -1 | cut -d/ -f5) && test -n \"$dev\" && sed -i \"s|EVDEV|/dev/input/$dev|\" /root/kmonad.kbd"
+  ],
+  "remap": {"daemon": {"argv": ["kmonad", "/root/kmonad.kbd"], "ready": "kmonad output"}},
+  "files": {
+    "/root/kmonad.kbd": [
+      "(defcfg",
+      "  input (device-file \"EVDEV\")",
+      "  output (uinput-sink \"kmonad output\")",
+      "  fallthrough true)",
+      "(defsrc f9)",
+      "(deflayer base f12)"
+    ],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["f9"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["f9"],
+    "layer": ["Input remapper"],
+    "accept": ["handled-uncertain"],
+    "summary": "kmonad may change F9",
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

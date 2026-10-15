@@ -1,0 +1,27 @@
+{
+  "id": "remap-xremap-redirect-bound",
+  "description": "xremap (v0.15.14, /root/xremap.yml) maps F9 to F12 on the VM kernel keyboard; the Input remapper layer reports the redirect, and Hyprland's bind on F12 fires and consumes the key",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["xremap", "/root/xremap.yml"], "ready": "xremap"}},
+  "files": {
+    "/root/xremap.yml": ["modmap:", "  - name: f9 to f12", "    remap:", "      F9: F12"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["f9"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["f9"],
+    "layer": ["Hyprland"],
+    "via": {"layer": "Input remapper", "summary": "F9", "binding": "F12"},
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

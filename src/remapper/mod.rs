@@ -323,13 +323,28 @@ pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Dete
 }
 
 /// Describe a previously collected remapper snapshot for one key without
-/// rediscovering processes or configuration files.
+/// rediscovering processes or configuration files. Only an explicit XKB
+/// layout in the environment tells whether printable keys sit at their US
+/// positions.
 pub fn inspect_with_detections(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
     detections: &[Detection],
 ) -> LayerResult {
-    inspect_detections(key, physical_input, detections, keys::layout_is_us())
+    inspect_with_detections_and_layout(key, physical_input, detections, None)
+}
+
+/// As [`inspect_with_detections`], with the compositor's own answer to
+/// whether the layout is plain US (Hyprland reports its main keyboard's
+/// RMLVO); `None` falls back to the environment.
+pub fn inspect_with_detections_and_layout(
+    key: &KeyCombo,
+    physical_input: Option<&PhysicalInput>,
+    detections: &[Detection],
+    compositor_layout_us: Option<bool>,
+) -> LayerResult {
+    let layout_us = compositor_layout_us.unwrap_or_else(keys::layout_is_us);
+    inspect_detections(key, physical_input, detections, layout_us)
 }
 
 /// Remapper rules come from configuration files; the daemons are never asked.

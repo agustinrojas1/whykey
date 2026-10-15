@@ -1,0 +1,24 @@
+{
+  "id": "niri-no-binds-delivered",
+  "description": "config.kdl has no binds block at all, so niri has no bind for Super+T (it does not fall back to its built-in defaults) and the probe client receives it",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "input {",
+      "    keyboard {",
+      "        xkb {",
+      "        }",
+      "    }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Niri",
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

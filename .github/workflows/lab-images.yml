@@ -1,0 +1,119 @@
+name: Lab images
+
+# Builds the reality lab's container images and pushes them to GHCR, one per
+# content hash (tools/lab_images.py): base first, then the group images FROM
+# it. An image whose hash tag the registry already has is skipped, so a run
+# builds only what changed. Runs on pushes to main that touch the images,
+# on workflow_dispatch, and from lab.yml (workflow_call).
+#
+# Each image is tagged ghcr.io/agustinrojas1/whykey-lab-<name>:<hash> only (no
+# :latest), with an org.opencontainers.image.source label that links the
+# package to this repository. No GitHub Actions cache: the images are the cache.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lab/images/**"
+      - "lab/images.json"
+      - "lab/packages/**"
+      - "tools/lab_images.py"
+      - ".github/workflows/lab-images.yml"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      push:
+        description: >-
+          Push the missing images. A pull request from a fork has a read-only
+          token: with false, a missing image fails the run instead of building.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_PREFIX: ghcr.io/agustinrojas1/whykey-lab-
+  IMAGE_SOURCE: org.opencontainers.image.source=https://github.com/agustinrojas1/whykey
+
+jobs:
+  plan:
+    name: Find missing images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      missing: ${{ steps.missing.outputs.missing }}
+      groups: ${{ steps.missing.outputs.groups }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: missing
+        env:
+          # In a called workflow github.event_name is the caller's event.
+          CAN_PUSH: ${{ github.event_name != 'pull_request' || inputs.push }}
+        run: |
+          missing=$(python3 tools/lab_images.py missing --prefix "$IMAGE_PREFIX" --json)
+          groups=$(jq -c '[.[] | select(. != "base")]' <<< "$missing")
+          echo "Missing from $IMAGE_PREFIX: $missing" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$missing" != "[]" ] && [ "$CAN_PUSH" != "true" ]; then
+            echo "::error::lab images are missing and this run cannot push: $missing. Merge to main first, or push the branch to this repository."
+            exit 1
+          fi
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          echo "groups=$groups" >> "$GITHUB_OUTPUT"
+
+  base:
+    name: Build base
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.missing), 'base')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push base
+        run: python3 tools/lab_images.py build --prefix "$IMAGE_PREFIX" --push --label "$IMAGE_SOURCE" base
+
+  groups:
+    name: Build ${{ matrix.image }}
+    needs: [plan, base]
+    # base is either built (success) or already in the registry (skipped).
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.base.result == 'success' || needs.base.result == 'skipped') && needs.plan.outputs.groups != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          # --no-base: FROM pulls ${IMAGE_PREFIX}base:<hash>, pushed above or earlier.
+          python3 tools/lab_images.py build --prefix "$IMAGE_PREFIX" --push --no-base \
+            --label "$IMAGE_SOURCE" "$IMAGE"

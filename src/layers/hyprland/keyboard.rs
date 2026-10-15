@@ -176,7 +176,24 @@ pub(crate) fn keymap_layout_name(keymap: &str, group: usize) -> Option<String> {
     })
 }
 
+/// Whether Hyprland's main keyboard uses the plain US layout (no variant),
+/// so printable keys sit at their US positions.
+pub(crate) fn main_keyboard_is_plain_us(devices_json: &str) -> bool {
+    main_keyboard_rmlvo(devices_json).is_some_and(|rmlvo| {
+        rmlvo.layout.trim().eq_ignore_ascii_case("us")
+            && rmlvo
+                .variant
+                .as_deref()
+                .is_none_or(|variant| variant.trim().is_empty())
+    })
+}
+
 pub(crate) fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
+    compile_keymap_cached(main_keyboard_rmlvo(devices_json)?)
+}
+
+/// The RMLVO of Hyprland's main keyboard (or its first keyboard).
+fn main_keyboard_rmlvo(devices_json: &str) -> Option<xkb::Rmlvo> {
     let Ok(devices) = serde_json::from_str::<serde_json::Value>(devices_json) else {
         return None;
     };
@@ -223,7 +240,7 @@ pub(crate) fn compile_main_xkb_keymap(devices_json: &str) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    compile_keymap_cached(rmlvo)
+    Some(rmlvo)
 }
 
 /// One inspection resolves the query key and the captured physical key

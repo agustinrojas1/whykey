@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs one package family of the lab image (lab/Dockerfile):
+# Installs one package family of a lab image (lab/images/*.Dockerfile):
 #   sh _install.sh FAMILY
 # runs FAMILY.sh first when it exists (e.g. enable a COPR), installs the dnf
 # packages listed in FAMILY.txt (one per line, # comments), then strips file

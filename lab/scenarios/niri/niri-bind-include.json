@@ -1,0 +1,25 @@
+{
+  "id": "niri-bind-include",
+  "description": "config.kdl includes binds.kdl, which holds the Super+T bind; whykey reads the included file and, like niri-bind-consumed, reports tolerated uncertainty because niri's IPC does not report its active binds",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "include \"binds.kdl\""
+    ],
+    "/root/.config/niri/binds.kdl": [
+      "binds {",
+      "    Super+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+t"],
+    "layer": "Niri",
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

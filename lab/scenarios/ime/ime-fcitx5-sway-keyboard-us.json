@@ -1,0 +1,43 @@
+{
+  "id": "ime-fcitx5-sway-keyboard-us",
+  "description": "Fcitx5 whose only input method is keyboard-us (state 1 on the focused foot probe, the only state a keyboard engine reaches) passes the key unchanged",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "fcitx5",
+    "session": "sway",
+    "profile": "[Groups/0]\nName=Default\nDefault Layout=us\nDefaultIM=keyboard-us\n\n[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n[GroupOrder]\n0=Default\n",
+    "env": {
+      "GTK_IM_MODULE": "fcitx",
+      "QT_IM_MODULE": "fcitx",
+      "XMODIFIERS": "@im=fcitx"
+    }
+  },
+  "files": {
+    "/root/.config/sway/config": ["output * resolution 1024x768"]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "vkbd": ["a"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "false"
+    },
+    "delivered": "probe",
+    "reached": {
+      "probe": "any"
+    }
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": "Input method",
+    "detail": "active engine: keyboard-us",
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    }
+  }
+}

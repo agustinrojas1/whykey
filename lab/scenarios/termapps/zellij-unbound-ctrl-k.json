@@ -1,0 +1,64 @@
+{
+  "id": "zellij-unbound-ctrl-k",
+  "description": "Ctrl-k has no Zellij binding in the default keybinds or the user config; the key passes through to the pane's shell",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/zellij/config.kdl": [
+      "show_release_notes false",
+      "show_startup_tips false",
+      "keybinds {",
+      "    normal {",
+      "        bind \"Ctrl y\" {",
+      "            NewPane",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "echo started >> /tmp/shells-started",
+      "bind -x '\"\\C-k\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-y\": touch /tmp/reached-shell'",
+      "bind -x '\"\\en\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zellij",
+      "-s",
+      "lab"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    },
+    "settle": 3
+  },
+  "actions": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x0b"
+    },
+    {
+      "sleep": 2
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test \"$(wc -l < /tmp/shells-started)\" -ge 2"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+k"
+    ],
+    "layer": "Zellij",
+    "run": "pty",
+    "command": "/w/whykey"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "remap-kanata-unbound-passes",
+  "description": "with kanata running and '(defsrc f9)', an unlisted 'a' from the VM kernel keyboard reaches the probe unchanged through kanata's uinput device; Hyprland finds no bind and the Input remapper layer does not redirect it",
+  "tier": "observed",
+  "environment": "remap",
+  "remap": {"daemon": {"argv": ["kanata", "-c", "/root/kanata.kbd"], "ready": "kanata"}},
+  "files": {
+    "/root/kanata.kbd": ["(defcfg)", "(defsrc f9)", "(deflayer base f12)"],
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"F12\", hl.dsp.exec_cmd(\"touch /tmp/fired\"), { description = \"Lab fire\" })"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"qkbd": ["a"]}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["a"],
+    "layer": ["Hyprland"],
+    "not_via": "Input remapper",
+    "env": {"XDG_CURRENT_DESKTOP": "Hyprland", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

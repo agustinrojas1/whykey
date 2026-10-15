@@ -1,0 +1,65 @@
+{
+  "id": "zellij-normal-bind",
+  "description": "Ctrl-y bound in normal mode of ~/.config/zellij/config.kdl opens a pane (NewPane); Zellij consumes the key, so the pane's shell never receives it. Zellij does not report its current mode and nothing tells whykey, so it can only say the key is handled if Zellij is in its default (normal) mode: tolerated handled-uncertain (zellij-default-alt-n checks the same path with the mode given)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/zellij/config.kdl": [
+      "show_release_notes false",
+      "show_startup_tips false",
+      "keybinds {",
+      "    normal {",
+      "        bind \"Ctrl y\" {",
+      "            NewPane",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "echo started >> /tmp/shells-started",
+      "bind -x '\"\\C-v\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-y\": touch /tmp/reached-shell'",
+      "bind -x '\"\\en\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "zellij",
+      "-s",
+      "lab"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    },
+    "settle": 3
+  },
+  "actions": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "\\x19"
+    },
+    {
+      "sleep": 2
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "test \"$(wc -l < /tmp/shells-started)\" -ge 2"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+y"
+    ],
+    "layer": "Zellij",
+    "run": "pty",
+    "command": "/w/whykey",
+    "accept": ["handled-uncertain"]
+  }
+}

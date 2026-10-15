@@ -1,0 +1,24 @@
+{
+  "id": "wayfire-bind-alternative",
+  "description": "a [command] binding whose value lists two alternatives, Super+T | Ctrl+Y; the second one fires and Wayfire consumes Ctrl+Y",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = ipc ipc-rules command",
+      "",
+      "[command]",
+      "binding_terminal = <super> KEY_T | <ctrl> KEY_Y",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["ctrl+y"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["ctrl+y"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "gnome-shell-overview-bound",
+  "description": "GNOME Shell (running, not just mutter) toggles its overview on a org.gnome.shell.keybindings binding; the shell's own Eval reports the overview visible, and the key does not reach the probe",
+  "tier": "observed",
+  "environment": "gnome_shell",
+  "session_setup": [
+    "gsettings set org.gnome.shell.keybindings toggle-overview \"['<Super>q']\""
+  ],
+  "probe": "wayland",
+  "actions": [
+    {
+      "rdkbd": [
+        "super+q"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "shell": {
+        "eval": "Main.overview.visible",
+        "is": "true"
+      }
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+q"
+    ],
+    "layer": "GNOME",
+    "detail": "org.gnome.shell.keybindings toggle-overview = '<Super>q'"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "gnome-shell-overview-unbound",
+  "description": "<Super>y has no GNOME Shell binding: the shell's overview stays hidden and the key reaches the focused probe",
+  "tier": "observed",
+  "environment": "gnome_shell",
+  "probe": "wayland",
+  "actions": [
+    {
+      "rdkbd": [
+        "super+y"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "shell": {
+        "eval": "Main.overview.visible",
+        "is": "true"
+      }
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+y"
+    ],
+    "layer": "GNOME"
+  }
+}

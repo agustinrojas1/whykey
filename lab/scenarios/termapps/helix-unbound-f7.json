@@ -1,0 +1,54 @@
+{
+  "id": "helix-unbound-f7",
+  "description": "F7 has no entry in ~/.config/helix/config.toml; Helix reads the key and nothing fires. whykey cannot see Helix's built-in keymap or plugins, so it answers uncertain-continues (tolerated, not verified)",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.config/helix/config.toml": [
+      "[keys.normal]",
+      "\"C-y\" = \":sh touch /tmp/other\""
+    ],
+    "/root/work.txt": [
+      "one"
+    ]
+  },
+  "pty": {
+    "command": [
+      "strace",
+      "-f",
+      "-o",
+      "/tmp/strace.log",
+      "-e",
+      "trace=read",
+      "-s",
+      "64",
+      "hx",
+      "/root/work.txt"
+    ],
+    "settle": 1.5
+  },
+  "actions": [
+    {
+      "type": "\\e[18~"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "reached": {
+      "sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\33[18~'"
+    }
+  },
+  "whykey": {
+    "args": [
+      "f7"
+    ],
+    "layer": "Helix",
+    "run": "pty",
+    "command": ":sh /w/whykey",
+    "accept": [
+      "uncertain-continues"
+    ]
+  }
+}

@@ -50,15 +50,31 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             }
         },
     };
-    let (mode, mode_source) = env::var("WHYKEY_ZELLIJ_MODE")
-        .ok()
-        .filter(|mode| !mode.trim().is_empty())
-        .map(|mode| (mode.trim().to_owned(), "from WHYKEY_ZELLIJ_MODE"))
-        .unwrap_or_else(|| ("normal".into(), "assumed"));
+    let (mode, mode_source, mode_known) =
+        resolve_mode(env::var("WHYKEY_ZELLIJ_MODE").ok().as_deref(), &content);
     let mut details = vec![source, format!("mode: {mode} ({mode_source})")];
     if let Some(binding) = find_binding(&content, key, &mode) {
         details.push(format!("binding: {}", binding));
         let continues = binding.starts_with("WriteChars") || binding.starts_with("Write ");
+        if !mode_known {
+            // Zellij does not report its current mode, and a key bound in the
+            // assumed mode is often free in another (Ctrl g toggles Locked).
+            details.push(format!(
+                "Zellij does not report its current mode; this binding applies only while it is in {mode} mode"
+            ));
+            return LayerResult::new(
+                "Zellij",
+                LayerId::Multiplexer,
+                Outcome::HandledUncertain,
+                if continues {
+                    "binding writes input to the pane if Zellij is in the assumed mode"
+                } else {
+                    "binding consumes the key if Zellij is in the assumed mode"
+                },
+                details,
+            )
+            .with_tier(tier);
+        }
         return LayerResult::new(
             "Zellij",
             LayerId::Multiplexer,
@@ -85,11 +101,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
     LayerResult::new(
         "Zellij",
         LayerId::Multiplexer,
-        if complete {
-            Outcome::Pass
-        } else {
-            Outcome::Unknown
-        },
+        unbound_outcome(complete),
         if complete {
             "no matching Zellij binding; forwarded to the pane"
         } else {
@@ -98,6 +110,47 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
         details,
     )
     .with_tier(tier)
+}
+
+/// The mode the key is matched in, where it came from, and whether it is
+/// known. `WHYKEY_ZELLIJ_MODE` names it; otherwise it is assumed to be the
+/// config's `default_mode` (the mode Zellij starts and rests in), or
+/// `normal`, Zellij's own default.
+fn resolve_mode(env_mode: Option<&str>, content: &str) -> (String, &'static str, bool) {
+    if let Some(mode) = env_mode.map(str::trim).filter(|mode| !mode.is_empty()) {
+        return (mode.to_owned(), "from WHYKEY_ZELLIJ_MODE", true);
+    }
+    match default_mode(content) {
+        Some(mode) => (mode, "assumed from the config's default_mode", false),
+        None => ("normal".into(), "assumed: Zellij's default mode", false),
+    }
+}
+
+/// A top-level `default_mode "locked"` setting, lowercased like the mode
+/// blocks of `keybinds`.
+fn default_mode(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let line = line.split("//").next()?.trim();
+        let value = line.strip_prefix("default_mode")?;
+        if !value.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let mode = value.trim().trim_matches('"').trim();
+        (!mode.is_empty()).then(|| mode.to_ascii_lowercase())
+    })
+}
+
+/// The verdict when no parsed binding matches. Complete defaults plus config
+/// mean the key is forwarded. Otherwise the parse may have missed a binding,
+/// but the key still continues unless one matches, as for a shell without its
+/// init file (`UncertainContinues`, not `Unknown`, which would not say whether
+/// the key continues at all).
+fn unbound_outcome(complete: bool) -> Outcome {
+    if complete {
+        Outcome::Pass
+    } else {
+        Outcome::UncertainContinues
+    }
 }
 
 fn unavailable(message: String) -> LayerResult {
@@ -261,6 +314,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mode_is_known_only_from_the_environment_and_otherwise_assumes_default_mode() {
+        let config = "default_mode \"locked\"\nkeybinds {\n}\n";
+        assert_eq!(
+            resolve_mode(Some("pane"), config),
+            ("pane".into(), "from WHYKEY_ZELLIJ_MODE", true)
+        );
+        assert_eq!(
+            resolve_mode(None, config),
+            (
+                "locked".into(),
+                "assumed from the config's default_mode",
+                false
+            )
+        );
+        assert_eq!(
+            resolve_mode(Some("  "), "keybinds {\n}\n"),
+            ("normal".into(), "assumed: Zellij's default mode", false)
+        );
+        assert_eq!(default_mode("// default_mode \"locked\"\n"), None);
+        assert_eq!(default_mode("default_modes \"x\"\n"), None);
+    }
+
+    #[test]
     fn parses_zellij_key_names() {
         assert_eq!(
             parse_zellij_key("Ctrl Left").unwrap().to_string(),
@@ -314,6 +390,12 @@ mod tests {
         let key: KeyCombo = "ctrl+q".parse().unwrap();
         let binding = find_binding(content, &key, "pane").unwrap();
         assert!(binding.contains("CloseFocus"));
+    }
+
+    #[test]
+    fn unbound_key_continues_unless_the_binding_set_is_incomplete() {
+        assert_eq!(unbound_outcome(true), Outcome::Pass);
+        assert_eq!(unbound_outcome(false), Outcome::UncertainContinues);
     }
 
     #[test]

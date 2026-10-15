@@ -3,6 +3,7 @@
   "description": "a key with no kglobalaccel shortcut reaches the focused client",
   "tier": "observed",
   "environment": "x11",
+  "image": "vm",
   "files": {
     "/root/.local/share/applications/lab-fire.desktop": ["[Desktop Entry]", "Type=Application", "Name=Lab fire", "Exec=touch /tmp/fired"],
     "/root/.config/kglobalshortcutsrc": ["[services][lab-fire.desktop]", "_launch=Meta+Return"]

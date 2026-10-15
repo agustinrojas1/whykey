@@ -1,0 +1,22 @@
+{
+  "id": "niri-bind-modifiers",
+  "description": "a Super+Shift+T bind runs its command and the key is consumed; the bind needs both modifiers, so Super+T alone is not it (tolerated uncertainty as with niri-bind-consumed)",
+  "tier": "observed",
+  "environment": "niri",
+  "files": {
+    "/root/.config/niri/config.kdl": [
+      "binds {",
+      "    Super+Shift+T { spawn \"sh\" \"-c\" \"touch /tmp/fired\"; }",
+      "}"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"outer_vkbd": ["super+shift+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+shift+t"],
+    "layer": "Niri",
+    "accept": ["handled-uncertain"],
+    "env": {"XDG_CURRENT_DESKTOP": "niri", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

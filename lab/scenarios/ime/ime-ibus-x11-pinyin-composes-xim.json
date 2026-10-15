@@ -1,0 +1,48 @@
+{
+  "id": "ime-ibus-x11-pinyin-composes-xim",
+  "description": "IBus libpinyin active for a focused XIM client (xterm) composes n i space into 你; the raw keys never reach the client, so whykey must not claim pass. accept uncertain-continues: a passive read cannot tell which keys an active engine composes, so whykey answers uncertain; the lab records that the raw keys were withheld and the committed text arrived (ground_truth.reached), and whykey must not claim pass.",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "ibus",
+    "session": "x11",
+    "client": "xterm",
+    "env": {
+      "GTK_IM_MODULE": "ibus",
+      "QT_IM_MODULE": "ibus",
+      "XMODIFIERS": "@im=ibus"
+    },
+    "engine": {
+      "ibus": {
+        "engine": "libpinyin"
+      }
+    }
+  },
+  "probe": null,
+  "actions": [
+    {
+      "xdotool": ["key", "n", "i", "space"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "sh": "false"
+    },
+    "delivered": {
+      "typed": "n"
+    },
+    "reached": {
+      "committed": "你"
+    }
+  },
+  "whykey": {
+    "args": ["n"],
+    "layer": "Input method",
+    "summary": "may transform this input",
+    "accept": ["uncertain-continues"],
+    "env": {
+      "XDG_CURRENT_DESKTOP": "x11",
+      "XDG_SESSION_TYPE": "x11"
+    }
+  }
+}

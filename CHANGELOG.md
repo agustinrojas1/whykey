@@ -1,5 +1,61 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixes
+
+- With no input context focused, Fcitx5 answers `CurrentInputMethod`
+  with an empty string. The input-method layer used to stop there and
+  report the runtime query as unavailable; it now reads `State` and
+  reports Fcitx5 as closed (no focused input context), so keys pass
+  through. Found on a real Hyprland desktop. Test
+  `fcitx5_without_a_focused_input_context_reads_the_closed_state`.
+- IBus with no engine selected forwards keys; whykey used to report its
+  runtime API as unreachable (D-140).
+- Hyprland `listen --suppress` produces a report again. It always timed
+  out after the modifier release (D-183). A key it holds without a
+  binding keeps its normal route, and the report says the application did
+  not receive it this time (D-184).
+- Sway native capture: `bindcode` bindings no longer abort `listen`,
+  keycodes are converted from XKB to evdev, `--release` bindings are
+  reported as releases, and the waiting text says which keys Sway cannot
+  report (D-180 to D-182, D-185).
+- The X11 grab probe checks the path to the focused window as well as the
+  root window, so Cinnamon's per-window shortcuts are no longer reported
+  as unbound (D-162). Cinnamon's window bindings and media keys are read
+  from their own schemas (D-161).
+- GNOME shortcuts that only gnome-shell or gsd-media-keys grab are not
+  consumed while that daemon is down (D-160).
+- KDE on Wayland: a kglobalacceld that owns `org.kde.kglobalaccel` keeps
+  KWin from handling shortcuts, and whykey now says pass there (D-163).
+- Niri reads included files, `Mod` follows the backend (Alt when nested)
+  and `mod-key`/`mod-key-nested`, and unreadable binds make a no-match
+  unknown (D-170, D-171, D-177).
+- Wayfire answers from the running compositor over `ipc-rules` when that
+  plugin is loaded, and reads metadata default bindings, activator
+  alternatives, activators outside `binding_*`, and evdev key names
+  (D-172 to D-176).
+- Vim and Neovim mappings with lowercase special keys or plain keys are
+  found; editors and Zellij without a matching binding answer
+  uncertain-continues instead of indeterminate (D-130 to D-132).
+- Zellij assumes its `default_mode` and reports a binding there as
+  handled-uncertain, since its current mode is not readable (D-133).
+- With a remapper running on Hyprland, printable keys use the main
+  keyboard's layout from `hyprctl devices` instead of being uncertain
+  (D-150).
+
+### Lab
+
+- New environments: GNOME Shell with gsd-media-keys (`gnome_shell`),
+  KWin (`kwin`), Cinnamon (`cinnamon`), Fcitx5 and IBus (`ime`), and
+  keyd, kanata, xremap, kmonad, and input-remapper in the Hyprland VM
+  (`remap`). New groups cover Vim, Helix, Kakoune, Micro, and Zellij
+  (`termapps`), Sway native capture and Hyprland `--suppress`
+  (`capture`), and more Niri and Wayfire cases.
+- Scenarios can require their binding to fire (`expect`), check state
+  after whykey exits (`wait_whykey`, `restored`, `mark_probe`), and check
+  upstream redirects (`whykey.via`, `whykey.not_via`).
+
 ## [2.2.0] - 2026-10-11
 
 The lab grows to 172 scenarios: 156 match exactly, 16 pass only as honest

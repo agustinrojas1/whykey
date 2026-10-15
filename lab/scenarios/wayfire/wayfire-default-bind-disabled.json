@@ -1,0 +1,25 @@
+{
+  "id": "wayfire-default-bind-disabled",
+  "description": "Wayfire's core default close_top_view (Super+Q) is disabled with none in [core], so Super+Q reaches the probe window and the window stays open",
+  "tier": "observed",
+  "environment": "wayfire",
+  "files": {
+    "/root/.config/wayfire.ini": [
+      "[core]",
+      "plugins = ipc ipc-rules command",
+      "close_top_view = none",
+      "",
+      "[command]",
+      "binding_terminal = <super> KEY_T",
+      "command_terminal = touch /tmp/fired"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [{"vkbd": ["super+q"]}],
+  "ground_truth": {"fired": {"sh": "! pgrep -f '^python3 /lab/keylog.py'"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["super+q"],
+    "layer": "Wayfire",
+    "env": {"XDG_CURRENT_DESKTOP": "wayfire", "XDG_SESSION_TYPE": "wayland"}
+  }
+}

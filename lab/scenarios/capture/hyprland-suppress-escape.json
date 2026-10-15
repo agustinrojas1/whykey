@@ -1,0 +1,34 @@
+{
+  "id": "hyprland-suppress-escape",
+  "description": "Escape ends listen --suppress without a report (\"Stopped.\"): the bind does not run for it and the compositor submap is restored to default",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"pgrep -f '[/]w/whykey listen' >/dev/null && echo during >> /tmp/fired || echo after >> /tmp/fired\"), { description = \"Lab fire\" })",
+      "hl.on(\"input.keyboard.key\", function(kc, ts, state) hl.dispatch(hl.dsp.exec_cmd(\"touch /tmp/reached\")) end)"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"sh": "rm -f /tmp/fired /tmp/reached; true"},
+    {"start_whykey": true},
+    {"sh": "rm -f /tmp/reached; true"},
+    {"qkbd": ["escape"]},
+    {"wait_whykey": true}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe",
+    "reached": {"file": "/tmp/reached"},
+    "restored": {"sh": "hyprctl submap | grep -qx default"}
+  },
+  "whykey": {
+    "args": ["listen", "--suppress", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "silent": true,
+    "stderr": "Stopped.",
+    "tty": true
+  }
+}

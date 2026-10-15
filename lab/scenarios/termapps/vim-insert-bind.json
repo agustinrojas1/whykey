@@ -1,0 +1,27 @@
+{
+  "id": "vim-insert-bind",
+  "description": "<C-x> mapped only in insert mode (inoremap in ~/.vimrc) runs writefile() when pressed in insert mode; whykey's Vim adapter reports the mapping as possibly consuming the key, since it cannot see the mode",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.vimrc": ["inoremap <C-x> <Cmd>call writefile(['fired'], '/tmp/fired')<CR>"],
+    "/root/work.txt": ["one"]
+  },
+  "pty": {
+    "command": ["strace", "-f", "-o", "/tmp/strace.log", "-e", "trace=read", "-s", "64", "vim", "-n", "/root/work.txt"],
+    "settle": 1.5
+  },
+  "actions": [{"type": "i"}, {"sleep": 1}, {"type": "\\x18"}, {"sleep": 1}, {"type": "\\x1b"}, {"sleep": 1}],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "reached": {"sh": "sed -n 's/^.*read(0, \"\\(.*\\)\", [0-9]*) *= [0-9]*$/\\1/p' /tmp/strace.log | tr -d '\\n' | grep -qF '\\30'"}
+  },
+  "whykey": {
+    "args": ["ctrl+x"],
+    "layer": "Vim",
+    "run": "pty",
+    "command": ":!/w/whykey",
+    "accept": ["handled-uncertain"],
+    "summary": "mapping found; Vim may consume the key"
+  }
+}

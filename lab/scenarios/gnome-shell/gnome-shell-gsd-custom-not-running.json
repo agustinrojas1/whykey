@@ -1,0 +1,33 @@
+{
+  "id": "gnome-shell-gsd-custom-not-running",
+  "description": "the same gnome-settings-daemon custom shortcut is configured in GSettings but gsd-media-keys is not running, so nothing grabs Super+t: the command does not fire and the key reaches the probe",
+  "tier": "observed",
+  "environment": "gnome_shell",
+  "session_setup": [
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings \"['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/']\"",
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ name 'Lab fire'",
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ command 'touch /tmp/fired'",
+    "gsettings set org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/ binding '<Super>t'"
+  ],
+  "probe": "wayland",
+  "actions": [
+    {
+      "rdkbd": [
+        "super+t"
+      ]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": [
+      "super+t"
+    ],
+    "layer": "GNOME",
+    "detail": "Lab fire"
+  }
+}
