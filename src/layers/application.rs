@@ -1466,6 +1466,17 @@ mod tests {
         // The chord is one no config maps, so the verdict is the no-mapping one.
         let key: KeyCombo = "ctrl+alt+shift+f11".parse().unwrap();
         let mut child = Command::new("sleep").arg0("vim").arg("30").spawn().unwrap();
+        // spawn() returns after fork; until the child execs, /proc still
+        // shows the test binary's argv, so wait for the exec.
+        let cmdline = format!("/proc/{}/cmdline", child.id());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !std::fs::read(&cmdline).is_ok_and(|argv| argv.starts_with(b"vim\0")) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never exec'd"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let result = inspect_for_pid(&key, child.id());
         let _ = child.kill();
         let _ = child.wait();
