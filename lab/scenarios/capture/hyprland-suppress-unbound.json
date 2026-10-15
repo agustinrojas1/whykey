@@ -1,0 +1,36 @@
+{
+  "id": "hyprland-suppress-unbound",
+  "description": "listen --suppress on the VM kernel keyboard with an unbound Super+X: the hook's catch-all holds the key (no bind runs, the probe never gets it, the compositor saw it), so whykey must report it as consumed by the held capture rather than passed on",
+  "tier": "observed",
+  "environment": "hyprland",
+  "files": {
+    "/root/.config/hypr/hyprland.lua": [
+      "hl.bind(\"SUPER + T\", hl.dsp.exec_cmd(\"pgrep -f '[/]w/whykey listen' >/dev/null && echo during >> /tmp/fired || echo after >> /tmp/fired\"), { description = \"Lab fire\" })",
+      "hl.on(\"input.keyboard.key\", function(kc, ts, state) hl.dispatch(hl.dsp.exec_cmd(\"touch /tmp/reached\")) end)"
+    ]
+  },
+  "probe": "wayland",
+  "actions": [
+    {"sh": "rm -f /tmp/fired /tmp/reached; true"},
+    {"start_whykey": true},
+    {"sh": "rm -f /tmp/reached; true"},
+    {"qkbd": ["super+x"]},
+    {"wait_whykey": true}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": "probe",
+    "reached": {"file": "/tmp/reached"},
+    "restored": {"sh": "hyprctl submap | grep -qx default"}
+  },
+  "whykey": {
+    "args": ["listen", "--suppress", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Hyprland",
+    "suppress": true,
+    "combo": {"key": "X", "modifiers": 64},
+    "stderr": "temporary suppression",
+    "tty": true
+  }
+}

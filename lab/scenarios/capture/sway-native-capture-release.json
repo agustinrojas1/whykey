@@ -1,0 +1,19 @@
+{
+  "id": "sway-native-capture-release",
+  "description": "listen (Sway native capture) of a bindsym --release Mod4+u: the command runs on release and Sway forwards the press, so the probe receives the key",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {"/root/.config/sway/config": ["bindsym --release Mod4+u exec touch /tmp/fired"]},
+  "probe": "wayland",
+  "actions": [{"start_whykey": true}, {"vkbd": ["super+u"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["listen", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Sway",
+    "combo": {"key": "U", "modifiers": 64},
+    "binding": "touch /tmp/fired",
+    "tty": true
+  }
+}

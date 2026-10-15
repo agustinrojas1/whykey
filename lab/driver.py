@@ -270,6 +270,12 @@ class Lab:
         if "start_whykey" in action:
             self.start_whykey_background()
             return
+        if "wait_whykey" in action:
+            # The background whykey ends by its own --count/--timeout (or a
+            # cancel key); keys sent after this one go to the restored session.
+            self.wait_whykey_exit(float(action.get("timeout", 20)))
+            self.steps.append("whykey exited")
+            return
         if "wtype" in action:
             self.run(["wtype", *action["wtype"]])
         elif "vkbd" in action:
@@ -343,9 +349,23 @@ class Lab:
         elif isinstance(reached_spec, dict):
             reached, evidence = self.check_fired(reached_spec)
             truth["reached"], truth["reached_evidence"] = reached, f"reached: {evidence}"
+        # Evaluated once whykey has exited (a `wait_whykey` action): the state
+        # the capture must leave behind, such as a restored compositor submap.
+        restored_spec = truth_spec.get("restored")
+        if isinstance(restored_spec, dict):
+            restored, evidence = self.check_fired(restored_spec)
+            truth["restored"], truth["restored_evidence"] = restored, f"restored: {evidence}"
         return truth
 
     # -- whykey ----------------------------------------------------------
+    def wait_whykey_exit(self, timeout: float) -> None:
+        """Wait for the background whykey to exit on its own; its output is
+        collected later by run_whykey, so this does not judge its exit code."""
+        try:
+            self.whykey_process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise LabError(f"whykey still running {timeout:g}s after its capture should have ended") from error
+
     def start_whykey_background(self) -> None:
         """`run: background`: start whykey (e.g. `listen --window`) before the
         actions, or at a {"start_whykey": true} action, and wait until it is

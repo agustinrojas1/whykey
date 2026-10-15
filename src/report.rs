@@ -554,6 +554,18 @@ fn render_inner(
     output
 }
 
+const WITHHELD_TEXT: &str = "No binding matched. --suppress held the key while it was captured, so the application did not receive it.";
+
+/// The compositor layer is the `--suppress` hook's own catch-all: it handled
+/// a key that no binding matched (see `listen::output::confirm_suppressed_withheld`).
+fn suppressed_withheld(layers: &[LayerResult]) -> bool {
+    layers.iter().any(|layer| {
+        layer.id == LayerId::Compositor
+            && layer.status() == LayerStatus::Handled
+            && layer.binding.is_none()
+    })
+}
+
 fn diagnosis_text(
     key: &KeyCombo,
     layers: &[LayerResult],
@@ -571,6 +583,9 @@ fn diagnosis_text(
             observation.disposition,
             crate::listen::CaptureDisposition::Suppressed
         ) {
+            if suppressed_withheld(layers) {
+                return WITHHELD_TEXT.into();
+            }
             if let Some(layer) = layers.iter().find(|layer| layer.id == LayerId::Compositor) {
                 if layer
                     .binding
@@ -705,6 +720,9 @@ fn diagnosis_text(
         Conclusion::EndpointUnbound { layer, .. } => format!(
             "{layer} reads the key last and has no binding for it; nothing downstream receives it."
         ),
+        Conclusion::SuppressedHandled {
+            handled: SuppressedHandledOutcome::Withheld { .. },
+        } => WITHHELD_TEXT.into(),
         Conclusion::SuppressedHandled { .. } => {
             "A matching compositor binding was captured for inspection; its runtime effect is configuration-only.".into()
         }
@@ -766,6 +784,9 @@ fn effect_text(
     if let Some(observation) = observation {
         match observation.disposition {
             crate::listen::CaptureDisposition::Suppressed => {
+                if suppressed_withheld(layers) {
+                    return "Whykey held the key while --suppress captured it: no binding ran, and the application did not receive the key.".into();
+                }
                 return "Whykey temporarily intercepted the compositor event to inspect its configuration. That does not prove the configured action ran.".into();
             }
             crate::listen::CaptureDisposition::PassedThrough => {
@@ -1738,6 +1759,11 @@ pub enum ApplicationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuppressedHandledOutcome {
+    /// No binding matched: the capture hook held the key from the
+    /// application while it was captured.
+    Withheld {
+        layer: &'static str,
+    },
     IndeterminatePropagation {
         action: Option<String>,
     },
@@ -1797,7 +1823,11 @@ pub fn evaluate_conclusion(
                             .or_else(|| binding.action.clone())
                     });
                     let opaque = evidence.is_some_and(BindingEvidence::is_opaque);
-                    let handled = if layer.propagation() == Propagation::Indeterminate {
+                    let handled = if evidence.is_none() {
+                        // The hook held a key no binding matched (see
+                        // `listen::output::confirm_suppressed_withheld`).
+                        SuppressedHandledOutcome::Withheld { layer: layer.layer }
+                    } else if layer.propagation() == Propagation::Indeterminate {
                         SuppressedHandledOutcome::IndeterminatePropagation { action }
                     } else if universal_match {
                         SuppressedHandledOutcome::Universal {
@@ -2649,6 +2679,49 @@ mod tests {
         assert!(!output.contains("executed"));
         assert!(!output.contains("would handle and consume"));
         assert!(!output.contains("earlier forwarding is confirmed"));
+    }
+
+    #[test]
+    fn suppressed_key_without_a_binding_is_reported_as_withheld() {
+        // Before, the catch-all hold was reported as "no binding; the key
+        // can continue", which is false: the key never reached the client.
+        let key: KeyCombo = "super+x".parse().unwrap();
+        let observed = ObservedKey {
+            combo: key.clone(),
+            raw: Vec::new(),
+            raw_display: Some("Hyprland XKB keycode=45 evdev=37 (press)".into()),
+            modifier_state: None,
+            associated_text: None,
+            physical_keycode: Some(crate::xkb::EvdevKeycode::from(37)),
+            encoding: "Hyprland XKB key event".into(),
+            protocol_flags: None,
+            event_type: crate::listen::KeyEventType::Press,
+            alternate_keys: None,
+            alternate_key: None,
+            source: crate::listen::CaptureSource::CompositorNative {
+                backend: "Hyprland".into(),
+            },
+            disposition: crate::listen::CaptureDisposition::Suppressed,
+        };
+        let layers = [LayerResult::new(
+            "Hyprland",
+            LayerId::Compositor,
+            Outcome::Consumed,
+            "no binding matched; the --suppress capture held the key from the application",
+            vec![],
+        )];
+
+        // The renderer wraps lines; compare the words, not the wrapping.
+        let output = render_observed(&observed, &layers, false)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(output.contains("No binding matched. --suppress held the key"));
+        assert!(output.contains("the application did not receive"));
+        assert!(!output.contains("temporarily intercepted"));
+        assert!(!output.contains("can continue"));
+        assert!(!output.contains("configured to consume"));
+        assert!(!output.contains("matching binding"));
     }
 
     #[test]

@@ -724,6 +724,26 @@ pub struct HyprlandKeyEvent {
     pub modifier_mask: u32,
 }
 
+/// Held modifiers after `event`. The Lua hook reads the key state before the
+/// event, so the release of a modifier still carries that modifier in its
+/// mask; the chord-release wait would then never see the modifiers let go
+/// (D-183). The event's own transition is applied here. Lock keys are left
+/// to the keyboard state refresh, and the mask of other keys is already the
+/// held state.
+fn held_modifiers_after(event: &HyprlandKeyEvent) -> u32 {
+    let mask = event.modifier_mask;
+    let Some(evdev) = event.xkb_keycode.to_evdev() else {
+        return mask;
+    };
+    match crate::listen::evdev_modifier(evdev.get()) {
+        Some(bit @ (1 | 4 | 8 | 64)) => match event.event_type {
+            KeyEventType::Press | KeyEventType::Repeat => mask | bit,
+            KeyEventType::Release => mask & !bit,
+        },
+        _ => mask,
+    }
+}
+
 /// Which keyboard's keymap the next key events may come from (D-089).
 /// Hyprland v0.56.2's Lua `input.keyboard.key` hook passes only the
 /// keycode, its time and state (src/config/lua/LuaEventHandler.cpp), and no
@@ -1193,7 +1213,7 @@ impl HyprlandCaptureSession {
                     // evdev counterpart and behave as key zero downstream.
                     let evdev_code = event.xkb_keycode.to_evdev().map_or(0, |code| code.get());
 
-                    self.current_modifier_mask = event.modifier_mask;
+                    self.current_modifier_mask = held_modifiers_after(&event);
                     match event.event_type {
                         KeyEventType::Press => {
                             self.held_keys.insert(event.xkb_keycode);
@@ -1313,7 +1333,7 @@ impl HyprlandCaptureSession {
                     self.keyboard_state_dirty = true;
                 }
                 SocketMessage::Key(event) if event.token == self.guard.token() => {
-                    self.current_modifier_mask = event.modifier_mask;
+                    self.current_modifier_mask = held_modifiers_after(&event);
                     match event.event_type {
                         KeyEventType::Press => {
                             self.held_keys.insert(event.xkb_keycode);
@@ -2303,6 +2323,67 @@ print("lease-ok")
             .wait_for_chord_release(crate::xkb::XkbKeycode::from(10), Duration::from_millis(100));
         assert!(res.is_err(), "socket disconnect must return error");
         assert!(res.unwrap_err().contains("disconnected"));
+    }
+
+    #[test]
+    fn chord_release_is_confirmed_after_the_modifier_is_released() {
+        // Super+T as qkbd sends it: Super down, T down, T up, Super up. The
+        // hook's mask on the Super release still includes Super (it reads the
+        // state before the event), so the wait timed out with no report before.
+        let (s1, _s2) = std::os::unix::net::UnixStream::pair().unwrap();
+        s1.set_nonblocking(true).unwrap();
+        let guard = HyprlandHookGuard::new_uninstalled("tok".into(), "default".into());
+        let mut session = HyprlandCaptureSession {
+            stream: s1,
+            guard,
+            policy: HyprlandCapturePolicy::Suppress,
+            saved_submap: "default".into(),
+            keymap: None,
+            group: 0,
+            locked_caps: false,
+            locked_num: false,
+            keyboard_state_dirty: false,
+            layout_uncertain: false,
+            sources: KeyboardSources::default(),
+            buffer: "custom>>whykey-probe,tok,133,1,0\ncustom>>whykey-probe,tok,28,1,64\ncustom>>whykey-probe,tok,28,0,64\ncustom>>whykey-probe,tok,133,0,64\n".into(),
+            held_keys: HashSet::new(),
+            current_modifier_mask: 0,
+            state: CaptureState::Closed,
+        };
+        assert_eq!(
+            session
+                .wait_for_chord_release(crate::xkb::XkbKeycode::from(28), Duration::ZERO)
+                .unwrap(),
+            ChordReleaseStatus::Released
+        );
+        assert_eq!(session.current_modifier_mask, 0);
+    }
+
+    #[test]
+    fn held_modifiers_follow_the_event_transition() {
+        let event = |xkb: u32, event_type, modifier_mask| HyprlandKeyEvent {
+            token: "tok".into(),
+            xkb_keycode: crate::xkb::XkbKeycode::from(xkb),
+            event_type,
+            modifier_mask,
+        };
+        // Release of Super (evdev 125 = xkb 133) with the stale mask.
+        assert_eq!(
+            held_modifiers_after(&event(133, KeyEventType::Release, 64)),
+            0
+        );
+        // Press of Ctrl (evdev 29 = xkb 37) with a mask from before it.
+        assert_eq!(
+            held_modifiers_after(&event(37, KeyEventType::Press, 64)),
+            68
+        );
+        // Ordinary keys keep the reported mask.
+        assert_eq!(
+            held_modifiers_after(&event(28, KeyEventType::Release, 64)),
+            64
+        );
+        // CapsLock toggles through the keyboard state, not the held mask.
+        assert_eq!(held_modifiers_after(&event(66, KeyEventType::Press, 0)), 0);
     }
 
     #[test]

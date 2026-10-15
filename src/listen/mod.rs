@@ -1608,6 +1608,72 @@ xkb_symbols "pc" {
     }
 
     #[test]
+    fn waiting_message_names_the_keys_sway_native_capture_cannot_see() {
+        use super::output::{exit_keys, waiting_mode};
+        let sway = crate::capture::NativeBackendId::Sway.display();
+        let hyprland = crate::capture::NativeBackendId::Hyprland.display();
+        let mode = waiting_mode(sway, CapturePolicy::PassThrough, false);
+        assert!(mode.contains("Sway reports only keys that run a Sway binding"));
+        assert!(mode.contains("--window"));
+        assert_eq!(exit_keys(sway), "Ctrl+C");
+        // Hyprland's capture sees every key, so Esc keeps exiting there.
+        assert!(!waiting_mode(hyprland, CapturePolicy::PassThrough, false).contains("Sway"));
+        assert_eq!(exit_keys(hyprland), "Esc or Ctrl+C");
+        assert!(
+            waiting_mode(hyprland, CapturePolicy::Suppress, false)
+                .contains("held from applications")
+        );
+    }
+
+    #[test]
+    fn suppressed_hook_holds_a_key_that_no_binding_matched() {
+        // The Hyprland catch-all holds every key while armed, so a key with no
+        // binding is consumed by the hook, not passed on, and the layers below
+        // the compositor never see it.
+        let mut results = vec![
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Pass,
+                "no active binding found",
+                vec![],
+            ),
+            LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::Pass,
+                "not applicable to the current terminal",
+                vec![],
+            ),
+        ];
+        super::output::confirm_suppressed_withheld(&mut results);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, Outcome::Consumed);
+        assert!(results[0].summary.contains("held the key"));
+
+        // A bound key is already consumed by its binding and is left alone.
+        let mut bound = vec![
+            LayerResult::new(
+                "Hyprland",
+                LayerId::Compositor,
+                Outcome::Consumed,
+                "active binding found",
+                vec![],
+            ),
+            LayerResult::new(
+                "Ghostty",
+                LayerId::Terminal,
+                Outcome::Pass,
+                "not applicable to the current terminal",
+                vec![],
+            ),
+        ];
+        super::output::confirm_suppressed_withheld(&mut bound);
+        assert_eq!(bound.len(), 2);
+        assert_eq!(bound[0].summary, "active binding found");
+    }
+
+    #[test]
     fn suppress_is_refused_for_backends_that_cannot_suppress() {
         let suppress = CapturePolicy::Suppress;
         assert!(

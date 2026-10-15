@@ -1,0 +1,19 @@
+{
+  "id": "sway-native-capture-bound",
+  "description": "listen (Sway native capture, pass-through) reports a bindsym Mod4+t that fires; Sway consumes the key, so the probe never gets it",
+  "tier": "observed",
+  "environment": "sway",
+  "files": {"/root/.config/sway/config": ["bindsym Mod4+t exec touch /tmp/fired"]},
+  "probe": "wayland",
+  "actions": [{"start_whykey": true}, {"vkbd": ["super+t"]}],
+  "ground_truth": {"fired": {"file": "/tmp/fired"}, "delivered": "probe"},
+  "whykey": {
+    "args": ["listen", "--count", "1", "--timeout", "15"],
+    "run": "background",
+    "ready": {"stderr": "Waiting for input"},
+    "layer": "Sway",
+    "combo": {"key": "T", "modifiers": 64},
+    "binding": "touch /tmp/fired",
+    "tty": true
+  }
+}

@@ -60,8 +60,21 @@ Scenario format: one JSON object per file under lab/scenarios/<group>/<id>.json
                    "run": "direct" | "pty" | "background", "command": "whykey",
                    "accept": [...], "summary": "text", "detail": "text",
                    "binding": "text", "observation": bool, "combo": {...},
-                   "stderr": "text", "confidence": "label"}
+                   "stderr": "text", "confidence": "label", "silent": bool,
+                   "suppress": bool}
                   "pty" types the command into the scenario's shell.
+                  "silent": the capture backend cannot see this key (Sway IPC
+                  reports only keys that ran a binding), so the pass condition
+                  is no report at all: whykey exits non-zero with the "stderr"
+                  text (its capture timed out). Needs an unfired ground truth
+                  that still reached the session, so the key is not lost.
+                  "suppress": the key was held by `listen --suppress`: the
+                  bind must not have run (ground truth fired false) and the
+                  key must not have reached the client; whykey must name the
+                  binding that consumes it ("consumed").
+                  ground_truth "restored" (optional CHECK, evaluated after a
+                  `wait_whykey` action) must hold: e.g. the compositor submap
+                  is back to its original state.
                   "background" starts whykey (`listen`) before the actions or
                   at a start_whykey action, waits for "ready" ("window": its
                   probe window has focus; {"stderr": regex}), and collects its
@@ -200,6 +213,18 @@ def expected_verdicts(truth: dict) -> tuple[str, set[str]]:
     raise PositiveControlFailed("the key neither fired nor was delivered past the layer")
 
 
+def suppressed_verdicts(truth: dict) -> tuple[str, set[str]]:
+    """`whykey.suppress`: the capture held the key (`listen --suppress`). The
+    bind must not have run and the key must not have reached the client; the
+    verdict is then "consumed", the binding whykey would have run. A bind that
+    ran anyway is a mismatch, never a tolerated uncertainty."""
+    if truth["fired"]:
+        return "bind ran despite suppression", set()
+    if truth["delivered"] is False and truth.get("reached"):
+        return "held by suppression", {"consumed"}
+    return expected_verdicts(truth)
+
+
 def report_path(report: dict | None) -> list[dict]:
     """The layer path of a report; for a key sequence (`steps`), the last
     key's path, which carries the sequence's verdict."""
@@ -304,8 +329,46 @@ def observation_verdict(report: dict | None) -> tuple[str, dict | None]:
 
 def truth_evidence(truth: dict) -> str:
     return "; ".join(
-        truth[key] for key in ("fired_evidence", "delivered_evidence", "reached_evidence") if truth.get(key)
+        truth[key] for key in ("fired_evidence", "delivered_evidence", "reached_evidence", "restored_evidence")
+        if truth.get(key)
     )
+
+
+def evaluate_silent(record: dict, scenario: dict, truth: dict, whykey: dict, result: dict) -> dict:
+    """`whykey.silent`: the backend cannot see this key, so whykey must give no
+    report and stop with the scenario's `stderr` text (its capture timed out).
+    The key must have reached the session (positive control) and nothing may
+    have fired; anything else is a lab error, never a pass."""
+    reached = bool(truth["delivered"] or truth.get("reached"))
+    if truth["fired"] or not reached:
+        record.update(ground_truth={"label": "no positive control", **truth}, expected=None,
+                      whykey_verdict="lab-error")
+        record["pass"] = False
+        record["error"] = (f"silent scenario needs an unfired key that reached the session "
+                           f"({truth_evidence(truth)})")
+        record["logs"] = result.get("logs")
+        return record
+    verdict = "silent" if whykey["report"] is None else "reported"
+    stderr = scenario["whykey"].get("stderr")
+    passed = (verdict == "silent" and (stderr is None or stderr in whykey["stderr"])
+              and truth.get("restored", True))
+    record.update(
+        ground_truth={"label": "not fired, reached", **truth},
+        expected=["silent"],
+        expected_summary=f"stderr containing {stderr!r}" if stderr else "",
+        whykey_verdict=verdict,
+        whykey_layer=None,
+    )
+    record["pass"] = passed
+    record["tolerated"] = False
+    if not passed:
+        record["whykey_stderr"] = whykey["stderr"][-2000:] or None
+        if whykey.get("stdout"):
+            record["whykey_stdout"] = whykey["stdout"][-2000:]
+        record["logs"] = result.get("logs")
+    if result.get("container"):
+        record["container"] = result["container"]
+    return record
 
 
 def evaluate(path: Path, scenario: dict, result: dict) -> dict:
@@ -328,6 +391,8 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
         return record
     truth = result["ground_truth"]
     whykey = result["whykey"]
+    if scenario["whykey"].get("silent"):
+        return evaluate_silent(record, scenario, truth, whykey, result)
     summary = scenario["whykey"].get("summary")
     detail = scenario["whykey"].get("detail")
     combo = scenario["whykey"].get("combo")
@@ -344,6 +409,8 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
             accepted = {label}
         else:
             label, accepted = expected_verdicts(truth)
+            if scenario["whykey"].get("suppress"):
+                label, accepted = suppressed_verdicts(truth)
     except PositiveControlFailed as failure:
         record.update(ground_truth={"label": "no positive control", **truth}, expected=None, whykey_verdict="lab-error")
         record["pass"] = False
@@ -379,9 +446,10 @@ def evaluate(path: Path, scenario: dict, result: dict) -> dict:
     if confidence is not None:
         summary = f"{summary}; " if summary else ""
         summary += f"confidence {confidence!r} (reported {reported_confidence!r})"
+    restored_ok = truth.get("restored", True)
     passed = (
         (verdict in accepted or verdict in tolerated)
-        and summary_ok and combo_ok and stderr_ok and confidence_ok
+        and summary_ok and combo_ok and stderr_ok and confidence_ok and restored_ok
     )
     record.update(
         ground_truth={"label": label, **truth},
