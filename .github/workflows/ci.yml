@@ -28,7 +28,7 @@ jobs:
         run: test -s DEFECT_REGISTER.md && test -s ADAPTER_INVENTORY.md && test -s DEPENDENCY_PROVENANCE.md
       - name: Check native recipes carry release documentation
         run: |
-          for script in debian/rules tools/arch_package_smoke.sh tools/assemble_source_archive.sh tools/check_package_versions.sh tools/prepare_aur.sh; do
+          for script in debian/rules tools/arch_package_smoke.sh tools/assemble_source_archive.sh tools/check_package_versions.sh tools/prepare_aur.sh tools/prepare_obs.sh; do
             test -x "$script"
           done
           for recipe in debian/rules packaging/whykey.spec packaging/PKGBUILD packaging/PKGBUILD-bin packaging/whykey.nix; do

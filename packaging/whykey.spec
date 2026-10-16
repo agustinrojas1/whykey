@@ -10,8 +10,16 @@ License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3
 URL:            https://github.com/agustinrojas1/whykey
 Source0:        %{url}/releases/download/v%{version}/%{name}-%{version}-source.tar.gz
 BuildRequires:  cargo
+# Fedora builds with its Rust macros; other RPM distributions (openSUSE) call
+# Cargo directly on the vendored sources, as debian/rules does.
+%if 0%{?fedora}
 BuildRequires:  rust-packaging
 BuildRequires:  util-linux-script
+%else
+BuildRequires:  rust >= 1.85
+BuildRequires:  util-linux
+BuildRequires:  python3
+%endif
 # The first-party editor extensions are Python 3 scripts; the main binary is not.
 Recommends:     python3
 
@@ -23,17 +31,30 @@ optional whykey-nvim, whykey-vscode, and whykey-emacs extensions need python3.
 
 %prep
 %autosetup -n %{name}-%{version}
+%if 0%{?fedora}
 %cargo_prep -v vendor
+%endif
 
 %build
+%if 0%{?fedora}
 %cargo_build
 %cargo_vendor_manifest
+%else
+cargo build --release --locked --offline
+%endif
 
 %check
+%if 0%{?fedora}
 %cargo_test
+%else
+cargo test --all-targets --locked --offline
+%endif
 
 %install
-install -Dpm0755 target/release/whykey %{buildroot}%{_bindir}/whykey
+# Newer Fedora macros build with the rpm Cargo profile.
+binary=target/release/whykey
+test -x target/rpm/whykey && binary=target/rpm/whykey
+install -Dpm0755 "$binary" %{buildroot}%{_bindir}/whykey
 install -Dpm0755 extensions/whykey-nvim %{buildroot}%{_bindir}/whykey-nvim
 install -Dpm0755 extensions/whykey-vscode %{buildroot}%{_bindir}/whykey-vscode
 install -Dpm0644 extensions/whykey-vscode-defaults.json %{buildroot}%{_datadir}/whykey/whykey-vscode-defaults.json
@@ -50,6 +71,9 @@ install -Dpm0644 DEFECT_REGISTER.md %{buildroot}%{_docdir}/%{name}/DEFECT_REGIST
 install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matrix.json
 
 %files
+%dir %{_datadir}/whykey
+%dir %{_docdir}/%{name}
+%dir %{_licensedir}/%{name}
 %{_bindir}/whykey
 %{_bindir}/whykey-nvim
 %{_bindir}/whykey-vscode
@@ -57,7 +81,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %{_bindir}/whykey-emacs
 %{_mandir}/man1/whykey.1*
 %license %{_licensedir}/%{name}/LICENSE
+%if 0%{?fedora}
 %license cargo-vendor.txt
+%endif
 %doc %{_docdir}/%{name}/README.md
 %doc %{_docdir}/%{name}/SPEC.md
 %doc %{_docdir}/%{name}/CHANGELOG.md

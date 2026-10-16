@@ -88,6 +88,18 @@ mise use github:agustinrojas1/whykey@2
 brew install agustinrojas1/tap/whykey
 ```
 
+**Fedora, openSUSE, Debian, Ubuntu** (openSUSE Build Service, x86_64 and aarch64)
+
+Packages for Fedora 43, 44 and Rawhide, openSUSE Tumbleweed and Leap 16.0,
+Debian 13, and Ubuntu 26.04 and 26.10. The
+[download page](https://software.opensuse.org/download.html?project=home%3Aagustinrojas&package=whykey)
+has the steps for each. On Fedora:
+
+```sh
+sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:agustinrojas/Fedora_$(rpm -E %fedora)/home:agustinrojas.repo
+sudo dnf install whykey
+```
+
 **Cargo** from [crates.io](https://crates.io/crates/whykey) (Rust 1.85 or newer)
 
 ```sh
