@@ -89,10 +89,10 @@ mise use github:agustinrojas1/whykey@2
 brew install agustinrojas1/tap/whykey
 ```
 
-**Cargo** (Rust 1.85 or newer)
+**Cargo** from [crates.io](https://crates.io/crates/whykey) (Rust 1.85 or newer)
 
 ```sh
-cargo install --git https://github.com/agustinrojas1/whykey --locked
+cargo install whykey --locked
 ```
 
 **Release binaries.** Each [release](https://github.com/agustinrojas1/whykey/releases/latest)
