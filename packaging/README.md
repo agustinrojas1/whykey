@@ -12,10 +12,20 @@ sandbox. It needs `python3` to run the extension tests.
 
 ## Arch Linux
 
-Copy `PKGBUILD` next to the source archive and run `makepkg -si` as a regular
-user. The upstream recipe uses `SKIP` because a source archive cannot contain
-its own checksum. Before publishing it to the AUR, replace `SKIP` with the
-checksum from the release.
+There are two recipes. `PKGBUILD` builds `whykey` from the offline source
+archive; `PKGBUILD-bin` packages the prebuilt release binaries as `whykey-bin`
+(the glibc 2.28 build on x86_64, the static musl build on aarch64). Both
+install the same files.
+
+To build locally, copy `PKGBUILD` next to the source archive and run
+`makepkg -si` as a regular user. The upstream recipes use `SKIP` because the
+release archives contain `packaging/` and so cannot contain their own
+checksums.
+
+`tools/prepare_aur.sh [VERSION]` writes `target/aur/whykey` and
+`target/aur/whykey-bin`: each holds a `PKGBUILD` with the release checksums
+filled in and its `.SRCINFO`, ready to commit to the matching AUR Git
+repository.
 
 `bash tools/arch_package_smoke.sh` builds the recipe, extracts the package, and
 runs the installed-binary smoke test. It exits with status 77 outside an Arch
@@ -43,6 +53,12 @@ needs Cargo, Rust 1.85 or newer, debhelper 13, and `python3` for the tests
 the vendor directory needed for an offline build. The upstream `CHANGELOG.md`
 is installed as `/usr/share/doc/whykey/CHANGELOG.md.gz`, next to the Debian
 `changelog.gz`.
+
+## Homebrew
+
+The [agustinrojas1/homebrew-tap](https://github.com/agustinrojas1/homebrew-tap)
+formula installs the static musl release binaries and the extensions on Linux.
+Update its URLs and checksums after each release.
 
 ## Nix and NixOS
 

@@ -83,6 +83,12 @@ whykey runs on Linux (x86_64 and aarch64). Pick one:
 mise use github:agustinrojas1/whykey@2
 ```
 
+**Homebrew** (prebuilt static binary, Linux only)
+
+```sh
+brew install agustinrojas1/tap/whykey
+```
+
 **Cargo** (Rust 1.85 or newer)
 
 ```sh
