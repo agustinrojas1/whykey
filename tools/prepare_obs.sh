@@ -7,9 +7,8 @@ set -euo pipefail
 #
 #   tools/prepare_obs.sh [VERSION] [OUTDIR]
 #
-# VERSION defaults to the Cargo.toml version, OUTDIR to target/obs. Copy the
-# files into an `osc checkout` of the package, then `osc addremove` and
-# `osc commit`.
+# VERSION defaults to the Cargo.toml version, OUTDIR to target/obs. The files
+# are also bundled as whykey-obs.tar, which the release workflow publishes.
 #
 # The Debian tarball is packed with tar rather than by dpkg-source, which
 # drops .git* files; vendored crates list such files in .cargo-checksum.json
@@ -66,5 +65,10 @@ awk -v sha1="$sha1" -v sha256="$sha256" -v md5="$md5" -v line="$size $debian_tar
   /^(Checksums-Sha1|Checksums-Sha256|Files):$/ { section = $0 }
   { print }
 ' "$work/whykey_${version}.dsc" >"$out_dir/whykey_${version}.dsc"
+
+# The release workflow attaches this bundle to the GitHub release; the OBS
+# package's _service downloads it from the latest release and extracts it.
+tar -C "$out_dir" -cf "$out_dir/whykey-obs.tar" whykey.spec "$archive" \
+  "whykey_${version}.dsc" "$debian_tar"
 
 echo "wrote $out_dir"

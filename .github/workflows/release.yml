@@ -112,3 +112,76 @@ jobs:
           files: |
             whykey-*.tar.gz
             whykey-*.tar.gz.sha256
+
+  # Publishes the tagged source to crates.io through Trusted Publishing: the
+  # crates.io crate settings trust this repository's release.yml, so the job
+  # gets a short-lived token from OIDC instead of a stored API token.
+  crates-io:
+    needs: linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish to crates.io
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  # Points the agustinrojas1/homebrew-tap formula at the new musl archives.
+  # HOMEBREW_TAP_DEPLOY_KEY is a write deploy key of that repository only.
+  homebrew:
+    needs: linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: agustinrojas1/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: homebrew-tap
+      - name: Update and push the formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          tools/update_homebrew_formula.sh "$version" homebrew-tap/Formula/whykey.rb
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "whykey ${version}"
+          git push
+
+  # Attaches whykey-obs.tar to the release and runs the service of the
+  # home:agustinrojas/whykey OBS package, which downloads that bundle from the
+  # latest release and rebuilds for every distribution. OBS_RUNSERVICE_TOKEN
+  # is an OBS token that can only trigger that service.
+  obs:
+    needs: linux
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dpkg-source
+        run: sudo apt-get install -y --no-install-recommends dpkg-dev
+      - name: Build the OBS bundle
+        run: tools/prepare_obs.sh "${GITHUB_REF_NAME#v}" obs
+      - name: Attach the bundle to the release
+        run: gh release upload "$GITHUB_REF_NAME" obs/whykey-obs.tar --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Trigger the OBS service
+        run: >-
+          curl -fsS -X POST -H "Authorization: Token $OBS_TOKEN"
+          "https://api.opensuse.org/trigger/runservice?project=home:agustinrojas&package=whykey"
+        env:
+          OBS_TOKEN: ${{ secrets.OBS_RUNSERVICE_TOKEN }}
