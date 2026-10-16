@@ -22,6 +22,8 @@ jobs:
         run: tools/check_adapter_gate.sh
       - name: Check dependency provenance
         run: python3 tools/generate_dependency_provenance.py --check
+      - name: Check crates.io README
+        run: python3 tools/generate_crates_readme.py --check
       - name: Check defect register is packaged documentation
         run: test -s DEFECT_REGISTER.md && test -s ADAPTER_INVENTORY.md && test -s DEPENDENCY_PROVENANCE.md
       - name: Check native recipes carry release documentation
