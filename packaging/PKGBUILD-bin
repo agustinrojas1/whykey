@@ -2,7 +2,7 @@
 
 pkgname=whykey-bin
 _pkgname=whykey
-pkgver=2.4.0
+pkgver=2.4.1
 pkgrel=1
 pkgdesc='Explain where a Linux key combination is handled (prebuilt binary)'
 # x86_64 uses the glibc 2.28 build; aarch64 uses the fully static musl build.
