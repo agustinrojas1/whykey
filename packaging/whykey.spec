@@ -3,7 +3,7 @@
 %global __requires_exclude ^/usr/bin/python3$
 
 Name:           whykey
-Version:        2.4.0
+Version:        2.4.1
 Release:        1%{?dist}
 Summary:        Explain where a Linux key combination is handled
 License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3.0
@@ -94,6 +94,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %doc %{_docdir}/%{name}/support-matrix.json
 
 %changelog
+* Fri Oct 16 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.4.1-1
+- Packaging: crates.io, Homebrew and OBS; the spec also builds on openSUSE
+
 * Thu Oct 15 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.4.0-1
 - Reports lead with a verdict and show the whole route; whykey super --alone.
 

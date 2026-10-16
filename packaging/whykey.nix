@@ -2,7 +2,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "whykey";
-  version = "2.4.0";
+  version = "2.4.1";
 
   # The checkout without build outputs, so a local `target/` or `result` is
   # never copied into the store.

@@ -1,3 +1,11 @@
+whykey (2.4.1) unstable; urgency=medium
+
+  * Packaging release: published to crates.io, a Homebrew tap and the
+    openSUSE Build Service; no change to whykey's behavior.
+  * Build-depend on bsdutils for the PTY tests.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Fri, 16 Oct 2026 11:00:00 -0300
+
 whykey (2.4.0) unstable; urgency=medium
 
   * Reports lead with a two-line verdict and show every layer of the route

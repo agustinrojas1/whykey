@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.4.1] - 2026-10-16
+
+A packaging release: whykey's behavior and output are unchanged. whykey is
+now on crates.io, a Homebrew tap, and openSUSE Build Service repositories for
+Fedora, openSUSE, Debian, and Ubuntu, and the release workflow publishes to
+all of them.
+
+### Added
+
+- Install with `cargo install whykey`, with
+  `brew install agustinrojas1/tap/whykey`, or from the openSUSE Build Service
+  repositories: Fedora 43, 44 and Rawhide, openSUSE Tumbleweed and Leap 16.0,
+  Debian 13, and Ubuntu 26.04 and 26.10, on x86_64 and aarch64.
+- `packaging/PKGBUILD-bin` packages the release binaries as `whykey-bin`.
+  `tools/prepare_aur.sh` fills the release checksums into both Arch recipes
+  and writes their `.SRCINFO`.
+- The release workflow publishes to crates.io through Trusted Publishing,
+  points the Homebrew formula at the new archives, and refreshes the OBS
+  package.
+
+### Fixes
+
+- The RPM spec builds on openSUSE as well as Fedora, and owns its
+  directories.
+- The Debian recipe build-depends on `bsdutils`, which provides `script` for
+  the PTY tests (`<!nocheck>`).
+- crates.io shows the light key-path diagram. The dark `<source>` of the
+  README's `<picture>` was a broken image there in dark mode.
+- The `unmapped_vim_keeps_the_key_flowing_as_uncertain` test no longer fails
+  where `sleep` is a multi-call binary (Nix coreutils, busybox).
+
 ## [2.4.0] - 2026-10-15
 
 Reports are rewritten to be read at a glance. A report now opens with a

@@ -123,7 +123,7 @@ publishes archives with a `.sha256` checksum:
 
 By default mise hides releases younger than 24 hours
 (`minimum_release_age`). During a release's first day, `@2` can fail; an
-exact version such as `@2.4.0` installs at once.
+exact version such as `@2.4.1` installs at once.
 
 The editor extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) are
 `python3` scripts. Distribution packages install them next to `whykey`; mise
