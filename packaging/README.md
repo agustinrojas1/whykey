@@ -52,9 +52,13 @@ x86_64 and aarch64. Older Debian and Ubuntu releases ship a Rust older than
 
 `tools/prepare_obs.sh [VERSION]` writes the package files to `target/obs`:
 the release source archive, the spec, and a Debian native source package
-(`.dsc` and `.tar.xz`). The spec and `debian/` come from the checkout, the
-code from the release archive. Copy them into an `osc checkout` of the
-package, then run `osc addremove` and `osc commit`.
+(`.dsc` and `.tar.xz`), plus `whykey-obs.tar` bundling all four. The spec and
+`debian/` come from the checkout, the code from the release archive.
+
+The OBS package holds only a `_service` that downloads `whykey-obs.tar` from
+the latest GitHub release and extracts it. The release workflow attaches the
+bundle to each release and triggers that service with `OBS_RUNSERVICE_TOKEN`,
+an OBS token that can only run the service of this package.
 
 ## Debian and Ubuntu
 
@@ -72,7 +76,17 @@ is installed as `/usr/share/doc/whykey/CHANGELOG.md.gz`, next to the Debian
 
 The [agustinrojas1/homebrew-tap](https://github.com/agustinrojas1/homebrew-tap)
 formula installs the static musl release binaries and the extensions on Linux.
-Update its URLs and checksums after each release.
+The release workflow points it at each new release with
+`tools/update_homebrew_formula.sh`, pushing through `HOMEBREW_TAP_DEPLOY_KEY`,
+a write deploy key of the tap repository only.
+
+## crates.io
+
+The release workflow publishes the tagged source with `cargo publish`. It
+authenticates through crates.io Trusted Publishing: the crate's settings on
+crates.io trust `agustinrojas1/whykey` and `release.yml`, and the job trades
+its GitHub OIDC token for a short-lived crates.io token. No API token is
+stored in the repository.
 
 ## Nix and NixOS
 
