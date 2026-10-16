@@ -1459,13 +1459,41 @@ mod tests {
         assert!(!is_jetbrains_name("code"));
     }
 
+    /// Not a real test: `unmapped_vim_keeps_the_key_flowing_as_uncertain`
+    /// re-runs this binary under the name `vim` so it has a long-running
+    /// process with that argv[0]. Without the variable it returns at once, so
+    /// `cargo test -- --ignored` stays quick.
+    #[test]
+    #[ignore = "helper process for unmapped_vim_keeps_the_key_flowing_as_uncertain"]
+    fn vim_stand_in_sleeps() {
+        if std::env::var_os("WHYKEY_TEST_VIM_STAND_IN").is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+    }
+
     #[test]
     fn unmapped_vim_keeps_the_key_flowing_as_uncertain() {
         use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
         // A process whose argv[0] is `vim` gives the adapter a Vim ancestor.
         // The chord is one no config maps, so the verdict is the no-mapping one.
         let key: KeyCombo = "ctrl+alt+shift+f11".parse().unwrap();
-        let mut child = Command::new("sleep").arg0("vim").arg("30").spawn().unwrap();
+        // Re-exec the test binary as `vim` rather than `sleep`: coreutils built
+        // as a multi-call binary (Nix, busybox) dispatches on argv[0] and
+        // refuses to run as "vim".
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg0("vim")
+            .args([
+                "--ignored",
+                "--exact",
+                "layers::application::tests::vim_stand_in_sleeps",
+            ])
+            .env("WHYKEY_TEST_VIM_STAND_IN", "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
         // spawn() returns after fork; until the child execs, /proc still
         // shows the test binary's argv, so wait for the exec.
         let cmdline = format!("/proc/{}/cmdline", child.id());
