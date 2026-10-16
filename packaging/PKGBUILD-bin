@@ -1,0 +1,47 @@
+# Maintainer: Agustín Rojas <agustinrojas1@users.noreply.github.com>
+
+pkgname=whykey-bin
+_pkgname=whykey
+pkgver=2.4.0
+pkgrel=1
+pkgdesc='Explain where a Linux key combination is handled (prebuilt binary)'
+# x86_64 uses the glibc 2.28 build; aarch64 uses the fully static musl build.
+arch=('x86_64' 'aarch64')
+url='https://github.com/agustinrojas1/whykey'
+license=('MIT')
+depends=()
+optdepends=('python: run the whykey-nvim, whykey-vscode, and whykey-emacs extensions')
+provides=("${_pkgname}=${pkgver}")
+conflicts=("${_pkgname}")
+options=('!strip' '!debug')
+# The release archives contain packaging/, so they cannot contain their own
+# checksums.  tools/prepare_aur.sh fills these in from the release .sha256
+# files before publishing to the AUR.
+source_x86_64=("${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz::${url}/releases/download/v${pkgver}/${_pkgname}-${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("${_pkgname}-${pkgver}-aarch64-unknown-linux-musl.tar.gz::${url}/releases/download/v${pkgver}/${_pkgname}-${pkgver}-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  local target
+  case "${CARCH}" in
+    x86_64) target=x86_64-unknown-linux-gnu ;;
+    aarch64) target=aarch64-unknown-linux-musl ;;
+  esac
+  cd "${srcdir}/${_pkgname}-${pkgver}-${target}"
+  install -Dm755 whykey "${pkgdir}/usr/bin/whykey"
+  install -Dm755 extensions/whykey-nvim "${pkgdir}/usr/bin/whykey-nvim"
+  install -Dm755 extensions/whykey-vscode "${pkgdir}/usr/bin/whykey-vscode"
+  install -Dm644 extensions/whykey-vscode-defaults.json "${pkgdir}/usr/share/whykey/whykey-vscode-defaults.json"
+  install -Dm755 extensions/whykey-emacs "${pkgdir}/usr/bin/whykey-emacs"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 whykey.1 "${pkgdir}/usr/share/man/man1/whykey.1"
+  install -Dm644 README.md "${pkgdir}/usr/share/doc/${_pkgname}/README.md"
+  install -Dm644 SPEC.md "${pkgdir}/usr/share/doc/${_pkgname}/SPEC.md"
+  install -Dm644 CHANGELOG.md "${pkgdir}/usr/share/doc/${_pkgname}/CHANGELOG.md"
+  install -Dm644 SUPPORT_MATRIX.md "${pkgdir}/usr/share/doc/${_pkgname}/SUPPORT_MATRIX.md"
+  install -Dm644 ADAPTER_INVENTORY.md "${pkgdir}/usr/share/doc/${_pkgname}/ADAPTER_INVENTORY.md"
+  install -Dm644 DEPENDENCY_PROVENANCE.md "${pkgdir}/usr/share/doc/${_pkgname}/DEPENDENCY_PROVENANCE.md"
+  install -Dm644 DEFECT_REGISTER.md "${pkgdir}/usr/share/doc/${_pkgname}/DEFECT_REGISTER.md"
+  install -Dm644 support-matrix.json "${pkgdir}/usr/share/doc/${_pkgname}/support-matrix.json"
+}

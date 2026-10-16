@@ -39,6 +39,7 @@ jobs:
         run: |
           python3 tools/generate_support_matrix.py --check
           python3 tools/generate_dependency_provenance.py --check
+          python3 tools/generate_crates_readme.py --check
           tools/check_package_versions.sh
       - name: Install cargo-zigbuild
         run: |
