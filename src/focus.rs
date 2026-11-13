@@ -94,12 +94,14 @@ pub fn shares_terminal_with_whykey(pid: u32) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProcStat {
-    pid: u32,
+pub(crate) struct ProcStat {
+    pub(crate) pid: u32,
+    /// `pgrp`: the process group of this process.
+    pub(crate) group: i64,
     /// `tty_nr`: the controlling terminal's device number, 0 for none.
-    tty: u64,
+    pub(crate) tty: u64,
     /// `tpgid`: foreground process group of the controlling terminal.
-    foreground_group: i64,
+    pub(crate) foreground_group: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -132,7 +134,7 @@ fn foreground_choice(children: &[ProcStat]) -> ForegroundChoice {
     }
 }
 
-fn proc_stat(pid: u32) -> Option<ProcStat> {
+pub(crate) fn proc_stat(pid: u32) -> Option<ProcStat> {
     parse_stat(
         pid,
         &crate::recording::read_to_string(format!("/proc/{pid}/stat")).ok()?,
@@ -141,12 +143,14 @@ fn proc_stat(pid: u32) -> Option<ProcStat> {
 
 /// Fields after the parenthesized command name (which may contain spaces
 /// and parentheses): state ppid pgrp session tty_nr tpgid ...
-fn parse_stat(pid: u32, stat: &str) -> Option<ProcStat> {
+pub(crate) fn parse_stat(pid: u32, stat: &str) -> Option<ProcStat> {
     let mut fields = stat.get(stat.rfind(')')? + 1..)?.split_whitespace();
-    let tty = fields.nth(4)?.parse::<i64>().ok()?;
+    let group = fields.nth(2)?.parse().ok()?;
+    let tty = fields.nth(1)?.parse::<i64>().ok()?;
     let foreground_group = fields.next()?.parse().ok()?;
     Some(ProcStat {
         pid,
+        group,
         tty: u64::try_from(tty).ok()?,
         foreground_group,
     })
@@ -186,6 +190,7 @@ mod tests {
             parse_stat(4242, stat),
             Some(ProcStat {
                 pid: 4242,
+                group: 4242,
                 tty: 0,
                 foreground_group: -1
             })
@@ -196,6 +201,7 @@ mod tests {
             parse_stat(4300, shell),
             Some(ProcStat {
                 pid: 4300,
+                group: 4300,
                 tty: 34817,
                 foreground_group: 4400
             })
@@ -207,6 +213,7 @@ mod tests {
         let me = std::process::id();
         let child = |pid, tty, group| ProcStat {
             pid,
+            group: i64::from(pid),
             tty,
             foreground_group: group,
         };

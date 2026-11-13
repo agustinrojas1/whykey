@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- `inspect --pid` and `--focused` read the termios of the target's terminal
+  for the TTY driver row, not whykey's own. A program in raw mode (vim, less)
+  no longer reads as "IXON consumes Ctrl+S" or "ISIG sends SIGINT" because
+  whykey's shell is cooked. The terminal is read-only (`tcgetattr`), the
+  evidence names the device and the foreground process group, and a terminal
+  that cannot be read answers unknown instead of reusing whykey's own.
 - A tmux pane in copy mode is read from tmux: keys resolve in the `copy-mode`
   or `copy-mode-vi` table (by `mode-keys`) and the evidence names it, instead
   of `q`, `Space` or `Enter` being reported as passing to the application. A

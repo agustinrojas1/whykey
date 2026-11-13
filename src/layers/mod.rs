@@ -28,6 +28,7 @@ pub mod terminal_app;
 pub mod terminal_dispatch;
 pub mod tiling;
 pub mod tmux;
+pub mod tty_target;
 pub mod wayfire;
 pub mod x11;
 pub mod x11_grab;

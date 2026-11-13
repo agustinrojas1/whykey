@@ -22,6 +22,7 @@ Every question whykey asks its environment goes through `src/recording.rs`:
 | metadata and existence | `metadata`, `symlink_metadata`, `PathInputs` | size, type, symlink, or the error |
 | process id, parent id | `process_id`, `parent_process_id` | the number |
 | controlling terminal | `tty_termios`, `can_open("/dev/tty")` | the termios fields |
+| terminal of a selected process | `tty_termios_of` | the termios fields, keyed by device path |
 
 Each answer is encoded to JSON and decoded again before whykey sees it, in a
 recording run as well as in a replay, so the recorded run already sees what a

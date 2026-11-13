@@ -675,7 +675,15 @@ fn inspect_default_chain_inner_without_remapper(
             let terminal = terminal::Terminal;
             match (input.as_ref(), request.termios) {
                 (Some(input), Some(termios)) => terminal.inspect_input_with_termios(input, termios),
-                (Some(input), None) => terminal.inspect_input(input),
+                (Some(input), None) => {
+                    match tty_source(
+                        request.application_pid,
+                        crate::focus::shares_terminal_with_whykey,
+                    ) {
+                        TtySource::Own => terminal.inspect_input(input),
+                        TtySource::Target(pid) => terminal.inspect_input_for_target(input, pid),
+                    }
+                }
                 (None, _) => terminal.inspect_unknown(),
             }
         }
@@ -782,6 +790,26 @@ fn append_tty_and_session(
     !stop_after_steps
 }
 
+/// Whose terminal settings the TTY driver row reads.
+#[derive(Debug, PartialEq, Eq)]
+enum TtySource {
+    /// whykey's own controlling terminal: no other target, or the target
+    /// shares it.
+    Own,
+    /// The terminal of the selected process, which may be in another mode.
+    Target(u32),
+}
+
+/// A selected process on another terminal (`--pid` of a program in another
+/// terminal or tmux pane) has its own termios; whykey's would describe the
+/// wrong device.
+fn tty_source(target_pid: Option<u32>, shares_whykeys_terminal: impl Fn(u32) -> bool) -> TtySource {
+    match target_pid {
+        Some(pid) if !shares_whykeys_terminal(pid) => TtySource::Target(pid),
+        _ => TtySource::Own,
+    }
+}
+
 /// Shell editors interpret multi-key sequences, so a later sequence step is
 /// evaluated together with the input of the earlier steps the shell received.
 fn inspect_shell(
@@ -823,6 +851,13 @@ mod tests {
 
     fn dummy_result(outcome: Outcome) -> LayerResult {
         LayerResult::new("Test", LayerId::Unknown, outcome, "test", Vec::new())
+    }
+
+    #[test]
+    fn the_tty_row_follows_the_target_off_whykeys_terminal() {
+        assert_eq!(tty_source(None, |_| false), TtySource::Own);
+        assert_eq!(tty_source(Some(5), |_| true), TtySource::Own);
+        assert_eq!(tty_source(Some(5), |_| false), TtySource::Target(5));
     }
 
     #[test]
