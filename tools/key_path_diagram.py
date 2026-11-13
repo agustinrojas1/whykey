@@ -1,5 +1,6 @@
-"""Generate docs/assets/key-path-{light,dark}.svg, the README diagram of the
-chain of programs a key press crosses on Linux.
+"""Generate docs/assets/key-path-{light,dark,auto}.svg, the README diagram of
+the chain of programs a key press crosses on Linux. key-path-auto.svg follows
+the viewer's theme by itself, for crates.io (see generate_crates_readme.py).
 
 Usage: python3 tools/key_path_diagram.py docs/assets"""
 import sys
@@ -97,8 +98,17 @@ def build(theme):
     return "\n".join(out) + "\n"
 
 
-for theme in THEMES:
-    path = f"{sys.argv[1]}/key-path-{theme}.svg"
-    with open(path, "w") as fh:
-        fh.write(build(theme))
-    print(path)
+def main():
+    from adaptive_svg import combine
+
+    variants = {theme: build(theme) for theme in THEMES}
+    variants["auto"] = combine(variants["light"], variants["dark"])
+    for name, svg in variants.items():
+        path = f"{sys.argv[1]}/key-path-{name}.svg"
+        with open(path, "w") as fh:
+            fh.write(svg)
+        print(path)
+
+
+if __name__ == "__main__":
+    main()
