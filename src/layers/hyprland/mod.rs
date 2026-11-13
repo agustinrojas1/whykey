@@ -130,8 +130,8 @@ impl Hyprland {
             return LayerResult::new(
                 "Hyprland",
                 LayerId::Compositor,
-                Outcome::Pass,
-                "not applicable in this remote session",
+                Outcome::UncertainContinues,
+                "not applicable in this remote session; the local Hyprland is not visible from here",
                 vec![
                     "SSH session detected without a local Hyprland IPC signature".into(),
                     "the remote terminal/session layers are inspected instead".into(),

@@ -1,5 +1,18 @@
 use crate::key::KeyCombo;
-use crate::layers::{LayerId, LayerResult, LayerStatus, Outcome, Propagation};
+use crate::layers::{
+    Checked, EvidenceTier, LayerId, LayerResult, LayerStatus, Outcome, Propagation,
+};
+
+/// The weakest tier a combined answer can claim: the one furthest from a
+/// live answer.
+fn tier_rank(tier: EvidenceTier) -> u8 {
+    match tier {
+        EvidenceTier::Observed => 0,
+        EvidenceTier::LiveQuery => 1,
+        EvidenceTier::ConfigFile => 2,
+        EvidenceTier::Default => 3,
+    }
+}
 
 /// Describe session layers that sit between the terminal and the shell.
 ///
@@ -153,10 +166,23 @@ pub fn inspect_with_env(
             } else {
                 Propagation::Indeterminate
             };
-            return LayerResult::new(
+            let checked = Checked::new(
+                results
+                    .iter()
+                    .filter_map(|result| result.checked.as_ref())
+                    .map(|checked| checked.tier)
+                    .max_by_key(|tier| tier_rank(*tier))
+                    .unwrap_or(EvidenceTier::Default),
+                results
+                    .iter()
+                    .filter_map(|result| result.checked.as_ref())
+                    .flat_map(|checked| checked.sources.iter().cloned()),
+            );
+            return LayerResult::decided(
                 "Session context",
                 LayerId::Session,
                 Outcome::from_parts(&status, &propagation),
+                checked,
                 "nested multiplexer layers detected; handling order is conditional",
                 details,
             );
@@ -171,11 +197,14 @@ pub fn inspect_with_env(
             details,
         );
     }
-    LayerResult::new(
+    LayerResult::pass(
         "Session context",
         LayerId::Session,
-        Outcome::Pass,
         "no tmux, GNU Screen, or Zellij session detected",
         details,
+        Checked::new(
+            EvidenceTier::LiveQuery,
+            ["environment of the inspected shell ($TMUX, $STY, $ZELLIJ)"],
+        ),
     )
 }

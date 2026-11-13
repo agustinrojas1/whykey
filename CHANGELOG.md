@@ -30,6 +30,17 @@ mode, and one route order with the input method where the key meets it.
 
 ### Fixed
 
+- A "no binding" answer can no longer be reported without saying what was
+  checked. Every pass records its evidence tier and the sources it read
+  (`--verbose` shows them; schema-v2 and NDJSON path entries of passes carry
+  an additive `checked` object). Places that returned a pass without having
+  looked at everything now report uncertain-continues with the gap named:
+  Ghostty from a configuration file without `ghostty +list-keybinds`, labwc
+  with its built-in keybinds on, MATE with an unreadable schema, a remote
+  session's compositor row, an input method whose hotkeys could not be read,
+  and an extension that reports no match without an evidence tier. The TTY
+  driver row now looks at every byte of a key sequence (Ctrl+Alt+C is ESC and
+  the interrupt byte).
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
   reported as held by Ghostty (handled, uncertain) instead of "no binding,
   forwarded to the terminal". Ghostty consumes it until the next key arrives.

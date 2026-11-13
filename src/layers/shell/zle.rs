@@ -418,7 +418,11 @@ fn evaluate(keymaps: &Keymaps, inputs: &[TerminalInput]) -> Verdict {
 
     let notation = |start: usize, end: usize| zle_notation(&bytes[start..end]);
     let (outcome, mut summary, action) = match relevant.first() {
-        None => (Outcome::Pass, "no terminal input to evaluate".to_owned(), None),
+        None => (
+            Outcome::UncertainContinues,
+            "no terminal input to evaluate".to_owned(),
+            None,
+        ),
         Some(Step::Pending { start, bound }) => {
             let pending = &bytes[*start..];
             let following = continuations(&table, pending);

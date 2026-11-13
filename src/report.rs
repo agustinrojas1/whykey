@@ -70,6 +70,9 @@ struct NdjsonPathEntry<'a> {
     propagation: Propagation,
     summary: &'a str,
     tier: Option<EvidenceTier>,
+    /// What a pass rests on; present on passes only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checked: Option<&'a crate::layers::Checked>,
     #[serde(skip_serializing_if = "Option::is_none")]
     binding: Option<&'a BindingEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -171,6 +174,7 @@ pub fn render_ndjson(
                 propagation: layer.propagation(),
                 summary: &layer.summary,
                 tier: evidence_tier(layer, observed),
+                checked: layer.pass_evidence(),
                 binding: layer.binding.as_ref(),
                 dead_key: layer.dead_key.as_deref(),
                 evidence: layer
@@ -1118,6 +1122,19 @@ fn render_verbose_evidence(
         );
         let details: Vec<&String> = layer.all_details().collect();
         push_grouped_details(output, &details, options);
+        if let Some(checked) = layer.pass_evidence() {
+            push_wrapped(
+                output,
+                &format!(
+                    "checked ({}): {}",
+                    checked.tier.label(),
+                    checked.sources.join("; ")
+                ),
+                options,
+                "       ",
+                "       ",
+            );
+        }
         if let Some(binding) = &layer.binding {
             output.push_str("       binding:\n");
             if let Some(dispatcher) = &binding.dispatcher {
@@ -1893,12 +1910,12 @@ mod tests {
     #[test]
     fn renders_a_forwarded_result() {
         let key: KeyCombo = "ctrl+left".parse().unwrap();
-        let layer = LayerResult::new(
+        let layer = LayerResult::pass(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Pass,
             "no active binding found",
             vec!["active submap: default".into()],
+            crate::layers::Checked::fixture(),
         );
 
         let output = render(&key, std::slice::from_ref(&layer), false);
@@ -1920,7 +1937,13 @@ mod tests {
         );
         kitty.dead_key = Some("dead_acute".into());
         let layers = [
-            LayerResult::pass("Hyprland", LayerId::Compositor, "no active binding", vec![]),
+            LayerResult::pass(
+                "Hyprland",
+                LayerId::Compositor,
+                "no active binding",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
             kitty,
         ];
 
@@ -2067,12 +2090,12 @@ mod tests {
                 "binding found",
                 vec![],
             ),
-            LayerResult::new(
+            LayerResult::pass(
                 "Ghostty",
                 LayerId::Terminal,
-                Outcome::Pass,
                 "no binding found",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
         ];
 
@@ -2136,12 +2159,12 @@ mod tests {
                 "inspection failed",
                 vec![],
             ),
-            LayerResult::new(
+            LayerResult::pass(
                 "Readline",
                 LayerId::Shell,
-                Outcome::Pass,
                 "no binding",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
         ];
 
@@ -2245,12 +2268,12 @@ mod tests {
             },
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
         };
-        let layers = [LayerResult::new(
+        let layers = [LayerResult::pass(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Pass,
             "no active binding found",
             vec![],
+            crate::layers::Checked::fixture(),
         )];
 
         let output = render_observed(&observed, &layers, false);
@@ -2282,12 +2305,12 @@ mod tests {
             },
             disposition: crate::listen::CaptureDisposition::PassedThrough,
         };
-        let layers = [LayerResult::new(
+        let layers = [LayerResult::pass(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Pass,
             "active binding found",
             vec!["binding: __lua 285; Herdr".into()],
+            crate::layers::Checked::fixture(),
         )];
 
         let output = render_observed(&observed, &layers, true);
@@ -2377,12 +2400,12 @@ mod tests {
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
-        let layers = [LayerResult::new(
+        let layers = [LayerResult::pass(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Pass,
             "no active binding found",
             vec![],
+            crate::layers::Checked::fixture(),
         )];
 
         // The renderer wraps lines; compare the words, not the wrapping.
@@ -2483,12 +2506,12 @@ mod tests {
     #[test]
     fn schema_v1_json_keeps_normal_and_verbose_evidence() {
         let key: KeyCombo = "ctrl+x".parse().unwrap();
-        let layers = [LayerResult::new(
+        let layers = [LayerResult::pass(
             "test",
             LayerId::Diagnostic,
-            Outcome::Pass,
             "not handled",
             vec!["normal evidence".into()],
+            crate::layers::Checked::fixture(),
         )
         .with_verbose_details(vec!["verbose evidence".into()])];
         let value: serde_json::Value =
@@ -2516,12 +2539,12 @@ mod tests {
     #[test]
     fn unbound_key_at_an_endpoint_states_its_effect_not_downstream() {
         let key: KeyCombo = "ctrl+a".parse().unwrap();
-        let layers = [LayerResult::new(
+        let layers = [LayerResult::pass(
             "Readline",
             LayerId::Shell,
-            Outcome::Pass,
             "not bound in the current Readline keymap; Readline rings the bell and inserts \"A\"",
             vec![],
+            crate::layers::Checked::fixture(),
         )
         .as_endpoint()];
         let output = render(&key, &layers, false);
@@ -2683,12 +2706,12 @@ mod tests {
     fn inactive_ime_stays_context_not_a_traversed_handler() {
         let observed = suppressed_observed();
         let layers = [
-            LayerResult::new(
+            LayerResult::pass(
                 "Hyprland",
                 LayerId::Compositor,
-                Outcome::Pass,
                 "no active binding found",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
             LayerResult::new(
                 "Input method",
@@ -2799,12 +2822,12 @@ mod tests {
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
         };
-        let layers = [LayerResult::new(
+        let layers = [LayerResult::pass(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Pass,
             "active binding found",
             vec!["binding: __lua 285; Herdr".into()],
+            crate::layers::Checked::fixture(),
         )];
 
         let v1_json = render_listen_json(&key, &layers, Some(&observed), 1);
@@ -2843,12 +2866,12 @@ mod tests {
     fn renders_each_sequence_step_in_text() {
         let sequence: KeySequence = "ctrl+x ctrl+s".parse().unwrap();
         let reports = vec![
-            vec![LayerResult::new(
+            vec![LayerResult::pass(
                 "Hyprland",
                 LayerId::Compositor,
-                Outcome::Pass,
                 "no active binding found",
                 vec![],
+                crate::layers::Checked::fixture(),
             )],
             vec![LayerResult::new(
                 "Hyprland",
@@ -3235,12 +3258,14 @@ mod tests {
                 LayerId::Compositor,
                 "no active binding found",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
             LayerResult::pass(
                 "Kitty",
                 LayerId::Terminal,
                 "no Kitty binding; forwarded to the terminal input",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
             LayerResult::new(
                 "TTY driver",
@@ -3293,7 +3318,13 @@ mod tests {
     #[test]
     fn effect_does_not_invent_a_configured_layer() {
         let layers = [
-            LayerResult::pass("Kitty", LayerId::Terminal, "no Kitty binding", vec![]),
+            LayerResult::pass(
+                "Kitty",
+                LayerId::Terminal,
+                "no Kitty binding",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
             LayerResult::uncertain_continues(
                 "Input method",
                 LayerId::Ime,
@@ -3331,7 +3362,13 @@ mod tests {
             crate::layers::ghostty::generic_fallback("gnome-terminal", &key, None, None);
         assert_eq!(terminal.outcome, Outcome::UncertainContinues);
         let layers = [
-            LayerResult::pass("Hyprland", LayerId::Compositor, "no binding", vec![]),
+            LayerResult::pass(
+                "Hyprland",
+                LayerId::Compositor,
+                "no binding",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
             terminal,
             LayerResult::new(
                 "Shell input",
@@ -3422,6 +3459,7 @@ mod tests {
                 LayerId::Compositor,
                 "no compositor binding matched",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
             ime_taking_the_key(crate::layers::ImePlacement::BeforeTerminal),
         ];
@@ -3454,6 +3492,7 @@ mod tests {
                 LayerId::Terminal,
                 "no terminal binding matched",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
             ime_taking_the_key(crate::layers::ImePlacement::AfterTerminal),
         ];
@@ -3474,6 +3513,7 @@ mod tests {
             LayerId::Terminal,
             "no terminal binding matched",
             vec![],
+            crate::layers::Checked::fixture(),
         )];
         let table = route_table(&render_wide("ctrl+x", &layers));
         let row = table
@@ -3501,11 +3541,35 @@ mod tests {
     #[test]
     fn json_and_ndjson_paths_keep_the_route_order_of_the_layers() {
         let layers = [
-            LayerResult::pass("Compositor", LayerId::Compositor, "no binding", vec![]),
-            LayerResult::pass("Input method", LayerId::Ime, "forwarded", vec![])
-                .with_ime_placement(crate::layers::ImePlacement::BeforeTerminal),
-            LayerResult::pass("Terminal", LayerId::Terminal, "no binding", vec![]),
-            LayerResult::pass("TTY driver", LayerId::Tty, "plain byte", vec![]),
+            LayerResult::pass(
+                "Compositor",
+                LayerId::Compositor,
+                "no binding",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
+            LayerResult::pass(
+                "Input method",
+                LayerId::Ime,
+                "forwarded",
+                vec![],
+                crate::layers::Checked::fixture(),
+            )
+            .with_ime_placement(crate::layers::ImePlacement::BeforeTerminal),
+            LayerResult::pass(
+                "Terminal",
+                LayerId::Terminal,
+                "no binding",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
+            LayerResult::pass(
+                "TTY driver",
+                LayerId::Tty,
+                "plain byte",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
         ];
         let key: KeyCombo = "ctrl+alt+p".parse().unwrap();
         let expected: Vec<&str> = layers.iter().map(|layer| layer.layer).collect();
@@ -3551,7 +3615,13 @@ mod tests {
     #[test]
     fn unverified_shell_default_is_not_described_as_forwarding() {
         let layers = [
-            LayerResult::pass("Kitty", LayerId::Terminal, "no Kitty binding", vec![]),
+            LayerResult::pass(
+                "Kitty",
+                LayerId::Terminal,
+                "no Kitty binding",
+                vec![],
+                crate::layers::Checked::fixture(),
+            ),
             readline_default(None),
         ];
 
@@ -3728,8 +3798,9 @@ mod tests {
                 "source: live GSettings".into(),
                 "binding source: zsh defaults unavailable".into(),
             ],
+            crate::layers::Checked::new(EvidenceTier::ConfigFile, ["tmux.conf"]),
         );
-        assert_eq!(tier(&untyped), None);
+        assert_eq!(tier(&untyped), Some(EvidenceTier::ConfigFile));
         // Nothing answered for an unavailable layer, whatever it recorded.
         let unavailable = LayerResult::unavailable(
             "tmux",
@@ -3834,12 +3905,12 @@ mod tests {
                 "state unknown",
                 Vec::new(),
             ),
-            LayerResult::new(
+            LayerResult::pass(
                 "zsh",
                 LayerId::Shell,
-                Outcome::Pass,
                 "inserts nothing",
                 Vec::new(),
+                crate::layers::Checked::fixture(),
             )
             .as_endpoint(),
         ];
@@ -3872,10 +3943,11 @@ mod tests {
         summary: &str,
         binding: Option<BindingEvidence>,
     ) -> LayerResult {
-        let layer = LayerResult::new(
+        let layer = LayerResult::decided(
             "Hyprland",
             LayerId::Compositor,
             outcome,
+            crate::layers::Checked::fixture(),
             summary,
             vec!["active submap: default".into()],
         )

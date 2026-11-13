@@ -367,12 +367,12 @@ mod generation_tests {
 
     #[test]
     fn unchanged_generation_keeps_results_unchanged() {
-        let mut results = vec![LayerResult::new(
+        let mut results = vec![LayerResult::pass(
             "Compositor",
             LayerId::Compositor,
-            Outcome::Pass,
             "no binding",
             vec![],
+            crate::layers::Checked::fixture(),
         )];
         mark_stale_generation_evidence(
             &mut results,
@@ -424,6 +424,9 @@ impl RouteAccumulator {
     /// Appends a layer result according to its continuation policy.
     /// Returns true if inspection should continue, false if it halted.
     pub fn append(&mut self, result: LayerResult, policy: ContinuationPolicy) -> bool {
+        // Every route result passes here: a pass that names nothing it
+        // checked is never reported (and fails tests and debug builds).
+        let result = result.with_pass_evidence_enforced();
         let should_stop = policy.should_stop(&result, self.force_continue);
         self.results.push(result);
         !should_stop
@@ -942,11 +945,25 @@ mod tests {
     use super::*;
 
     fn dummy_result(outcome: Outcome) -> LayerResult {
-        LayerResult::new("Test", LayerId::Unknown, outcome, "test", Vec::new())
+        LayerResult::decided(
+            "Test",
+            LayerId::Unknown,
+            outcome,
+            crate::layers::Checked::fixture(),
+            "test",
+            Vec::new(),
+        )
     }
 
     fn adapter_result(layer: &'static str, outcome: Outcome) -> LayerResult {
-        LayerResult::new(layer, LayerId::Compositor, outcome, "summary", Vec::new())
+        LayerResult::decided(
+            layer,
+            LayerId::Compositor,
+            outcome,
+            crate::layers::Checked::fixture(),
+            "summary",
+            Vec::new(),
+        )
     }
 
     #[test]
@@ -1089,9 +1106,13 @@ mod tests {
     fn an_unavailable_multiplexer_keeps_the_pane_tty_row_then_stops() {
         let step_result = |session: Outcome| {
             move |step: RouteStep, _: &RouteAccumulator| match step {
-                RouteStep::TtyDriver => {
-                    LayerResult::new("TTY", LayerId::Unknown, Outcome::Pass, "tty", Vec::new())
-                }
+                RouteStep::TtyDriver => LayerResult::pass(
+                    "TTY",
+                    LayerId::Unknown,
+                    "tty",
+                    Vec::new(),
+                    crate::layers::Checked::fixture(),
+                ),
                 RouteStep::Session => {
                     LayerResult::new("tmux", LayerId::Unknown, session, "tmux", Vec::new())
                 }
@@ -1175,10 +1196,11 @@ mod tests {
     }
 
     fn remapper_result(outcome: Outcome, target: Option<&str>) -> LayerResult {
-        let result = LayerResult::new(
+        let result = LayerResult::decided(
             "Input remapper",
             LayerId::Remapper,
             outcome,
+            crate::layers::Checked::fixture(),
             "remapper",
             Vec::new(),
         );
@@ -1192,12 +1214,12 @@ mod tests {
 
     /// Downstream stand-in that reports which key it was asked about.
     fn echo_downstream(request: &InspectRequest<'_>) -> Vec<LayerResult> {
-        vec![LayerResult::new(
+        vec![LayerResult::pass(
             "Compositor",
             LayerId::Compositor,
-            Outcome::Pass,
             request.key.to_string(),
             Vec::new(),
+            crate::layers::Checked::fixture(),
         )]
     }
 

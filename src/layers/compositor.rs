@@ -1,4 +1,4 @@
-use crate::layers::{LayerId, LayerResult, Outcome};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Environment-only context for a Linux display session that does not have a
 /// dedicated compositor adapter yet. It deliberately does not claim that a
@@ -77,12 +77,17 @@ pub fn inspect() -> LayerResult {
 /// separate from `inspect` avoids manufacturing a compositor IPC failure when
 /// there is no local desktop compositor to query.
 pub fn not_detected() -> LayerResult {
-    LayerResult::new(
+    LayerResult::pass(
         "Desktop compositor",
         LayerId::Compositor,
-        Outcome::Pass,
         "no desktop compositor session detected",
         vec!["the diagnostic starts at the terminal/TTY path for this session".into()],
+        Checked::new(
+            EvidenceTier::LiveQuery,
+            [
+                "session environment (XDG_SESSION_TYPE, WAYLAND_DISPLAY, DISPLAY) and compositor sockets",
+            ],
+        ),
     )
 }
 
@@ -90,11 +95,10 @@ pub fn not_detected() -> LayerResult {
 /// This preserves the useful SSH explanation without attributing it to any
 /// particular compiled-in compositor.
 pub fn remote_without_local_adapter() -> LayerResult {
-    LayerResult::new(
+    LayerResult::uncertain_continues(
         "Desktop compositor",
         LayerId::Compositor,
-        Outcome::Pass,
-        "not applicable in this remote session",
+        "not applicable in this remote session; the local desktop's compositor is not visible from here",
         vec![
             "SSH session detected without a local compositor IPC signature".into(),
             "the remote terminal/session layers are inspected instead".into(),

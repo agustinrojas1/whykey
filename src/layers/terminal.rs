@@ -1,18 +1,13 @@
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
 
 pub struct Terminal;
 
 impl Terminal {
     pub fn inspect_input(&self, input: &TerminalInput) -> LayerResult {
-        let [byte] = input.bytes.as_slice() else {
-            return LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "does not consume this byte sequence",
-                vec![format_input(input)],
-            );
-        };
+        // No byte of the input is a special character: nothing to read.
+        if !needs_termios(input) {
+            return no_control_byte(input);
+        }
         let state = match read_tty_state() {
             Ok(state) => state,
             Err(message) => {
@@ -25,7 +20,7 @@ impl Terminal {
                 );
             }
         };
-        self.inspect_byte(*byte, input, &state)
+        self.inspect_sequence(input, &state)
     }
 
     /// Inspect input against the terminal of another process (`inspect
@@ -33,15 +28,8 @@ impl Terminal {
     /// what the TTY driver does with the byte. When they cannot be read the
     /// answer is unknown; whykey's own terminal is never substituted.
     pub fn inspect_input_for_target(&self, input: &TerminalInput, target_pid: u32) -> LayerResult {
-        if input.bytes.len() != 1 {
-            // No single byte for the driver to act on: nothing to read.
-            return LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "does not consume this byte sequence",
-                vec![format_input(input)],
-            );
+        if !needs_termios(input) {
+            return no_control_byte(input);
         }
         self.inspect_input_for_target_termios(input, crate::layers::tty_target::read(target_pid))
     }
@@ -99,22 +87,29 @@ impl Terminal {
     }
 
     fn inspect_input_with_state(&self, input: &TerminalInput, state: &TtyState) -> LayerResult {
-        let [byte] = input.bytes.as_slice() else {
-            return LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
-                "does not consume this byte sequence",
-                vec![format_input(input)],
-            );
-        };
-        self.inspect_byte(*byte, input, state)
+        self.inspect_sequence(input, state)
     }
 
-    /// The byte is judged against termios settings read from the terminal
+    /// The TTY driver reads every byte the terminal writes: a control byte
+    /// anywhere in a sequence (ESC followed by Ctrl+C's 0x03) is acted on.
+    /// The first byte it consumes decides; otherwise the key passes. The
+    /// bytes are judged against termios settings read from the terminal
     /// device, so the answer is a live query.
-    fn inspect_byte(&self, byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
-        let mut result = classify_byte(byte, input, state).with_tier(EvidenceTier::LiveQuery);
+    fn inspect_sequence(&self, input: &TerminalInput, state: &TtyState) -> LayerResult {
+        let mut results = input
+            .bytes
+            .iter()
+            .map(|byte| classify_byte(*byte, input, state));
+        let mut result = results
+            .by_ref()
+            .find(|result| result.outcome != Outcome::Pass)
+            .unwrap_or_else(|| {
+                termios_pass(
+                    "does not consume this byte sequence",
+                    vec![format_input(input)],
+                )
+            })
+            .with_tier(EvidenceTier::LiveQuery);
         if let Some(alias) = legacy_byte_alias(&input.bytes) {
             result.details.push(alias.into());
         }
@@ -122,12 +117,49 @@ impl Terminal {
     }
 }
 
+/// True when the terminal's settings are needed: a single byte is always
+/// judged against them, a longer sequence only when one of its bytes can be a
+/// special character (ESC is not one by default, and the escape sequences of
+/// cursor and function keys hold none).
+fn needs_termios(input: &TerminalInput) -> bool {
+    input.bytes.len() == 1
+        || input
+            .bytes
+            .iter()
+            .any(|byte| (*byte < 0x20 && *byte != 0x1b) || *byte == 0x7f)
+}
+
+/// The input has no byte the driver can act on.
+fn no_control_byte(input: &TerminalInput) -> LayerResult {
+    LayerResult::pass(
+        "TTY driver",
+        LayerId::Tty,
+        "does not consume this byte sequence",
+        vec![format_input(input)],
+        Checked::new(
+            EvidenceTier::Default,
+            ["the input bytes (none is a terminal special character)"],
+        ),
+    )
+}
+
+/// A pass from the termios settings the terminal device reported.
+fn termios_pass(summary: impl Into<String>, details: Vec<String>) -> LayerResult {
+    LayerResult::pass(
+        "TTY driver",
+        LayerId::Tty,
+        summary,
+        details,
+        Checked::new(
+            EvidenceTier::LiveQuery,
+            ["termios settings of the terminal (ISIG, IXON, ICANON, IEXTEN, special characters)"],
+        ),
+    )
+}
+
 fn classify_byte(byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResult {
     let Some(control) = control_character_byte(byte, state) else {
-        return LayerResult::new(
-            "TTY driver",
-            LayerId::Tty,
-            Outcome::Pass,
+        return termios_pass(
             "does not consume this byte sequence",
             vec![format_input(input)],
         );
@@ -142,17 +174,13 @@ fn classify_byte(byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResu
     };
 
     match control.kind {
-        ControlKind::Signal if !state.signal_processing => LayerResult::new(
-            "TTY driver",
-            LayerId::Tty,
-            Outcome::Pass,
-            "signal processing is disabled; byte is forwarded",
-            {
+        ControlKind::Signal if !state.signal_processing => {
+            termios_pass("signal processing is disabled; byte is forwarded", {
                 let mut details = details();
                 details.push("ISIG is disabled".into());
                 details
-            },
-        ),
+            })
+        }
         ControlKind::Signal => LayerResult::new(
             "TTY driver",
             LayerId::Tty,
@@ -170,10 +198,7 @@ fn classify_byte(byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResu
                 details
             },
         ),
-        ControlKind::Flow if !state.input_flow_control => LayerResult::new(
-            "TTY driver",
-            LayerId::Tty,
-            Outcome::Pass,
+        ControlKind::Flow if !state.input_flow_control => termios_pass(
             "output flow control (IXON) is disabled; byte is forwarded",
             {
                 let mut details = details();
@@ -202,24 +227,17 @@ fn classify_byte(byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResu
                 details
             },
         ),
-        ControlKind::Line if !state.canonical => LayerResult::new(
-            "TTY driver",
-            LayerId::Tty,
-            Outcome::Pass,
-            "canonical line editing is disabled; byte is forwarded",
-            {
+        ControlKind::Line if !state.canonical => {
+            termios_pass("canonical line editing is disabled; byte is forwarded", {
                 let mut details = details();
                 details.push("ICANON is disabled".into());
                 details
-            },
-        ),
+            })
+        }
         ControlKind::Line
             if matches!(control.name, "VLNEXT" | "VDISCARD") && !state.extended_processing =>
         {
-            LayerResult::new(
-                "TTY driver",
-                LayerId::Tty,
-                Outcome::Pass,
+            termios_pass(
                 "extended terminal processing is disabled; byte is forwarded",
                 {
                     let mut details = details();
@@ -228,10 +246,7 @@ fn classify_byte(byte: u8, input: &TerminalInput, state: &TtyState) -> LayerResu
                 },
             )
         }
-        ControlKind::Line => LayerResult::new(
-            "TTY driver",
-            LayerId::Tty,
-            Outcome::Pass,
+        ControlKind::Line => termios_pass(
             format!("{} is configured for canonical line editing", control.name),
             {
                 let mut details = details();
@@ -487,10 +502,24 @@ mod tests {
                 Some(EvidenceTier::LiveQuery)
             );
         }
+        // A sequence is judged byte by byte against the same settings, and
+        // one without a special character needs none.
         let input = TerminalInput::predicted(b"\x1b[A".to_vec(), "cursor key");
+        let result = Terminal.inspect_input_with_termios(&input, &termios);
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+        assert_eq!(result.outcome, Outcome::Pass);
         assert_eq!(
-            Terminal.inspect_input_with_termios(&input, &termios).tier,
-            None
+            no_control_byte(&input).tier,
+            Some(EvidenceTier::Default),
+            "without termios the pass rests on the bytes alone"
+        );
+        // A control byte inside the sequence is acted on, whatever precedes it.
+        let alt_ctrl_c = TerminalInput::predicted(b"\x1b\x03".to_vec(), "Ctrl+Alt+C");
+        assert_eq!(
+            Terminal
+                .inspect_input_with_termios(&alt_ctrl_c, &termios)
+                .outcome,
+            Outcome::Consumed
         );
     }
 

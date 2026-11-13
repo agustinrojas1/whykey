@@ -8,7 +8,7 @@ use crate::recording::PathInputs;
 use std::path::Path;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 use crate::util::ProcessSnapshot;
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
@@ -85,14 +85,16 @@ impl Dwl {
             .collect::<Vec<_>>();
         let source = format!("source: {}", path.display());
         if matches.is_empty() {
-            return LayerResult::new(
+            return LayerResult::pass(
                 "dwl",
                 LayerId::Compositor,
-                Outcome::Pass,
                 "no matching dwl key binding found",
                 vec![source],
-            )
-            .with_tier(EvidenceTier::ConfigFile);
+                Checked::new(
+                    EvidenceTier::ConfigFile,
+                    [format!("config.h {}", path.display())],
+                ),
+            );
         }
         let mut details = vec![source];
         details.extend(

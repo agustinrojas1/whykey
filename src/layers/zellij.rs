@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
     // `zellij setup --dump-config` prints the defaults built into the
@@ -55,6 +55,7 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             .as_deref(),
         &content,
     );
+    let checked_source = source.clone();
     let mut details = vec![source, format!("mode: {mode} ({mode_source})")];
     if let Some(binding) = find_binding(&content, key, &mode) {
         details.push(format!("binding: {}", binding));
@@ -101,10 +102,11 @@ pub fn inspect(key: &KeyCombo) -> LayerResult {
             "Zellij defaults or unsupported KDL bindings may still handle this key; forwarding is conditional".into(),
         );
     }
-    LayerResult::new(
+    LayerResult::decided(
         "Zellij",
         LayerId::Multiplexer,
         unbound_outcome(complete),
+        Checked::new(tier, [checked_source]),
         if complete {
             "no matching Zellij binding; forwarded to the pane"
         } else {

@@ -5,7 +5,7 @@ AltGr+'
 
 Route
   1  Remapper      v  none detected
-  2  Hyprland      v  no active binding
+  2  Hyprland      v  no active binding                               live query
   3  Kitty         >  dead_acute starts composition; no bytes until the next key
   4  Input method  -  not reached
   5  TTY driver    -  not reached

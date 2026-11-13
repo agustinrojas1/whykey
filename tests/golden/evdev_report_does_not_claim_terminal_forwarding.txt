@@ -8,7 +8,7 @@ v No inspected layer matches; it can continue.
 
 Route
   1  Remapper      v  none detected
-  2  Hyprland      v  no binding
+  2  Hyprland      v  no binding                                      live query
   3  Terminal      -  not inspected
   4  Input method  v  none detected
   5  TTY driver    -  not inspected

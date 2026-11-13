@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput};
 use crate::xkb::{self, KeyboardLayout, LevelText, XkbState};
 
 const SHIFT_MASK: u32 = 1;
@@ -363,6 +363,34 @@ fn known_non_ghostty_terminal() -> Option<String> {
     Some(program)
 }
 
+/// No binding for the key. Only Ghostty's own listing (`ghostty
+/// +list-keybinds`) holds the active configuration together with Ghostty's
+/// built-in defaults; a configuration file read on its own lacks the
+/// defaults, so there the key may still be taken by one of them.
+fn unbound(config: &ConfigState, config_path: &Path, mut details: Vec<String>) -> LayerResult {
+    match &config.source {
+        Some(source) => LayerResult::pass(
+            "Ghostty",
+            LayerId::Terminal,
+            "no Ghostty binding; forwarded to terminal",
+            details,
+            Checked::new(EvidenceTier::LiveQuery, [source.clone()]),
+        ),
+        None => {
+            details.push(format!(
+                "Ghostty's built-in default keybindings are not checked: `ghostty +list-keybinds` was not available, and {} lists only the changes",
+                config_path.display()
+            ));
+            LayerResult::uncertain_continues(
+                "Ghostty",
+                LayerId::Terminal,
+                "no Ghostty binding in the configuration; Ghostty's default keybindings are not checked",
+                details,
+            )
+        }
+    }
+}
+
 fn inspect_config(
     key: &KeyCombo,
     config_path: &Path,
@@ -416,13 +444,7 @@ fn inspect_config(
                 normal: encoding, ..
             } => {
                 details.push(format_encoding_detail(&encoding));
-                return LayerResult::new(
-                    "Ghostty",
-                    LayerId::Terminal,
-                    Outcome::Pass,
-                    "no Ghostty binding; forwarded to terminal",
-                    details,
-                );
+                return unbound(config, config_path, details);
             }
             // The analysis records the specific reason with the input.
             KeyEncoding::DeadKey(_) | KeyEncoding::Unknown(_) => {}
@@ -430,13 +452,7 @@ fn inspect_config(
                 details.push("default key encoding is layout-dependent or unsupported".into());
             }
         }
-        return LayerResult::new(
-            "Ghostty",
-            LayerId::Terminal,
-            Outcome::Pass,
-            "no Ghostty binding; forwarded to terminal",
-            details,
-        );
+        return unbound(config, config_path, details);
     };
 
     let mut details = vec![format!(
@@ -1303,7 +1319,11 @@ mod tests {
 
     fn inspect(key: &str, config: &str) -> LayerResult {
         let key: KeyCombo = key.parse().unwrap();
-        let mut state = ConfigState::default();
+        let mut state = ConfigState {
+            // The live listing, which also carries Ghostty's defaults.
+            source: Some("ghostty +list-keybinds --plain".into()),
+            ..ConfigState::default()
+        };
         for line in config.lines() {
             let line = line.trim();
             if let Some(value) = line.strip_prefix("keybind =") {
@@ -1311,6 +1331,27 @@ mod tests {
             }
         }
         inspect_config(&key, Path::new("/tmp/ghostty/config"), &state, None)
+    }
+
+    #[test]
+    fn a_config_file_alone_cannot_rule_out_ghostty_defaults() {
+        let key: KeyCombo = "ctrl+left".parse().unwrap();
+        let state = ConfigState::default();
+        let result = inspect_config(&key, Path::new("/tmp/ghostty/config"), &state, None);
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(result.checked.is_none());
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("default keybindings are not checked"))
+        );
+        let listed = inspect("ctrl+left", "");
+        assert_eq!(listed.outcome, Outcome::Pass);
+        assert_eq!(
+            listed.checked.expect("a pass names what it checked").tier,
+            EvidenceTier::LiveQuery
+        );
     }
 
     fn default_encoding(key: &KeyCombo) -> Option<Vec<u8>> {
@@ -1534,7 +1575,13 @@ mod tests {
         assert_eq!(encode("return", None), KeyEncoding::Bytes(b"\r".to_vec()));
 
         let (layer, input) = with_default_encoding(
-            LayerResult::pass("Terminal", LayerId::Terminal, "forwarded", Vec::new()),
+            LayerResult::pass(
+                "Terminal",
+                LayerId::Terminal,
+                "forwarded",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             encode("kp_enter", None),
             "default encoding",
             true,
@@ -1613,7 +1660,13 @@ xkb_symbols "pc" {
             );
         }
         // A dead key is consumed by the terminal's composition.
-        let pass = LayerResult::new("Ghostty", LayerId::Terminal, Outcome::Pass, "", vec![]);
+        let pass = LayerResult::pass(
+            "Ghostty",
+            LayerId::Terminal,
+            "",
+            vec![],
+            crate::layers::Checked::fixture(),
+        );
         let (layer, input) = with_default_encoding(
             pass,
             KeyEncoding::DeadKey("dead_doubleacute".into()),

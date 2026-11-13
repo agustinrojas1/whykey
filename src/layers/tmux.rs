@@ -4,7 +4,8 @@ use std::process::Command;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, UncertaintyReason,
+    BindingEvidence, BindingScope, Checked, EvidenceTier, LayerId, LayerResult, Outcome,
+    UncertaintyReason,
 };
 
 pub fn inspect(key: &KeyCombo) -> LayerResult {
@@ -242,10 +243,9 @@ fn resolve_with_tables(
                     details,
                 );
             }
-            LayerResult::new(
+            LayerResult::pass(
                 "tmux",
                 LayerId::Multiplexer,
-                Outcome::Pass,
                 if bytes_verified {
                     format!("no binding in the tmux {table} table; forwarded to the pane")
                 } else {
@@ -254,6 +254,13 @@ fn resolve_with_tables(
                     )
                 },
                 details,
+                Checked::new(
+                    EvidenceTier::LiveQuery,
+                    [
+                        format!("tmux list-keys (the {table} and root tables)"),
+                        "tmux display-message (client key table, pane mode)".to_owned(),
+                    ],
+                ),
             )
         }
     }
