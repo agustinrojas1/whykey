@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2.5.0] - 2026-11-13
+
+whykey no longer reports a key as passing through a layer it did not fully
+check. A user's Ctrl+Alt+P was taken by Fcitx5's `TogglePreedit` hotkey while
+whykey blamed bash; an audit then found the same mistake in the input method,
+terminal, GNOME, X11, tmux, TTY and compositor layers. Each now reads the
+missing source or says it is uncertain. New: Fcitx5 addon and IBus hotkeys,
+terminal built-in shortcuts, GNOME Shell extension shortcuts, swhkd, tmux copy
+mode, and one route order with the input method where the key meets it.
 
 ### Added
 
@@ -10,6 +18,15 @@
   remapper row, before the compositor. A `~`, mode, `ignore`d or
   `swallow`-mode case stays uncertain. It is listed as unverified: no lab
   scenario runs swhkd yet.
+- A logo (`docs/assets/logo/`), shown at the top of the README. On
+  crates.io the README's diagrams and logo follow the viewer's light or dark
+  theme, and the two mermaid diagrams are drawn as SVGs (crates.io drew them
+  unreadable in dark mode).
+- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
+  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
+  `foot-default-font-increase`, `alacritty-default-font-decrease` and
+  `konsole-default-fullscreen`. The `terminals` lab environment gains a
+  `term_sh` action that runs a command on the terminal's tty.
 
 ### Changed
 
@@ -68,7 +85,6 @@
   applicable adapter too, reports a binding the selected one lacks, names the
   others in the details, and downgrades a no-match to uncertain when another
   adapter could not be checked.
-
 - A Konsole keytab entry that names an application action
   (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
   consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
@@ -149,14 +165,6 @@
 - Without a kitty, foot or Alacritty configuration file the answer now comes
   from the built-in shortcuts (default tier) instead of "no config file was
   found" with no answer.
-
-### Added
-
-- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
-  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
-  `foot-default-font-increase`, `alacritty-default-font-decrease` and
-  `konsole-default-fullscreen`. The `terminals` lab environment gains a
-  `term_sh` action that runs a command on the terminal's tty.
 
 ## [2.4.1] - 2026-10-16
 
