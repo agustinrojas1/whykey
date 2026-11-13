@@ -252,7 +252,7 @@ Input sources and what they can prove:
   that is not a window, so the compositor never focuses "this terminal" and a
   key whykey sees but its pty never receives is not blamed on a layer: a
   `note:` line on stderr says so. The "taken between Hyprland and Ghostty"
-  verdict (D-208) needs a focused terminal window and a real input method; it
+  verdict (D-212) needs a focused terminal window and a real input method; it
   was checked by hand on a Hyprland + Ghostty + Fcitx5 desktop, not in the lab.
 - `xdotool` sends XTEST input on X11. `lab/xgrab.py` confirms over the raw X11
   socket that a daemon holds its grab before input is sent. Two traps:
