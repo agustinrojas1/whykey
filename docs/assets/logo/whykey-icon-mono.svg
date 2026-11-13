@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="whykey">
+  <rect x="8" y="6" width="19" height="9" rx="2.5" fill="currentColor"/>
+  <rect x="37" y="6" width="19" height="9" rx="2.5" fill="currentColor"/>
+  <rect x="8" y="25" width="19" height="9" rx="2.5" fill="currentColor"/>
+  <rect x="37" y="25" width="19" height="9" rx="2.5" fill="currentColor"/>
+  <path d="M32,3 V38" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M25.5,33 L32,39.5 L38.5,33" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="8" y="46" width="48" height="11" rx="3" fill="currentColor"/>
+</svg>
