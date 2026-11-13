@@ -13,6 +13,12 @@
 
 ### Fixed
 
+- `inspect --pid` and `--focused` read the termios of the target's terminal
+  for the TTY driver row, not whykey's own. A program in raw mode (vim, less)
+  no longer reads as "IXON consumes Ctrl+S" or "ISIG sends SIGINT" because
+  whykey's shell is cooked. The terminal is read-only (`tcgetattr`), the
+  evidence names the device and the foreground process group, and a terminal
+  that cannot be read answers unknown instead of reusing whykey's own.
 - Only the best-scored compositor or hotkey adapter was inspected, so a key
   grabbed by a second one (a Wayland session also running a configured
   hotkey adapter) read as a clean pass. whykey now inspects every other
