@@ -368,7 +368,14 @@ fn resolve_bindings(
             )
         }
         Effect::Unknown => {
-            details.push("action semantics are terminal-specific".into());
+            details.push(if kind == TerminalKind::Konsole {
+                "the keytab names a command Konsole's keyboard translator does not define \
+                 (it knows Erase and the Scroll* commands); Konsole's shortcuts live in konsolerc, \
+                 so what happens to the key is unknown"
+                    .into()
+            } else {
+                "action semantics are terminal-specific".into()
+            });
             LayerResult::new(
                 kind.layer_name(),
                 LayerId::Terminal,
@@ -424,7 +431,8 @@ fn action_effect(kind: TerminalKind, action: &str) -> Effect {
                 Effect::Consumes
             }
         }
-        TerminalKind::WezTerm | TerminalKind::Konsole => {
+        TerminalKind::Konsole => konsole_keytab_effect(&lower),
+        TerminalKind::WezTerm => {
             if action_forwards(action) {
                 Effect::Forwards
             } else if action_is_consuming(action) {
@@ -433,6 +441,22 @@ fn action_effect(kind: TerminalKind, action: &str) -> Effect {
                 Effect::Unknown
             }
         }
+    }
+}
+
+/// What a Konsole keytab entry does. The right-hand side of a keytab line is
+/// either a quoted byte sequence or one of the few keyboard-translator
+/// commands (`Erase` and the `Scroll*` family); Konsole has no keytab command
+/// for application actions such as `toggleFullScreen` (those are shortcuts in
+/// `konsolerc`), so an entry naming one is not an action whykey can vouch
+/// for. The reality lab showed Ctrl+F11 neither toggling fullscreen nor
+/// reaching the program with such an entry.
+fn konsole_keytab_effect(lower: &str) -> Effect {
+    match lower.trim() {
+        "erase" => Effect::Forwards,
+        "scrollpageup" | "scrollpagedown" | "scrolllineup" | "scrolllinedown" | "scrolllock"
+        | "scrolluptotop" | "scrolldowntobottom" => Effect::Consumes,
+        _ => Effect::Unknown,
     }
 }
 
@@ -2049,6 +2073,36 @@ key_bindings:
         let layer = inspect_loaded(TerminalKind::Konsole, &key("ctrl+f11"), &loaded);
         assert_eq!(layer.outcome, Outcome::Pass);
         assert_eq!(layer.tier, Some(EvidenceTier::ConfigFile));
+    }
+
+    #[test]
+    fn a_keytab_entry_naming_an_application_action_is_not_a_consumed_key() {
+        let mut loaded = stock(TerminalKind::Konsole);
+        loaded.config_read = true;
+        loaded.tier = EvidenceTier::ConfigFile;
+        loaded.bindings.extend(parse_konsole(
+            "key F11 +Ctrl : toggleFullScreen\nkey F12 +Ctrl : ScrollPageUp\nkey F10 +Ctrl : Erase\n",
+        ));
+        // Konsole's keytab has no fullscreen command: the lab saw the key
+        // neither toggle fullscreen nor reach the program.
+        let layer = inspect_loaded(TerminalKind::Konsole, &key("ctrl+f11"), &loaded);
+        assert_eq!(layer.outcome, Outcome::Unknown);
+        assert!(
+            layer
+                .details
+                .iter()
+                .any(|detail| detail.contains("does not define"))
+        );
+        for (text, outcome) in [
+            ("ctrl+f12", Outcome::Consumed),
+            ("ctrl+f10", Outcome::HandledAndPassed),
+        ] {
+            assert_eq!(
+                inspect_loaded(TerminalKind::Konsole, &key(text), &loaded).outcome,
+                outcome,
+                "{text}"
+            );
+        }
     }
 
     #[test]
