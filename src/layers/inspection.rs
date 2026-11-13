@@ -563,12 +563,7 @@ fn inspect_compositor(
             }
         }),
         Some(id) => {
-            let others: Vec<&str> = session
-                .compositor_candidates
-                .iter()
-                .map(|candidate| candidate.id)
-                .filter(|other| *other != id && *other != "compositor")
-                .collect();
+            let others = other_grabbers(&session.compositor_candidates, id);
             with_other_candidates(
                 inspect_adapter(id, key, physical_input, session),
                 &others,
@@ -593,6 +588,23 @@ fn inspect_adapter(
     } else {
         (entry.inspect)(key, physical_input)
     }
+}
+
+/// The other candidates that may grab the key besides `selected`. A
+/// candidate is only applicable by session type (xbindkeys on any X11
+/// session) until something shows it is present: its IPC or configuration
+/// answers, or the environment names it. Without that it is no grabber, and
+/// counting it would make every unbound key uncertain.
+fn other_grabbers<'a>(
+    candidates: &'a [crate::environment::CompositorCandidate],
+    selected: &str,
+) -> Vec<&'a str> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.ipc || candidate.score > 0)
+        .map(|candidate| candidate.id)
+        .filter(|other| *other != selected && *other != "compositor")
+        .collect()
 }
 
 /// Only the best-scored candidate answers for the compositor stage, but
@@ -901,6 +913,25 @@ mod tests {
 
     fn adapter_result(layer: &'static str, outcome: Outcome) -> LayerResult {
         LayerResult::new(layer, LayerId::Compositor, outcome, "summary", Vec::new())
+    }
+
+    #[test]
+    fn a_candidate_applicable_only_by_session_type_is_not_another_grabber() {
+        use crate::environment::CompositorCandidate;
+        let candidate = |id, ipc, score| CompositorCandidate {
+            id,
+            applicable: true,
+            ipc,
+            score,
+        };
+        let candidates = [
+            candidate("i3", true, 5),
+            // xbindkeys: an X11 session, but no readable .xbindkeysrc.
+            candidate("x11", false, 0),
+            candidate("sxhkd", true, 3),
+            candidate("compositor", false, 1),
+        ];
+        assert_eq!(other_grabbers(&candidates, "i3"), ["sxhkd"]);
     }
 
     #[test]
