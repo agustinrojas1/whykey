@@ -177,6 +177,7 @@ mod tests {
             state: None,
             query_error: None,
             no_engine: false,
+            panel: false,
             text_reconstruction: Default::default(),
         }];
         session.ime_frontend = frontend;
