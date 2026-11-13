@@ -40,7 +40,7 @@ fixtures pass.
 | `capture.ndjson` | capture | Implemented | unverified | Emit one compact schema-v2 record per captured event. |
 | `capture.export` | capture | Implemented | unverified | Write replayable JSON or NDJSON capture records to an explicit file. |
 | `capture.evdev` | capture | Implemented | unverified | Capture Linux evdev keyboard events when a readable device is available. |
-| `remapper.pre-compositor` | input | Implemented | lab-verified (11 scenarios) | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, kmonad, input-remapper, and xremap configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions and kmonad or input-remapper rules for unproven devices conditional. |
+| `remapper.pre-compositor` | input | Implemented | lab-verified (11 scenarios) | Detect common pre-compositor remappers; evaluate the queried key against keyd, kanata, kmonad, input-remapper, xremap, and swhkd configurations so remaps redirect and layer or command actions consume, keeping timing-dependent actions and kmonad or input-remapper rules for unproven devices conditional. |
 | `input.ime-context` | input | Implemented | lab-verified (6 scenarios) | Detect IBus/Fcitx5 session context. |
 | `input.ime-runtime-engine` | input | Implemented | lab-verified (6 scenarios) | Query an active IBus/Fcitx5 engine through a read-only API when possible. |
 | `input.ime.fcitx5-safe-query` | safety | Implemented | unverified | Use bounded read-only Fcitx5 D-Bus calls without launching client helpers. |

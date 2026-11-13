@@ -276,7 +276,7 @@ documentation and configuration only
 | **Wayland compositors** | ✅ Hyprland · ✅ Sway · ✅ Wayfire · ✅ labwc · ✅ dwl · 🟡 Niri · ⚪ River |
 | **Desktops** | ✅ GNOME (mutter, GNOME Shell, media keys) · ✅ KDE Plasma (KWin, kglobalaccel) · ✅ Cinnamon · ✅ Xfce · ✅ MATE |
 | **X11 window managers and hotkey daemons** | ✅ i3 · ✅ Openbox · ✅ AwesomeWM · ✅ Qtile · ✅ XMonad · ✅ sxhkd · ✅ xbindkeys · ⚪ herbstluftwm |
-| **Key remappers** | ✅ keyd · ✅ kanata · ✅ xremap · 🟡 kmonad · 🟡 input-remapper |
+| **Key remappers** | ✅ keyd · ✅ kanata · ✅ xremap · 🟡 kmonad · 🟡 input-remapper · ⚪ swhkd |
 | **Input methods** | ✅ Fcitx5 · 🟡 IBus |
 | **Terminals** | ✅ kitty · ✅ Alacritty · ✅ foot · ✅ WezTerm · ✅ Konsole · ✅ Ghostty |
 | **Multiplexers** | ✅ tmux · ✅ GNU Screen · ✅ Zellij |
