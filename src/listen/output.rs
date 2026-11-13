@@ -1,3 +1,7 @@
+use super::bisect::{
+    COMPOSITOR_GRACE, EvdevWitness, TERMINAL_GRACE, TerminalWatch, apply_lost, apply_reached,
+    judge_lost, point_name, terminal_has_focus,
+};
 use super::protocol::{flush_input, remaining_millis};
 use super::terminal::{SignalGuard, TerminalBackend, TerminalSession};
 use super::*;
@@ -329,6 +333,13 @@ pub(super) fn print_capture_explanation(
     print!("{}", render.fold(text));
 }
 
+/// Whether the compositor backend reports every key press. Sway's IPC only
+/// reports keys that run a binding, so for it "reported nothing" proves
+/// nothing about what a later capture point saw.
+fn sees_every_key(backend: &str) -> bool {
+    backend == crate::capture::NativeBackendId::Hyprland.display()
+}
+
 /// What the waiting message says the capture observes.
 pub(super) fn waiting_mode(
     backend: &str,
@@ -566,8 +577,23 @@ pub(super) fn run_native(
     let _ = io::stdout().flush();
 
     let mut last_renewed = Instant::now();
+    // A compositor that reports every key is read together with the terminal
+    // and the physical keyboard, so a key that dies on the way is located
+    // instead of timing out. Suppression holds the key on purpose, and Sway
+    // only reports bound keys: neither says anything about later points.
+    let bisecting = !capture_session.is_suppressing()
+        && options.capture_policy != CapturePolicy::Suppress
+        && sees_every_key(capture_session.display());
+    let mut terminal_watch = TerminalWatch::default();
+    let mut evdev_witness = if bisecting {
+        EvdevWitness::open()
+    } else {
+        EvdevWitness::unavailable()
+    };
+    terminal_watch.forget();
+    let mut armed_at = Instant::now();
     loop {
-        let observed = loop {
+        let (mut observed, lost_to_compositor) = loop {
             if signals.received() {
                 let _ = flush_input(tty_fd);
                 capture_session.close().map_err(ListenError::Io)?;
@@ -622,13 +648,24 @@ pub(super) fn run_native(
                     }
                     return Ok(());
                 }
-                break observed;
+                break (observed, false);
+            }
+            if bisecting {
+                evdev_witness.drain();
+                if let Some((at, press)) = evdev_witness.press_since(armed_at) {
+                    if at.elapsed() >= COMPOSITOR_GRACE {
+                        // The physical keyboard produced a key the compositor
+                        // never reported: something took it in between.
+                        waiting.clear();
+                        break (press.clone(), true);
+                    }
+                }
             }
 
             let timeout_ms = deadline
                 .map(remaining_millis)
                 .map_or(100, |remaining| remaining.min(100));
-            let mut pollfds = [
+            let mut pollfds = vec![
                 libc::pollfd {
                     fd: socket_fd,
                     events: libc::POLLIN,
@@ -640,7 +677,13 @@ pub(super) fn run_native(
                     revents: 0,
                 },
             ];
-            let result = unsafe { libc::poll(pollfds.as_mut_ptr(), 2, timeout_ms) };
+            pollfds.extend(evdev_witness.poll_fds().into_iter().map(|fd| libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            }));
+            let result =
+                unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as _, timeout_ms) };
             if result == -1 {
                 let error = io::Error::last_os_error();
                 if error.raw_os_error() == Some(libc::EINTR) {
@@ -650,9 +693,14 @@ pub(super) fn run_native(
                 return Err(ListenError::Io(error));
             }
             if pollfds[1].revents & libc::POLLIN != 0 {
-                // Drain forwarded terminal bytes continuously
-                let mut scratch = [0u8; 1024];
-                let _ = terminal.tty.read(&mut scratch);
+                if bisecting {
+                    // Forwarded terminal bytes are evidence of what the
+                    // terminal received, not noise to discard.
+                    terminal_watch.drain(&mut terminal.tty);
+                } else {
+                    let mut scratch = [0u8; 1024];
+                    let _ = terminal.tty.read(&mut scratch);
+                }
             }
             if pollfds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
                 let _ = flush_input(tty_fd);
@@ -672,6 +720,17 @@ pub(super) fn run_native(
         };
 
         let leased = capture_session.holds_lease();
+        // The compositor saw the key: does the terminal get it too? Judged
+        // while the hook is still armed, right after the key was reported.
+        let terminal_receipt = if bisecting
+            && !lost_to_compositor
+            && observed.event_type == KeyEventType::Press
+            && !is_terminal_modifier_key(&observed)
+        {
+            terminal_watch.await_press(&mut terminal.tty, Instant::now(), TERMINAL_GRACE, signals)
+        } else {
+            None
+        };
         if capture_session.is_suppressing() {
             let Some(main_code) = observed.physical_keycode.and_then(|code| code.to_xkb()) else {
                 let _ = flush_input(tty_fd);
@@ -711,7 +770,33 @@ pub(super) fn run_native(
             }
         }
 
-        let results = snapshot.inspect(&observed, Some(&original_termios));
+        let mut results = snapshot.inspect(&observed, Some(&original_termios));
+        if lost_to_compositor {
+            let name = point_name(&results, WatchPoint::Compositor, capture_session.display());
+            apply_lost(
+                &mut results,
+                &mut observed,
+                WatchPoint::Compositor,
+                name,
+                COMPOSITOR_GRACE,
+            );
+        } else if let Some(reached) = terminal_receipt {
+            let name = point_name(&results, WatchPoint::Terminal, capture_session.display());
+            if reached {
+                apply_reached(&mut results, &mut observed, WatchPoint::Terminal, name);
+            } else if !judge_lost(
+                &mut results,
+                &mut observed,
+                WatchPoint::Terminal,
+                name,
+                TERMINAL_GRACE,
+                || terminal_has_focus(&snapshot.environment),
+            ) {
+                eprintln!(
+                    "note: the key never reached this terminal, but whykey could not confirm that this terminal was the focused window, so no layer is blamed"
+                );
+            }
+        }
         let rendered = if options.json {
             if options.ndjson {
                 report::render_ndjson(&observed.combo, &results, Some(&observed))
@@ -747,6 +832,9 @@ pub(super) fn run_native(
                 .map_err(ListenError::Message)?;
             last_renewed = Instant::now();
         }
+        terminal_watch.forget();
+        evdev_witness.forget();
+        armed_at = Instant::now();
         if !options.json {
             println!(
                 "\n{}\n",
@@ -815,6 +903,21 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
     let _ = io::stdout().flush();
     let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
     let mut captured_events = 0_usize;
+    // The terminal and the probe window are the late points of the route: the
+    // physical keyboard is read beside them, so a key that never arrives is
+    // located (and a lone modifier tap told from a consumed key).
+    let watch_point = match backend.id() {
+        CaptureBackendId::Terminal => Some(WatchPoint::Terminal),
+        CaptureBackendId::Window => Some(WatchPoint::ProbeWindow),
+        _ => None,
+    };
+    let mut witness = if watch_point.is_some() && !options.events_all {
+        EvdevWitness::open()
+    } else {
+        EvdevWitness::unavailable()
+    };
+    witness.forget();
+    let mut armed_at = Instant::now();
     loop {
         if signals.received() {
             let _ = backend.close();
@@ -834,11 +937,44 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
             suspend_for_job_control(&mut backend, || signals.stop_process())?;
             continue;
         }
-        let Some(observed) = backend
+        let next = backend
             .next_event(options.events_all)
-            .map_err(ListenError::Message)?
-        else {
-            continue;
+            .map_err(ListenError::Message)?;
+        witness.drain();
+        let mut lost_point = None;
+        let observed = match (next, watch_point) {
+            (Some(observed), Some(WatchPoint::ProbeWindow))
+                if observed.disposition == CaptureDisposition::NotDelivered =>
+            {
+                // Only modifiers reached the window. The keyboard knows if a
+                // key was pressed with them: then it was taken above the
+                // window; otherwise this was a modifier tap.
+                match witness
+                    .press_since(armed_at)
+                    .map(|(_, press)| press.clone())
+                {
+                    Some(press) => {
+                        lost_point = watch_point;
+                        press
+                    }
+                    None => observed,
+                }
+            }
+            (Some(observed), _) => observed,
+            (None, Some(WatchPoint::Terminal)) => {
+                let silent = witness
+                    .press_since(armed_at)
+                    .filter(|(at, _)| at.elapsed() >= TERMINAL_GRACE)
+                    .map(|(_, press)| press.clone());
+                match silent {
+                    Some(press) => {
+                        lost_point = watch_point;
+                        press
+                    }
+                    None => continue,
+                }
+            }
+            (None, _) => continue,
         };
         waiting.clear();
         if observed.event_type == KeyEventType::Press && is_cancel_key(&observed) {
@@ -851,12 +987,34 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
             return Ok(());
         }
         backend.close().map_err(ListenError::Io)?;
+        let mut observed = observed;
         // A key that never arrived has nothing to route through the layers.
-        let results = if observed.disposition == CaptureDisposition::NotDelivered {
+        let mut results = if observed.disposition == CaptureDisposition::NotDelivered {
             Vec::new()
         } else {
             snapshot.inspect(&observed, terminal_termios.as_ref())
         };
+        if let Some(point) = lost_point {
+            let name = point_name(&results, point, "the compositor");
+            if !judge_lost(
+                &mut results,
+                &mut observed,
+                point,
+                name,
+                TERMINAL_GRACE,
+                || terminal_has_focus(&snapshot.environment),
+            ) {
+                eprintln!(
+                    "note: the physical keyboard saw a key that this terminal never received, but whykey could not confirm that this terminal was the focused window, so no layer is blamed"
+                );
+                witness.forget();
+                backend
+                    .arm(CapturePolicy::PassThrough)
+                    .map_err(ListenError::Setup)?;
+                armed_at = Instant::now();
+                continue;
+            }
+        }
         let rendered = if options.json {
             if options.ndjson {
                 report::render_ndjson(&observed.combo, &results, Some(&observed))
@@ -885,6 +1043,8 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
         backend
             .arm(CapturePolicy::PassThrough)
             .map_err(ListenError::Setup)?;
+        witness.forget();
+        armed_at = Instant::now();
         if !options.json {
             println!(
                 "\n{}\n",

@@ -1,0 +1,21 @@
+Ctrl+Alt+P
+
+x Ctrl+Alt+P was taken between Hyprland and Ghostty.
+  Hyprland saw the key and Ghostty never received it within 400 ms.
+  Candidates on that span: Fcitx5, Ghostty. The route below shows what each is
+  configured to do with this key.
+  Observed via Hyprland (pass-through).
+
+Route
+  1  Remapper     v  none detected
+  2  Hyprland     v  event received at the compositor                   observed
+  3  Fcitx5       ?  Fcitx5 hotkey TogglePreedit toggles embedded preedit
+  4  Ghostty      ?  no Ghostty binding
+  5  TTY driver   -  not inspected
+  6  Multiplexer  -  not inspected
+  7  Shell        -  not inspected
+
+Confidence  observed: whykey saw the key at Hyprland and watched Ghostty for it:
+            it never arrived. Which candidate took it is not observed.
+
+More  whykey listen -v

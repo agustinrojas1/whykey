@@ -2,6 +2,7 @@ use std::env;
 use std::process::ExitCode;
 
 mod cli;
+mod offer;
 
 #[cfg(test)]
 use cli::{COMMANDS, COMPLETION_SHELLS};
@@ -131,6 +132,7 @@ fn run_inspect(
         target_pid,
         focused,
         instance,
+        no_prompt,
     } = match cli::parse_inspect_arguments(arguments) {
         Ok(parsed) => parsed,
         Err(code) => return code,
@@ -188,6 +190,20 @@ fn run_inspect(
                 &reports,
                 RenderOptions::cli(color, verbose),
             )
+        );
+    }
+
+    if !unavailable {
+        offer::offer_capture(
+            &sequence,
+            &reports,
+            offer::CaptureOffer::detect(
+                no_prompt || has_explicit_target || instance.is_some(),
+                json,
+            ),
+            color,
+            verbose,
+            schema_version,
         );
     }
 

@@ -8,6 +8,7 @@ use crate::schema;
 use crate::style::{self, RenderOptions};
 use serde::Serialize;
 
+mod lost;
 mod view;
 
 #[derive(Serialize)]
@@ -159,8 +160,7 @@ pub fn render_ndjson(
         },
         assessment: NdjsonAssessment {
             confidence: observation_confidence(layers, observed),
-            terminal_reached: observed
-                .is_some_and(|observation| observation.source.confirms_terminal()),
+            terminal_reached: observed.is_some_and(|observation| observation.reached_terminal()),
         },
         observation: observed.and_then(observation_value_v2),
         path: layers
@@ -209,7 +209,7 @@ fn render_json_v2(
         "input": input,
         "assessment": {
             "confidence": observation_confidence(layers, observed),
-            "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
+            "terminal_reached": observed.is_some_and(|observation| observation.reached_terminal()),
         },
         "observation": observed.and_then(observation_value_v2),
         "path": schema::path(layers, observed),
@@ -245,6 +245,12 @@ fn observation_value_v2(observed: &ObservedKey) -> Option<serde_json::Value> {
         }
     }
     Some(value)
+}
+
+/// Whether a static report ends unsure: the verdict is a guess a capture
+/// could settle. `whykey KEY` offers to capture the key then.
+pub fn needs_confirmation(key: &KeyCombo, layers: &[LayerResult]) -> bool {
+    view::is_unsure(key, layers)
 }
 
 pub fn render(key: &KeyCombo, layers: &[LayerResult], verbose: bool) -> String {
@@ -1857,7 +1863,7 @@ fn observation_confidence(layers: &[LayerResult], observed: Option<&ObservedKey>
     }
     confidence_label(
         layers,
-        observed.is_some_and(|observation| observation.source.confirms_terminal()),
+        observed.is_some_and(|observation| observation.reached_terminal()),
     )
 }
 
@@ -2193,6 +2199,7 @@ mod tests {
             alternate_key: None,
             source: crate::listen::CaptureSource::Terminal,
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
+            onward: None,
         };
         let layers = [
             LayerResult::new(
@@ -2244,6 +2251,7 @@ mod tests {
                 path: "/dev/input/event0".into(),
             },
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2281,6 +2289,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::PassedThrough,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2339,6 +2348,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2376,6 +2386,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2415,6 +2426,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2456,6 +2468,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let universal = BindingEvidence {
             scope: crate::layers::BindingScope::Submap("default".into()),
@@ -2722,6 +2735,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         }
     }
 
@@ -2798,6 +2812,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -3143,6 +3158,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::PassedThrough,
+            onward: None,
         };
         let layer = LayerResult::new(
             "Hyprland",
@@ -3677,6 +3693,7 @@ mod tests {
             alternate_key: None,
             source: crate::listen::CaptureSource::ProbeWindow,
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
+            onward: None,
         }
     }
 

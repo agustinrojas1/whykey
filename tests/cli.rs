@@ -276,6 +276,29 @@ fn inspect_rejects_an_invalid_sequence() {
 }
 
 #[test]
+fn no_prompt_is_accepted_by_both_inspect_forms_and_never_blocks_a_piped_run() {
+    // Piped stdin/stdout is not a terminal, so the offer to capture never
+    // appears, with or without the flag.
+    for arguments in [
+        vec!["ctrl+x"],
+        vec!["ctrl+x", "--no-prompt"],
+        vec!["inspect", "ctrl+x", "--no-prompt"],
+    ] {
+        let output = binary()
+            .args(&arguments)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("now to see where it stops"),
+            "{arguments:?} prompted: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_ne!(output.status.code(), Some(2), "{arguments:?} was rejected");
+    }
+}
+
+#[test]
 fn inspect_reports_when_focused_window_is_unavailable() {
     let output = binary()
         .args(["inspect", "ctrl+x", "--focused"])

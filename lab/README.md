@@ -247,6 +247,13 @@ Input sources and what they can prove:
   `whykey.keyboard` virtio-serial port, which `keyboard_relay` in
   `lab/driver.py` relays. The keys are real kernel input events
   (`hyprland-qkbd-*`).
+  Native `listen` also watches the terminal and (as root in the VM) the
+  physical keyboard to say where a key died. The lab's `whykey` runs in a pty
+  that is not a window, so the compositor never focuses "this terminal" and a
+  key whykey sees but its pty never receives is not blamed on a layer: a
+  `note:` line on stderr says so. The "taken between Hyprland and Ghostty"
+  verdict (D-212) needs a focused terminal window and a real input method; it
+  was checked by hand on a Hyprland + Ghostty + Fcitx5 desktop, not in the lab.
 - `xdotool` sends XTEST input on X11. `lab/xgrab.py` confirms over the raw X11
   socket that a daemon holds its grab before input is sent. Two traps:
   `xdotool key Super_L+t` releases Super before `t`, so an sxhkd `@`
