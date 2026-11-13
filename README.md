@@ -1,4 +1,9 @@
-<h1 align="center">whykey</h1>
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo/whykey-lockup-dark.svg">
+    <img src="docs/assets/logo/whykey-lockup.svg" alt="whykey" width="354">
+  </picture>
+</h1>
 
 <p align="center">
   <b>Why didn't my shortcut work?</b><br>
