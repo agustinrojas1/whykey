@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- `inspect --pid` and `--focused` read the termios of the target's terminal
+  for the TTY driver row, not whykey's own. A program in raw mode (vim, less)
+  no longer reads as "IXON consumes Ctrl+S" or "ISIG sends SIGINT" because
+  whykey's shell is cooked. The terminal is read-only (`tcgetattr`), the
+  evidence names the device and the foreground process group, and a terminal
+  that cannot be read answers unknown instead of reusing whykey's own.
+- A configured X11 binding (i3, Openbox, sxhkd, xbindkeys, Cinnamon and the
+  rest) is no longer reported as a confident "not active" pass when the grab
+  probe sees no grab. The probe sees passive key grabs only, so an active
+  keyboard grab, an XRecord or XInput2 raw-event reader, or a grab off the
+  focused window's path can still take the key. The layer now reads
+  "configured, but no passive grab observed; the program may use XI2/active
+  grabs", keeps the binding, and lists what the probe cannot see.
 - A Konsole keytab entry that names an application action
   (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
   consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
