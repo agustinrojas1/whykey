@@ -20,17 +20,53 @@ pub fn inspect_with_byte_status(
     key: &KeyCombo,
     bytes_verified: bool,
 ) -> LayerResult {
-    let pane = tmux_pane_state();
-    let prefixes = tmux_prefixes();
+    inspect_in(&TmuxContext::from_process(), preceding, key, bytes_verified)
+}
+
+/// Which tmux server and pane an inspection speaks to. whykey's own session
+/// (the `$TMUX` it inherited and `$TMUX_PANE`) is the default; `--pid` and
+/// `--focused` name another process, whose server and pane are these.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TmuxContext {
+    /// `-S path` or `-L name`; empty means the server `$TMUX` names.
+    pub server_args: Vec<String>,
+    pub pane: Option<String>,
+}
+
+impl TmuxContext {
+    pub fn from_process() -> Self {
+        Self {
+            server_args: Vec::new(),
+            pane: crate::recording::env_var_os("TMUX_PANE")
+                .map(|pane| pane.to_string_lossy().into_owned()),
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new("tmux");
+        command.args(&self.server_args);
+        command
+    }
+}
+
+/// [`inspect_with_byte_status`] for an explicit tmux server and pane.
+pub fn inspect_in(
+    context: &TmuxContext,
+    preceding: &[KeyCombo],
+    key: &KeyCombo,
+    bytes_verified: bool,
+) -> LayerResult {
+    let pane = tmux_pane_state(context);
+    let prefixes = tmux_prefixes(context);
     let mut details = Vec::new();
-    if let Some(pane) = crate::recording::env_var_os("TMUX_PANE") {
-        details.push(format!("client pane: {}", pane.to_string_lossy()));
+    if let Some(pane) = &context.pane {
+        details.push(format!("client pane: {pane}"));
     }
     let mut cache = HashMap::new();
     let mut tables = |table: &str| {
         cache
             .entry(table.to_owned())
-            .or_insert_with(|| list_keys(table))
+            .or_insert_with(|| list_keys(context, table))
             .clone()
     };
     let mut result = inspect_with_tables(
@@ -311,8 +347,8 @@ fn switch_client_table(action: &str) -> Option<&str> {
         .last()
 }
 
-fn list_keys(table: &str) -> Result<Vec<u8>, String> {
-    let mut command = Command::new("tmux");
+fn list_keys(context: &TmuxContext, table: &str) -> Result<Vec<u8>, String> {
+    let mut command = context.command();
     command.args(["list-keys", "-a", "-T", table]);
     let output = command::output(&mut command).map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -421,11 +457,10 @@ fn is_copy_mode_command(tokens: &[&str]) -> bool {
 
 const PANE_FORMAT: &str = "#{client_key_table}\t#{pane_in_mode}\t#{pane_mode}\t#{mode-keys}";
 
-fn tmux_pane_state() -> PaneState {
-    let mut command = Command::new("tmux");
-    if let Some(pane) = crate::recording::env_var_os("TMUX_PANE") {
-        let pane = pane.to_string_lossy().into_owned();
-        command.args(["display-message", "-p", "-t", &pane, PANE_FORMAT]);
+fn tmux_pane_state(context: &TmuxContext) -> PaneState {
+    let mut command = context.command();
+    if let Some(pane) = &context.pane {
+        command.args(["display-message", "-p", "-t", pane, PANE_FORMAT]);
     } else {
         command.args(["display-message", "-p", PANE_FORMAT]);
     }
@@ -624,11 +659,11 @@ fn tmux_query_key(key: &KeyCombo) -> KeyCombo {
     }
 }
 
-fn tmux_prefixes() -> Vec<String> {
+fn tmux_prefixes(context: &TmuxContext) -> Vec<String> {
     ["prefix", "prefix2"]
         .into_iter()
         .filter_map(|option| {
-            let mut command = Command::new("tmux");
+            let mut command = context.command();
             command.args(["show-options", "-gqv", option]);
             let output = command::output(&mut command).ok()?;
             if !output.status.success() {

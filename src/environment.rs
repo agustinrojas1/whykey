@@ -22,6 +22,12 @@ pub struct Environment {
     pub zellij: bool,
     pub term_program: Option<String>,
     pub tmux_pane: Option<String>,
+    /// `-S path`/`-L name` for a tmux server other than the one `$TMUX`
+    /// names; empty for whykey's own session.
+    pub tmux_server_args: Vec<String>,
+    /// Set when the multiplexer fields describe an explicit target that
+    /// could not be read.
+    pub session_target_note: Option<String>,
     pub screen_session: Option<String>,
     pub zellij_pane: Option<String>,
     pub zellij_session: Option<String>,
@@ -242,6 +248,8 @@ impl Environment {
             zellij,
             term_program: crate::recording::env_var("TERM_PROGRAM").ok(),
             tmux_pane: crate::recording::env_var("TMUX_PANE").ok(),
+            tmux_server_args: Vec::new(),
+            session_target_note: None,
             screen_session: crate::recording::env_var("STY").ok(),
             zellij_pane: crate::recording::env_var("ZELLIJ_PANE_ID").ok(),
             zellij_session: crate::recording::env_var("ZELLIJ_SESSION_NAME").ok(),

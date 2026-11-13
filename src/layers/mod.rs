@@ -13,6 +13,7 @@ pub mod kde;
 pub mod labwc;
 pub mod mate;
 pub mod model;
+pub mod multiplexer_target;
 pub mod niri;
 pub mod openbox;
 pub mod programmable;

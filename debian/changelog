@@ -1,3 +1,13 @@
+whykey (2.5.0) unstable; urgency=medium
+
+  * A layer no longer reports a key as passing through when it did not check
+    every source that can take it (input method, terminal, GNOME, X11, tmux,
+    TTY, compositor).
+  * New: Fcitx5 addon and IBus hotkeys, terminal built-in shortcuts, GNOME
+    Shell extension shortcuts, swhkd, tmux copy mode.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Fri, 13 Nov 2026 18:00:00 -0300
+
 whykey (2.4.1) unstable; urgency=medium
 
   * Packaging release: published to crates.io, a Homebrew tap and the
