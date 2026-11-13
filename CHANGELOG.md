@@ -40,6 +40,12 @@
   others in the details, and downgrades a no-match to uncertain when another
   adapter could not be checked.
 
+- A Konsole keytab entry that names an application action
+  (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
+  consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
+  commands, so such an entry is an unknown outcome. The lab scenarios that
+  claimed otherwise took "a window went fullscreen" from a Sway tree check that
+  was always true; they now check the terminal's own window.
 - An X11 (XWayland) terminal under a Wayland session with Fcitx5's
   input-method-v2 frontend is no longer drawn behind the input method: such a
   terminal (detected by its `$WINDOWID`) reaches Fcitx5 through XIM or a
