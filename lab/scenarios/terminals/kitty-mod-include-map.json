@@ -1,0 +1,21 @@
+{
+  "id": "kitty-mod-include-map",
+  "description": "kitty.conf sets kitty_mod ctrl+alt and includes a file whose map kitty_mod+y launch line runs on ctrl+alt+y; kitty consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "kitty",
+  "files": {
+    "/root/.config/kitty/kitty.conf": ["allow_remote_control no", "include keys.conf", "kitty_mod ctrl+alt"],
+    "/root/.config/kitty/keys.conf": ["map kitty_mod+y launch --type=background sh -c 'touch /tmp/fired'"]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+alt+y"]},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"file": "/tmp/fired"},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["ctrl+alt+y"], "layer": "Kitty", "summary": "consumes"}
+}

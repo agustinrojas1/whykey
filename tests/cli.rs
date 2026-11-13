@@ -2419,6 +2419,72 @@ fn kitty_adapter_is_used_when_terminal_is_kitty() {
 }
 
 #[test]
+fn stock_kitty_without_a_config_file_consumes_its_default_shortcuts() {
+    let base = temp_dir("kitty-stock-cli");
+    fs::create_dir_all(&base).unwrap();
+
+    let output = binary()
+        .args(["--verbose", "ctrl+shift+c"])
+        .env("TERM_PROGRAM", "kitty")
+        .env("XDG_CONFIG_HOME", &base)
+        .env("HOME", &base)
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Kitty consumes the key"), "{text}");
+    assert!(text.contains("Kitty 0.50.0 default"), "{text}");
+    assert!(text.contains("built-in default"), "{text}");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn kitty_mod_in_the_config_applies_to_map_lines_and_defaults() {
+    let base = temp_dir("kitty-mod-cli");
+    let kitty = base.join("kitty");
+    fs::create_dir_all(&kitty).unwrap();
+    fs::write(
+        kitty.join("kitty.conf"),
+        "kitty_mod ctrl+alt\ninclude extra.conf\n",
+    )
+    .unwrap();
+    fs::write(kitty.join("extra.conf"), "map kitty_mod+f12 launch ls\n").unwrap();
+
+    let ask = |key: &str| {
+        let output = binary()
+            .args([key])
+            .env("TERM_PROGRAM", "kitty")
+            .env("XDG_CONFIG_HOME", &base)
+            .env("HOME", &base)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    assert!(ask("ctrl+alt+f12").contains("Kitty consumes the key"));
+    assert!(ask("ctrl+alt+c").contains("Kitty consumes the key"));
+    assert!(!ask("ctrl+shift+c").contains("Kitty consumes the key"));
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn a_terminal_without_an_adapter_is_unknown_not_a_pass() {
+    let output = binary()
+        .args(["--verbose", "ctrl+shift+c"])
+        .env("TERM_PROGRAM", "gnome-terminal")
+        .env("HOME", "/nonexistent")
+        .output()
+        .unwrap();
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Unknown terminal"), "{text}");
+    assert!(text.contains("has no whykey adapter"), "{text}");
+    assert!(
+        !text.contains("not applicable to the current terminal"),
+        "{text}"
+    );
+}
+
+#[test]
 fn alacritty_yaml_adapter_is_used_when_configured() {
     let base = temp_dir("alacritty-cli");
     fs::create_dir_all(&base).unwrap();

@@ -1,0 +1,21 @@
+{
+  "id": "kitty-default-new-os-window",
+  "description": "kitty's built-in ctrl+shift+n opens a second OS window with no map line in kitty.conf, and kitty consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "kitty",
+  "files": {
+    "/root/.config/kitty/kitty.conf": ["allow_remote_control no"]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+shift+n"]},
+    {"sleep": 2},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "test \"$(swaymsg -t get_tree | grep -c '\"app_id\": \"kitty\"')\" -ge 2"},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["ctrl+shift+n"], "layer": "Kitty", "summary": "consumes", "detail": "Kitty 0.50.0 default"}
+}
