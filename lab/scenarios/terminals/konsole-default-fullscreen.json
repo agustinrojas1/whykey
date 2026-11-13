@@ -1,0 +1,23 @@
+{
+  "id": "konsole-default-fullscreen",
+  "description": "Konsole's built-in F11 toggles fullscreen and Konsole consumes the key; the keytab has no F11 entry",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "konsole",
+  "files": {
+    "/root/.config/konsolerc": ["[Desktop Entry]", "DefaultProfile=whykey.profile"],
+    "/root/.local/share/konsole/whykey.profile": ["[General]", "Name=whykey", "[Keyboard]", "KeyBindings=whykey"],
+    "/root/.local/share/konsole/whykey.keytab": ["keyboard \"whykey\"", "key Left +Ctrl : \"\\E[1;5D\""]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["f11"]},
+    {"sleep": 1},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "swaymsg -t get_tree | python3 -c \"import json,sys; t=json.load(sys.stdin); f=lambda n: (n.get('app_id')=='org.kde.konsole' and n.get('fullscreen_mode')==1) or any(f(c) for c in n.get('nodes',[])+n.get('floating_nodes',[])); sys.exit(0 if f(t) else 1)\""},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["f11"], "layer": "Konsole", "summary": "consumes", "detail": "Konsole 26.08.3 default"}
+}

@@ -1,0 +1,23 @@
+{
+  "id": "alacritty-default-font-decrease",
+  "description": "Alacritty's built-in ctrl+minus shrinks the font with no keyboard.bindings entry, and Alacritty consumes the key",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "alacritty",
+  "files": {
+    "/root/.config/alacritty/alacritty.toml": ["[general]", "live_config_reload = true"]
+  },
+  "actions": [
+    {"term_sh": "stty size > /tmp/size-before"},
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+minus"]},
+    {"sleep": 1},
+    {"tty_log": "stop"},
+    {"term_sh": "stty size > /tmp/size-after"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "! cmp -s /tmp/size-before /tmp/size-after"},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["ctrl+minus"], "layer": "Alacritty", "summary": "consumes", "detail": "Alacritty 0.17.0 default"}
+}

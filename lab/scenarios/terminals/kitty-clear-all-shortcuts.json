@@ -1,0 +1,21 @@
+{
+  "id": "kitty-clear-all-shortcuts",
+  "description": "clear_all_shortcuts removes kitty's default ctrl+shift+f11, so the key reaches the program as CSI 23;6~",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "kitty",
+  "files": {
+    "/root/.config/kitty/kitty.conf": ["allow_remote_control no", "clear_all_shortcuts yes"]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+shift+f11"]},
+    {"sleep": 1},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "swaymsg -t get_tree | python3 -c \"import json,sys; t=json.load(sys.stdin); f=lambda n: (n.get('app_id')=='kitty' and n.get('fullscreen_mode')==1) or any(f(c) for c in n.get('nodes',[])+n.get('floating_nodes',[])); sys.exit(0 if f(t) else 1)\""},
+    "delivered": {"tty_input": {"equals": "\\x1b[23;6~"}}
+  },
+  "whykey": {"args": ["ctrl+shift+f11"], "layer": "Kitty"}
+}

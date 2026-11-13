@@ -3242,12 +3242,6 @@ mod tests {
                 "no Kitty binding; forwarded to the terminal input",
                 vec![],
             ),
-            LayerResult::pass(
-                "Ghostty",
-                LayerId::Terminal,
-                "not applicable to the current terminal",
-                vec![],
-            ),
             LayerResult::new(
                 "TTY driver",
                 LayerId::Tty,
@@ -3324,6 +3318,34 @@ mod tests {
         let verbose = render(&key, &unevaluated_byte_layers(), true);
         crate::style::assert_golden(
             "passing_and_inapplicable_layers_are_verbose_only__verbose",
+            &verbose,
+        );
+    }
+
+    /// A terminal whykey has no adapter for is "unknown", never a pass: its
+    /// own key bindings were not read.
+    #[test]
+    fn an_unadapted_terminal_is_unknown_not_a_pass() {
+        let key: KeyCombo = "ctrl+shift+c".parse().unwrap();
+        let (terminal, _) =
+            crate::layers::ghostty::generic_fallback("gnome-terminal", &key, None, None);
+        assert_eq!(terminal.outcome, Outcome::UncertainContinues);
+        let layers = [
+            LayerResult::pass("Hyprland", LayerId::Compositor, "no binding", vec![]),
+            terminal,
+            LayerResult::new(
+                "Shell input",
+                LayerId::Shell,
+                Outcome::Unknown,
+                "terminal byte encoding is unknown; shell line editing unevaluated",
+                vec![],
+            ),
+        ];
+        let output = render_wide("ctrl+shift+c", &layers);
+        crate::style::assert_golden("an_unadapted_terminal_is_unknown_not_a_pass", &output);
+        let verbose = render(&key, &layers, true);
+        crate::style::assert_golden(
+            "an_unadapted_terminal_is_unknown_not_a_pass__verbose",
             &verbose,
         );
     }

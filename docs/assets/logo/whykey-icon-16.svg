@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" role="img" aria-label="whykey">
+  <rect x="1" y="2" width="5" height="3" rx="1" fill="#1f2328"/>
+  <rect x="10" y="2" width="5" height="3" rx="1" fill="#1f2328"/>
+  <rect x="7" y="0" width="2" height="8" fill="#1f2328"/>
+  <path d="M4,7 H12 L8,11 Z" fill="#1f2328"/>
+  <rect x="1" y="12" width="14" height="3" rx="1" fill="#cf222e"/>
+</svg>

@@ -68,7 +68,7 @@ pub(crate) fn with_default_encoding(
             (layer, Some(TerminalInput::predicted(normal, description)))
         }
         KeyEncoding::DeadKey(keysym) => {
-            if composes && layer.outcome == Outcome::Pass {
+            if composes && matches!(layer.outcome, Outcome::Pass | Outcome::UncertainContinues) {
                 layer.outcome = Outcome::Consumed;
                 layer.summary =
                     "starts dead-key composition; no bytes are sent until the next key".into();
@@ -88,6 +88,9 @@ pub(crate) fn with_default_encoding(
         KeyEncoding::Unmodeled => (layer, None),
     }
 }
+
+/// Name of the terminal layer when no adapter models the terminal.
+pub(crate) const UNKNOWN_TERMINAL: &str = "Unknown terminal";
 
 pub struct Ghostty {
     config_path: PathBuf,
@@ -262,26 +265,34 @@ impl ConfigState {
     }
 }
 
-/// Analysis for a terminal that is not Ghostty: no bindings to inspect, but
-/// the terminal still emits its normal encoding, including AltGr level-3
-/// text and dead-key composition.
-fn generic_fallback(
+/// Analysis for a terminal that has no adapter (anything but Ghostty, kitty,
+/// Alacritty, foot, WezTerm and Konsole): its own key bindings cannot be
+/// read, so whether it takes the key is unknown. The key most likely
+/// continues, and the terminal still emits its normal encoding, including
+/// AltGr level-3 text and dead-key composition.
+pub(crate) fn generic_fallback(
     program: &str,
     key: &KeyCombo,
     protocol_flags: Option<u32>,
     layout: Option<&KeyboardLayout>,
 ) -> (LayerResult, Option<TerminalInput>) {
-    let detail = if program == "terminal identity unknown" {
-        "terminal identity is unavailable; Ghostty bindings were skipped".into()
+    let identity = if program == "terminal identity unknown" {
+        "the terminal identity is unavailable".to_owned()
+    } else if matches!(program.to_ascii_lowercase().as_str(), "tmux" | "screen") {
+        format!("running inside {program}; the terminal around it is not identified")
     } else {
-        format!("TERM_PROGRAM={program}; Ghostty bindings were skipped")
+        format!("the terminal ({program}) has no whykey adapter")
     };
     let layer = LayerResult::new(
-        "Ghostty",
+        UNKNOWN_TERMINAL,
         LayerId::Terminal,
-        Outcome::Pass,
-        "not applicable to the current terminal",
-        vec![detail],
+        Outcome::UncertainContinues,
+        "terminal key bindings are unknown; the key most likely continues",
+        vec![
+            identity,
+            "whykey reads key bindings for Ghostty, kitty, Alacritty, foot, WezTerm and Konsole only"
+                .into(),
+        ],
     );
     let description = if program == "terminal identity unknown" {
         "generic terminal fallback; terminal identity is unknown".into()
@@ -1416,7 +1427,8 @@ xkb_symbols "pc" {
         };
         let (layer, input) =
             generic_fallback("tern", &"altgr+q".parse().unwrap(), None, Some(&layout));
-        assert_eq!(layer.outcome, Outcome::Pass);
+        assert_eq!(layer.outcome, Outcome::UncertainContinues);
+        assert_eq!(layer.layer, UNKNOWN_TERMINAL);
         assert_eq!(input.expect("level-3 text bytes").bytes, "ä".as_bytes());
 
         let (layer, input) = generic_fallback(
