@@ -11,6 +11,17 @@
   `swallow`-mode case stays uncertain. It is listed as unverified: no lab
   scenario runs swhkd yet.
 
+### Changed
+
+- The "Supported environments" table in the README is generated from
+  `support-matrix.json` (`programs`), so it cannot claim more than the lab has
+  shown. ✅ means a lab scenario for that program passed, 🟡 that only an X11
+  grab-probe verdict or a hand check backs it, ⚪ that nothing does. Cinnamon,
+  Xfce, MATE, Openbox, AwesomeWM, Qtile, XMonad and xbindkeys moved from ✅ to
+  🟡; Emacs, Vim, Helix, Kakoune and Micro from 🟡 to ⚪ (their lab scenarios
+  are not credited to any matrix entry yet); Neovim is 🟡 (hand check).
+  SUPPORT_MATRIX.md lists the same programs with their scenario counts.
+
 ### Fixed
 
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is

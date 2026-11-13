@@ -108,3 +108,60 @@ fixtures pass.
 - `terminal.dedicated`: `alacritty-alt-x`, `alacritty-command-shortcut`, `alacritty-ctrl-left`, `alacritty-default-font-decrease`, `foot-alt-x`, `foot-ctrl-left`, `foot-default-font-increase`, `foot-pipe-shortcut`, `ghostty-ctrl-left`, `ghostty-fullscreen-shortcut`, `kitty-alt-x`, `kitty-clear-all-shortcuts`, `kitty-ctrl-left`, `kitty-default-new-os-window`, `kitty-launch-shortcut`, `kitty-mod-include-map`, `konsole-ctrl-left`, `konsole-default-fullscreen`, `wezterm-alt-x`, `wezterm-callback-shortcut`, `wezterm-ctrl-left`
 - `shell.runtime-snapshot`: `bash-alt-f-init`, `bash-default-transpose-init`, `bash-unbound-shift-up-init`, `bash-user-bind-init`, `fish-default-transpose-init`, `fish-preset-alt-left-init`, `fish-user-bind-init`, `fish-vi-default-mode-bind-init`, `fish-vi-insert-bind-init`, `tmux-fish-vi-insert-bind`, `tmux-zsh-user-bind`, `zsh-bind-before-vi-init`, `zsh-default-transpose-init`, `zsh-unbound-ctrl-left-init`, `zsh-user-bind-init`, `zsh-vi-user-bind-init`
 - `session.multiplexers`: `screen-prefix-fish`, `tmux-prefix`, `tmux-prefix-before-pane-tty`, `tmux-prefix-dash`, `tmux-prefix-escaped-percent`, `tmux-prefix-escaped-semicolon`, `tmux-prefix-lowercase`, `tmux-prefix-uppercase`, `tmux-prefix-zsh`, `tmux-root-alt-escape`, `tmux-root-bind`, `tmux-root-btab`, `tmux-root-quoted-brace`, `tmux-unbound`, `zellij-default-alt-n`, `zellij-locked-normal-bind`, `zellij-pane-mode-bind`, `zellij-pane-mode-only-bind`, `zellij-unbound-ctrl-k`
+
+## Programs
+
+✅ lab-verified, 🟡 in part, ⚪ unverified. The README's
+table is this list; a program counts only through the lab scenarios
+recorded on its capability entries above.
+
+| Group | Program | Status | Lab scenarios | Capability entries |
+| --- | --- | --- | --- | --- |
+| Wayland compositors | Hyprland | ✅ | 37 | `compositor.hyprland` |
+| Wayland compositors | Sway | ✅ | 18 | `compositor.sway` |
+| Wayland compositors | Wayfire | ✅ | 8 | `compositor.wayfire` |
+| Wayland compositors | labwc | ✅ | 2 | `compositor.labwc` |
+| Wayland compositors | dwl | ✅ | 2 | `compositor.dwl` |
+| Wayland compositors | Niri | ✅ | 3 | `compositor.niri` |
+| Wayland compositors | River | ⚪ | 0 | `compositor.river` |
+| Desktops | GNOME | ✅ | 8 | `compositor.gnome`, `compositor.gnome-gsettings` |
+| Desktops | KDE Plasma | ✅ | 8 + 2 binding-only | `compositor.kde`, `compositor.kglobalaccel-runtime` |
+| Desktops | Cinnamon | 🟡 | 0 + 2 binding-only | `compositor.cinnamon` |
+| Desktops | Xfce | 🟡 | 0 + 1 binding-only | `compositor.xfce` |
+| Desktops | MATE | 🟡 | 0 + 1 binding-only | `compositor.mate` |
+| X11 window managers and hotkey daemons | i3 | ✅ | 5 + 4 binding-only | `compositor.i3` |
+| X11 window managers and hotkey daemons | Openbox | 🟡 | 0 + 1 binding-only | `compositor.openbox` |
+| X11 window managers and hotkey daemons | AwesomeWM | 🟡 | 0 + 1 binding-only | `compositor.programmable-x11` |
+| X11 window managers and hotkey daemons | Qtile | 🟡 | 0 + 1 binding-only | `compositor.programmable-x11` |
+| X11 window managers and hotkey daemons | XMonad | 🟡 | 0 + 1 binding-only | `compositor.programmable-x11` |
+| X11 window managers and hotkey daemons | sxhkd | ✅ | 2 + 6 binding-only | `compositor.bspwm-sxhkd` |
+| X11 window managers and hotkey daemons | xbindkeys | 🟡 | 0 + 1 binding-only | `compositor.x11.xbindkeys` |
+| X11 window managers and hotkey daemons | herbstluftwm | ⚪ | 0 | `compositor.herbstluftwm` |
+| Key remappers | keyd | ✅ | 5 | `remapper.pre-compositor` |
+| Key remappers | kanata | ✅ | 2 | `remapper.pre-compositor` |
+| Key remappers | xremap | ✅ | 2 | `remapper.pre-compositor` |
+| Key remappers | kmonad | ✅ | 1 | `remapper.pre-compositor` |
+| Key remappers | input-remapper | ✅ | 1 | `remapper.pre-compositor` |
+| Key remappers | swhkd | ⚪ | 0 | `remapper.pre-compositor` |
+| Input methods | Fcitx5 | ✅ | 4 | `input.ime-context`, `input.ime-runtime-engine` |
+| Input methods | IBus | ✅ | 2 | `input.ime-context`, `input.ime-runtime-engine` |
+| Terminals | kitty | ✅ | 6 | `terminal.dedicated` |
+| Terminals | Alacritty | ✅ | 4 | `terminal.dedicated` |
+| Terminals | foot | ✅ | 4 | `terminal.dedicated` |
+| Terminals | WezTerm | ✅ | 3 | `terminal.dedicated` |
+| Terminals | Konsole | ✅ | 2 | `terminal.dedicated` |
+| Terminals | Ghostty | ✅ | 2 | `terminal.dedicated` |
+| Multiplexers | tmux | ✅ | 13 | `session.multiplexers` |
+| Multiplexers | GNU Screen | ✅ | 1 | `session.multiplexers` |
+| Multiplexers | Zellij | ✅ | 5 | `session.multiplexers` |
+| Shells | bash | ✅ | 4 | `shell.runtime-snapshot` |
+| Shells | zsh | ✅ | 6 | `shell.runtime-snapshot` |
+| Shells | fish | ✅ | 6 | `shell.runtime-snapshot` |
+| Editors | Neovim | 🟡 | 0 (live: whykey-nvim answering from a running nvim) | `cli.extensions` |
+| Editors | Emacs | ⚪ | 0 | `cli.extensions` |
+| Editors | Vim | ⚪ | 0 | none |
+| Editors | Helix | ⚪ | 0 | none |
+| Editors | Kakoune | ⚪ | 0 | none |
+| Editors | Micro | ⚪ | 0 | none |
+| Editors | VS Code | ⚪ | 0 | none |
+| Editors | JetBrains | ⚪ | 0 | none |
