@@ -46,6 +46,8 @@
   commands, so such an entry is an unknown outcome. The lab scenarios that
   claimed otherwise took "a window went fullscreen" from a Sway tree check that
   was always true; they now check the terminal's own window.
+- With no input method detected, the Input method row of the route table says
+  "none detected" instead of "not inspected": whykey did look.
 - A tmux pane in copy mode is read from tmux: keys resolve in the `copy-mode`
   or `copy-mode-vi` table (by `mode-keys`) and the evidence names it, instead
   of `q`, `Space` or `Enter` being reported as passing to the application. A

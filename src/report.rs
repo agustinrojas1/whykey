@@ -3466,6 +3466,24 @@ mod tests {
     }
 
     #[test]
+    fn no_input_method_layer_reads_none_detected_not_not_inspected() {
+        // Input-method detection runs for every command; no layer means it
+        // found no input method, which is a finding, not a gap.
+        let layers = [LayerResult::pass(
+            "Terminal",
+            LayerId::Terminal,
+            "no terminal binding matched",
+            vec![],
+        )];
+        let table = route_table(&render_wide("ctrl+x", &layers));
+        let row = table
+            .iter()
+            .find(|(name, _)| name == "Input method")
+            .unwrap();
+        assert_eq!(row.1, "none detected", "{table:?}");
+    }
+
+    #[test]
     fn rows_after_an_unavailable_layer_stay_not_inspected() {
         let layers = [LayerResult::unavailable(
             "Compositor",
