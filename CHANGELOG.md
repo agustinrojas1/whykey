@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- swhkd is now detected while it runs, and its `swhkdrc` (with `include`,
+  `ignore`, `mode`/`endmode`, `~` and `@`) is read for the queried key. swhkd
+  grabs the keyboards' evdev devices, so a binding takes the key in the
+  remapper row, before the compositor. A `~`, mode, `ignore`d or
+  `swallow`-mode case stays uncertain. It is listed as unverified: no lab
+  scenario runs swhkd yet.
+
 ### Fixed
 
 - `inspect --pid` and `--focused` read the termios of the target's terminal
@@ -24,6 +33,13 @@
   read, a miss is reported as uncertain instead of "no GNOME shortcut uses
   this key". A miss also notes that xdg-desktop-portal GlobalShortcuts
   registrations cannot be listed.
+- Only the best-scored compositor or hotkey adapter was inspected, so a key
+  grabbed by a second one (a Wayland session also running a configured
+  hotkey adapter) read as a clean pass. whykey now inspects every other
+  applicable adapter too, reports a binding the selected one lacks, names the
+  others in the details, and downgrades a no-match to uncertain when another
+  adapter could not be checked.
+
 - With no input method detected, the Input method row of the route table says
   "none detected" instead of "not inspected": whykey did look.
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
