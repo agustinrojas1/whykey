@@ -14,9 +14,12 @@ const MAX_CONTINUATIONS: usize = 4;
 
 /// Built-in Readline defaults, regenerated from bash 5.3.9(1)-release
 /// (GNU Readline 8.3) in the lab image with
-/// `env -i HOME=/tmp/e INPUTRC=/dev/null bash --norc --noprofile -i -c 'bind -p'`
+/// `env -i HOME=/tmp/e TERM=xterm-256color INPUTRC=/dev/null bash --norc --noprofile -i -c 'bind -p'`
 /// (`set -o vi` first for the vi-insert table; `bind -s` lists no macros).
 /// Only `self-insert` lines are left out: a printable key inserts itself.
+/// `lab/defaults/readline-*.txt` hold that dump and a unit test compares it
+/// with this table; refresh it with `python3 tools/dump_defaults.py dump
+/// readline-emacs readline-vi-insert`.
 /// `\C-x` and `\e` are prefix keys: they are unbound on their own.
 const EMACS_DEFAULTS: &[(&str, &str)] = &[
     (r#"\C-g"#, "abort"),
@@ -1285,6 +1288,26 @@ mod tests {
     fn inspect(keymap: &Keymap, keys: &[&[u8]]) -> LayerResult {
         let inputs: Vec<_> = keys.iter().map(|bytes| key(bytes)).collect();
         evaluate(keymap, &inputs)
+    }
+
+    /// The tables are the `bind -p` of the real bash (`lab/defaults`, from
+    /// `tools/dump_defaults.py`), not a copy of the notes about it.
+    #[test]
+    fn default_tables_equal_the_dump_of_the_real_bash() {
+        for (program, table) in [
+            ("readline-emacs", EMACS_DEFAULTS),
+            ("readline-vi-insert", VI_INSERT_DEFAULTS),
+        ] {
+            let Some(fixture) = crate::defaults_fixtures::load(program) else {
+                return;
+            };
+            assert_eq!(fixture.version, "5.3.9", "{program}: refresh the table too");
+            let embedded: Vec<_> = table
+                .iter()
+                .map(|(keys, function)| ((*keys).to_owned(), (*function).to_owned()))
+                .collect();
+            crate::defaults_fixtures::assert_same_rows(program, &embedded, &fixture);
+        }
     }
 
     #[test]

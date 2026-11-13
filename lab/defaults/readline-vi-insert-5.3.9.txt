@@ -1,0 +1,44 @@
+# whykey default-bindings fixture; regenerate with tools/dump_defaults.py
+# program: readline-vi-insert
+# version: 5.3.9
+# source: docker whykey-lab-base
+# command: env -i HOME=/tmp/e TERM=xterm-256color INPUTRC=/dev/null bash --norc --noprofile -i -c 'set -o vi; bind -p' 2>/dev/null
+\C-j	accept-line
+\C-m	accept-line
+\eOD	backward-char
+\e[D	backward-char
+\C-h	backward-delete-char
+\C-?	backward-delete-char
+\e[1;3D	backward-word
+\e[1;5D	backward-word
+\eOH	beginning-of-line
+\e[H	beginning-of-line
+\e[200~	bracketed-paste-begin
+\C-i	complete
+\e[3~	delete-char
+\eOF	end-of-line
+\e[F	end-of-line
+\eOC	forward-char
+\e[C	forward-char
+\C-s	forward-search-history
+\e[1;3C	forward-word
+\e[1;5C	forward-word
+\e[5~	history-search-backward
+\e[6~	history-search-forward
+\e[3;5~	kill-word
+\C-n	menu-complete
+\C-p	menu-complete-backward
+\eOB	next-history
+\e[B	next-history
+\e[2~	overwrite-mode
+\eOA	previous-history
+\e[A	previous-history
+\C-v	quoted-insert
+\C-r	reverse-search-history
+\C-t	transpose-chars
+\C-u	unix-line-discard
+\C-d	vi-eof-maybe
+\e	vi-movement-mode
+\C-_	vi-undo
+\C-w	vi-unix-word-rubout
+\C-y	yank

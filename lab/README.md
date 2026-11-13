@@ -417,6 +417,27 @@ Logs of the started programs are in `/tmp/lab-logs` inside the container.
 The kept container's name is printed at the end of the run. Remove it with
 `docker rm -f` when you are done.
 
+## Default-binding fixtures
+
+whykey embeds tables of upstream default bindings (bash Readline, kitty, foot,
+Ghostty's performable list, Fcitx5's hotkeys). `lab/defaults/<program>-<version>.txt`
+holds what the real binary reports for the same data, and a unit test compares
+each table with its fixture (`cargo test`, no Docker). Refresh after a lab image
+or an upstream update:
+
+```sh
+python3 tools/dump_defaults.py list
+python3 tools/dump_defaults.py dump              # every program, in its lab image
+python3 tools/dump_defaults.py dump --check      # exit 1 on drift, write nothing
+python3 tools/dump_defaults.py dump --source host foot
+```
+
+The header of a fixture records the program, the version the binary reported
+and the command. `--source host` runs the command on the host, for a program
+whose lab image carries another version than the table was written for (foot
+1.28.0 is on the host, the image has 1.27.0). Alacritty and Konsole cannot list
+their defaults, so their tables are not checked; their doc comments say so.
+
 ## Mutation check
 
 `lab/mutate.py` shows which scenarios catch a deliberate whykey bug. A

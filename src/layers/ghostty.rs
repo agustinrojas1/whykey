@@ -625,6 +625,11 @@ fn parse_cli_keybinds(output: &str) -> Option<ConfigState> {
 /// when the action has nothing to act on (no selection to copy or adjust, no
 /// search to end, no second tab or split, ...). Written as
 /// `ghostty +list-keybinds --plain` prints them.
+///
+/// The listing does not print the `performable:` flag, so only the *rows* are
+/// checked against the binary (`lab/defaults/ghostty-*.txt`, from
+/// `ghostty +list-keybinds --default --plain`): each must be a real default.
+/// Which defaults are performable stays read from the source.
 const PERFORMABLE_DEFAULTS: &[&str] = &[
     "ctrl+shift+c=copy_to_clipboard:mixed",
     "ctrl+shift+v=paste_from_clipboard",
@@ -632,10 +637,6 @@ const PERFORMABLE_DEFAULTS: &[&str] = &[
     "shift+arrow_right=adjust_selection:right",
     "shift+arrow_up=adjust_selection:up",
     "shift+arrow_down=adjust_selection:down",
-    "shift+page_up=adjust_selection:page_up",
-    "shift+page_down=adjust_selection:page_down",
-    "shift+home=adjust_selection:home",
-    "shift+end=adjust_selection:end",
     "ctrl+shift+arrow_left=previous_tab",
     "ctrl+shift+arrow_right=next_tab",
     "ctrl+page_up=previous_tab",
@@ -671,7 +672,6 @@ const PERFORMABLE_DEFAULTS: &[&str] = &[
     "alt+digit_6=goto_tab:6",
     "alt+digit_7=goto_tab:7",
     "alt+digit_8=goto_tab:8",
-    "alt+digit_9=last_tab",
 ];
 
 fn is_performable_default(value: &str) -> bool {
@@ -1742,6 +1742,30 @@ xkb_symbols "pc" {
         let key: KeyCombo = "ctrl+a".parse().unwrap();
         let result = inspect_config(&key, Path::new("/tmp/config"), &config, None);
         assert_eq!(result.outcome, Outcome::HandledUncertain);
+    }
+
+    /// A performable default that Ghostty does not register is a row that can
+    /// never match; a real default missing here is a key reported as
+    /// consumed when the program receives it.
+    #[test]
+    fn performable_defaults_are_defaults_of_the_real_ghostty() {
+        let Some(fixture) = crate::defaults_fixtures::load("ghostty") else {
+            return;
+        };
+        let listing: Vec<String> = fixture
+            .rows
+            .iter()
+            .map(|(trigger, action)| format!("{trigger}={action}"))
+            .collect();
+        let missing: Vec<_> = PERFORMABLE_DEFAULTS
+            .iter()
+            .filter(|row| !listing.iter().any(|real| real == *row))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "not defaults in Ghostty {}: {missing:#?}",
+            fixture.version
+        );
     }
 
     #[test]
