@@ -46,6 +46,8 @@
   commands, so such an entry is an unknown outcome. The lab scenarios that
   claimed otherwise took "a window went fullscreen" from a Sway tree check that
   was always true; they now check the terminal's own window.
+- With no input method detected, the Input method row of the route table says
+  "none detected" instead of "not inspected": whykey did look.
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
   rest) are now read from `fcitx5/config`, with Fcitx5's defaults when a
   section is absent. Fcitx5 takes these even while the input method is

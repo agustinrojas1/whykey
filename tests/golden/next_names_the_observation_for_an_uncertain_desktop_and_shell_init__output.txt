@@ -8,7 +8,7 @@ Route
   2  Hyprland      ?  Hyprland IPC is unavailable; effective binding state is
                       unknown
   3  Terminal      -  not inspected
-  4  Input method  -  not inspected
+  4  Input method  v  none detected
   5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected
   7  bash          ?  transpose-chars                        default, unverified
