@@ -46,6 +46,8 @@
   commands, so such an entry is an unknown outcome. The lab scenarios that
   claimed otherwise took "a window went fullscreen" from a Sway tree check that
   was always true; they now check the terminal's own window.
+- With no input method detected, the Input method row of the route table says
+  "none detected" instead of "not inspected": whykey did look.
 - An X11 (XWayland) terminal under a Wayland session with Fcitx5's
   input-method-v2 frontend is no longer drawn behind the input method: such a
   terminal (detected by its `$WINDOWID`) reaches Fcitx5 through XIM or a
