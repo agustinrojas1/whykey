@@ -635,7 +635,7 @@ fn inspect_default_chain_inner_without_remapper(
     // visible in verbose and JSON output.
     if !session.ime.is_empty()
         && !acc.append(
-            crate::ime::inspect_with_detections(&session.ime),
+            crate::ime::inspect_key(key, &session.ime),
             ContinuationPolicy::StopOnTerminalInterception,
         )
     {

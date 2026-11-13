@@ -4,6 +4,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::command;
+use crate::key::KeyCombo;
 use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Read-only input-method context discovered from the current session.
@@ -164,8 +165,253 @@ pub fn inspect() -> LayerResult {
     inspect_with_detections(&detections)
 }
 
+/// Fcitx5's global hotkeys: the `[Hotkey/<name>]` section in
+/// `fcitx5/config`, the built-in default used when the section is absent,
+/// and what the hotkey does. Fcitx5 acts on these before any engine sees the
+/// key, so it takes them even while the input method is inactive.
+const FCITX5_HOTKEYS: &[(&str, &[&str], &str)] = &[
+    (
+        "TriggerKeys",
+        &["Control+space", "Zenkaku_Hankaku", "Hangul"],
+        "toggles the input method",
+    ),
+    (
+        "AltTriggerKeys",
+        &["Shift_L"],
+        "temporarily toggles the input method",
+    ),
+    ("ActivateKeys", &[], "activates the input method"),
+    ("DeactivateKeys", &[], "deactivates the input method"),
+    (
+        "EnumerateForwardKeys",
+        &[],
+        "switches to the next input method",
+    ),
+    (
+        "EnumerateBackwardKeys",
+        &[],
+        "switches to the previous input method",
+    ),
+    (
+        "EnumerateGroupForwardKeys",
+        &["Super+space"],
+        "switches to the next input method group",
+    ),
+    (
+        "EnumerateGroupBackwardKeys",
+        &["Shift+Super+space"],
+        "switches to the previous input method group",
+    ),
+    (
+        "TogglePreedit",
+        &["Control+Alt+P"],
+        "toggles embedded preedit",
+    ),
+];
+
+/// Hotkeys whose effect depends on the current state (activating an
+/// already-active input method does nothing), so taking the key is not
+/// certain.
+const FCITX5_STATE_DEPENDENT: &[&str] = &["ActivateKeys", "DeactivateKeys"];
+
+const HOTKEYS_NOT_INSPECTED: &str = "input-method hotkeys (trigger/switch keys) were not inspected";
+
+/// A Fcitx5 global hotkey bound to the queried key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Fcitx5Hotkey {
+    name: &'static str,
+    binding: String,
+    action: &'static str,
+    /// Line in the config file; `None` when the binding is Fcitx5's
+    /// built-in default.
+    line: Option<u32>,
+}
+
+/// `[Hotkey/<name>]` sections of a Fcitx5 config, keyed by name, with each
+/// binding's line number. A present but empty section clears the hotkey; an
+/// absent one keeps the default.
+fn fcitx5_configured_hotkeys(config: &str) -> BTreeMap<String, Vec<(String, u32)>> {
+    let mut sections: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for (number, line) in (1..).zip(config.lines()) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            current = name.strip_prefix("Hotkey/").map(str::to_owned);
+            if let Some(name) = &current {
+                sections.entry(name.clone()).or_default();
+            }
+            continue;
+        }
+        let (Some(name), Some((index, value))) = (&current, line.split_once('=')) else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"');
+        if index.trim().parse::<u32>().is_ok() && !value.is_empty() {
+            sections
+                .entry(name.clone())
+                .or_default()
+                .push((value.to_owned(), number));
+        }
+    }
+    sections
+}
+
+fn fcitx5_binding_matches(binding: &str, key: &KeyCombo) -> bool {
+    if key.is_alone() {
+        return key
+            .alone_keysyms()
+            .iter()
+            .any(|keysym| keysym.eq_ignore_ascii_case(binding));
+    }
+    binding
+        .parse::<KeyCombo>()
+        .is_ok_and(|parsed| parsed == *key)
+}
+
+/// The Fcitx5 global hotkey bound to `key`, from `config` (the contents of
+/// `fcitx5/config`, or `None` when it could not be read) and the defaults.
+fn fcitx5_hotkey(key: &KeyCombo, config: Option<&str>) -> Option<Fcitx5Hotkey> {
+    let configured = config.map(fcitx5_configured_hotkeys).unwrap_or_default();
+    FCITX5_HOTKEYS.iter().find_map(|(name, defaults, action)| {
+        let bindings: Vec<(String, Option<u32>)> = match configured.get(*name) {
+            Some(bindings) => bindings
+                .iter()
+                .map(|(binding, line)| (binding.clone(), Some(*line)))
+                .collect(),
+            None => defaults
+                .iter()
+                .map(|value| ((*value).to_owned(), None))
+                .collect(),
+        };
+        bindings
+            .into_iter()
+            .find(|(binding, _)| fcitx5_binding_matches(binding, key))
+            .map(|(binding, line)| Fcitx5Hotkey {
+                name,
+                binding,
+                action,
+                line,
+            })
+    })
+}
+
+/// Describe the input-method stage for `key`, including Fcitx5's global
+/// hotkeys, which it takes whatever its runtime state.
+pub fn inspect_key(key: &KeyCombo, detections: &[Detection]) -> LayerResult {
+    let path = detections
+        .iter()
+        .any(|detection| detection.engine == "fcitx5")
+        .then(|| crate::util::config_base().map(|base| base.join("fcitx5/config")))
+        .flatten();
+    let config = path
+        .as_ref()
+        .and_then(|path| crate::recording::read_to_string(path).ok());
+    inspect_with_fcitx5_config(
+        key,
+        detections,
+        path.as_ref()
+            .map(|path| (path.display().to_string(), config)),
+    )
+}
+
+/// As [`inspect_key`], with the Fcitx5 config path and its contents (`None`
+/// when unreadable) already read; `fcitx5` is `None` when Fcitx5 was not
+/// detected.
+fn inspect_with_fcitx5_config(
+    key: &KeyCombo,
+    detections: &[Detection],
+    fcitx5: Option<(String, Option<String>)>,
+) -> LayerResult {
+    let mut result = inspect_with_detections(detections);
+    let Some((path, config)) = fcitx5 else {
+        return result;
+    };
+    let Some(hotkey) = fcitx5_hotkey(key, config.as_deref()) else {
+        let ibus = detections
+            .iter()
+            .any(|detection| detection.engine == "ibus");
+        if !ibus {
+            result
+                .details
+                .retain(|detail| detail != HOTKEYS_NOT_INSPECTED);
+        }
+        result.details.push(format!(
+            "no Fcitx5 global hotkey matches ({}); addon hotkeys (clipboard, unicode, quick phrase) were not inspected",
+            if config.is_some() {
+                format!("read {path}")
+            } else {
+                "built-in defaults".to_owned()
+            }
+        ));
+        return result;
+    };
+    let mut details = vec![match hotkey.line {
+        Some(line) => format!(
+            "binding: [Hotkey/{}] {} ({path}:{line})",
+            hotkey.name, hotkey.binding
+        ),
+        None => format!(
+            "binding: [Hotkey/{}] {} (Fcitx5 default; {path} does not set it)",
+            hotkey.name, hotkey.binding
+        ),
+    }];
+    details.extend(
+        result
+            .details
+            .into_iter()
+            .filter(|detail| detail != HOTKEYS_NOT_INSPECTED),
+    );
+    // A daemon that answered with a focused input context takes its global
+    // hotkeys; without one, the focused window may not talk to Fcitx5.
+    let connected = detections.iter().any(|detection| {
+        detection.engine == "fcitx5"
+            && match detection.state.as_deref() {
+                Some("active" | "inactive") => true,
+                Some("closed") => detection.active_engine.is_some(),
+                _ => false,
+            }
+    });
+    let certain = connected && !FCITX5_STATE_DEPENDENT.contains(&hotkey.name);
+    let summary = format!(
+        "Fcitx5 hotkey {} {}, even while the input method is inactive",
+        hotkey.name, hotkey.action
+    );
+    let action = format!("{} ({})", hotkey.name, hotkey.action);
+    let source = hotkey
+        .line
+        .map(|line| crate::layers::SourceLocation::new(path, Some(line)));
+    LayerResult::new(
+        "Fcitx5",
+        LayerId::Ime,
+        if certain {
+            Outcome::Consumed
+        } else {
+            Outcome::HandledUncertain
+        },
+        summary,
+        details,
+    )
+    .with_binding(crate::layers::BindingEvidence::action(
+        action,
+        crate::layers::BindingScope::Unknown,
+        source,
+    ))
+    .with_tier(if hotkey.line.is_some() {
+        EvidenceTier::ConfigFile
+    } else {
+        EvidenceTier::Default
+    })
+}
+
 /// Describe a previously collected input-method snapshot without rerunning
-/// process scans or runtime queries.
+/// process scans or runtime queries. Hotkeys are not considered; see
+/// [`inspect_key`].
 pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     if detections.is_empty() {
         return LayerResult::new(
@@ -260,7 +506,7 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
     // Every detected daemon reported a runtime state that forwards keys
     // unchanged. Its own global hotkeys (for example the trigger key) are
     // not read, so say so instead of implying they were checked.
-    details.push("input-method hotkeys (trigger/switch keys) were not inspected".into());
+    details.push(HOTKEYS_NOT_INSPECTED.into());
     LayerResult::new(
         "Input method",
         LayerId::Ime,
@@ -591,6 +837,7 @@ fn process_engine(process: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layers::EvidenceTier;
 
     #[test]
     fn detection_shape_is_stable_and_serializable() {
@@ -651,6 +898,113 @@ mod tests {
             no_engine: false,
             text_reconstruction: TextReconstruction::default(),
         }
+    }
+
+    fn with_config(key: &str, detection: Detection, config: Option<&str>) -> LayerResult {
+        let key = if let Some(modifier) = key.strip_suffix(" --alone") {
+            KeyCombo::parse_alone(modifier).unwrap()
+        } else {
+            key.parse().unwrap()
+        };
+        inspect_with_fcitx5_config(
+            &key,
+            &[detection],
+            Some(("/cfg/fcitx5/config".into(), config.map(str::to_owned))),
+        )
+    }
+
+    #[test]
+    fn inactive_fcitx_still_takes_its_default_toggle_preedit_hotkey() {
+        let config =
+            "[Hotkey/TriggerKeys]\n0=Zenkaku_Hankaku\n\n[Behavior]\nActiveByDefault=False\n";
+        let result = with_config(
+            "ctrl+alt+p",
+            fcitx5("keyboard-us", "inactive"),
+            Some(config),
+        );
+
+        assert_eq!(result.layer, "Fcitx5");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(result.tier, Some(EvidenceTier::Default));
+        assert!(result.summary.contains("TogglePreedit"));
+        assert!(result.details[0].contains("Fcitx5 default"));
+        assert!(
+            !result
+                .details
+                .iter()
+                .any(|detail| detail == HOTKEYS_NOT_INSPECTED)
+        );
+        // An unreadable config falls back to the same defaults.
+        assert_eq!(
+            with_config("ctrl+alt+p", fcitx5("keyboard-us", "inactive"), None).outcome,
+            Outcome::Consumed
+        );
+    }
+
+    #[test]
+    fn configured_fcitx5_hotkeys_replace_defaults_and_cite_the_line() {
+        let config =
+            "[Hotkey/TriggerKeys]\n0=Control+Shift+space\n\n[Hotkey/EnumerateGroupForwardKeys]\n";
+        let result = with_config("ctrl+shift+space", fcitx5("pinyin", "active"), Some(config));
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(result.tier, Some(EvidenceTier::ConfigFile));
+        let source = result.binding.as_ref().unwrap().source.as_ref().unwrap();
+        assert_eq!(
+            (source.file.as_str(), source.line),
+            ("/cfg/fcitx5/config", Some(2))
+        );
+
+        // The configured list replaces Control+space; the empty section
+        // clears Super+space.
+        for key in ["ctrl+space", "super+space"] {
+            let result = with_config(key, fcitx5("keyboard-us", "inactive"), Some(config));
+            assert_eq!(result.outcome, Outcome::Pass, "{key}");
+            assert!(
+                result
+                    .details
+                    .iter()
+                    .any(|detail| detail.starts_with("no Fcitx5 global hotkey matches (read "))
+            );
+        }
+    }
+
+    #[test]
+    fn fcitx5_hotkeys_are_uncertain_without_a_focused_context_or_for_state_dependent_keys() {
+        let mut closed = fcitx5("keyboard-us", "closed");
+        closed.active_engine = None;
+        assert_eq!(
+            with_config("ctrl+alt+p", closed, None).outcome,
+            Outcome::HandledUncertain
+        );
+        let config = "[Hotkey/ActivateKeys]\n0=Henkan\n";
+        assert_eq!(
+            with_config("henkan", fcitx5("keyboard-us", "inactive"), Some(config)).outcome,
+            Outcome::HandledUncertain
+        );
+    }
+
+    #[test]
+    fn modifier_only_fcitx5_hotkeys_match_a_lone_modifier() {
+        let result = with_config("shift --alone", fcitx5("keyboard-us", "inactive"), None);
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(result.summary.contains("AltTriggerKeys"));
+        assert_eq!(
+            with_config("shift+a", fcitx5("keyboard-us", "inactive"), None).outcome,
+            Outcome::Pass
+        );
+    }
+
+    #[test]
+    fn hotkeys_are_skipped_when_fcitx5_was_not_detected() {
+        let key: KeyCombo = "ctrl+alt+p".parse().unwrap();
+        let result = inspect_with_fcitx5_config(&key, &[fcitx5("keyboard-us", "inactive")], None);
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail == HOTKEYS_NOT_INSPECTED)
+        );
     }
 
     #[test]
