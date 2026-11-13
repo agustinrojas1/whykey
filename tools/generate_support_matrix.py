@@ -18,6 +18,11 @@ Verification comes from reality, not from fixtures:
               for `compositor.x11-grab`; the adapter's `lab` lists only the
               scenarios its own answer decided (whykey run without DISPLAY,
               or a replay the grab cannot see).
+    lab_tolerated
+              scenarios that passed only as honest uncertainty (PASS~): the
+              program ran, but whykey answered "uncertain" where reality was
+              definite. They are not verification, and they keep the programs
+              that rely on them from being marked fully verified.
     live      what the maintainer verified by hand on a real desktop.
     lab_scope optional: what the lab scenarios do not reach (e.g. GNOME
               Shell, which cannot start in the lab container), shown next to
@@ -84,6 +89,12 @@ LAYER_ENTRIES: dict[str, tuple[str, ...]] = {
     "dwl": ("compositor.dwl",),
     "Input method": ("input.ime-context", "input.ime-runtime-engine"),
     "Input remapper": ("remapper.pre-compositor",),
+    "Vim": ("editor.terminal-apps",),
+    "Helix": ("editor.terminal-apps",),
+    "Kakoune": ("editor.terminal-apps",),
+    "Micro": ("editor.terminal-apps",),
+    # Neovim and Emacs answer through the opt-in extension protocol.
+    "External extension": ("cli.extensions",),
     "Kitty": ("terminal.dedicated",),
     "Alacritty": ("terminal.dedicated",),
     "Foot": ("terminal.dedicated",),
@@ -132,7 +143,7 @@ def load_document() -> dict[str, object]:
         if not isinstance(entry, dict):
             raise SystemExit("support-matrix entries must be objects")
         required = {"id", "area", "implemented", "summary", "lab"}
-        if not required <= set(entry) <= required | {"live", "lab_scope", "lab_binding"}:
+        if not required <= set(entry) <= required | {"live", "lab_scope", "lab_binding", "lab_tolerated"}:
             raise SystemExit(f"invalid support-matrix entry keys: {entry}")
         identifier = entry["id"]
         if not isinstance(identifier, str) or not identifier or identifier in seen:
@@ -141,14 +152,15 @@ def load_document() -> dict[str, object]:
             raise SystemExit(f"invalid text in support-matrix entry: {identifier}")
         if not isinstance(entry["implemented"], bool):
             raise SystemExit(f"invalid implementation flag: {identifier}")
-        for field in ("lab", "lab_binding"):
+        for field in ("lab", "lab_binding", "lab_tolerated"):
             scenarios = entry.get(field, [])
             if not isinstance(scenarios, list) or not all(isinstance(item, str) for item in scenarios):
                 raise SystemExit(f"invalid {field} scenario list: {identifier}")
             if scenarios != sorted(set(scenarios)):
                 raise SystemExit(f"{field} scenarios must be sorted and unique: {identifier}")
-        if "lab_binding" in entry and not entry["lab_binding"]:
-            raise SystemExit(f"empty lab_binding list: {identifier}")
+        for field in ("lab_binding", "lab_tolerated"):
+            if field in entry and not entry[field]:
+                raise SystemExit(f"empty {field} list: {identifier}")
         if "live" in entry and (not isinstance(entry["live"], str) or not entry["live"]):
             raise SystemExit(f"invalid live verification note: {identifier}")
         if "lab_scope" in entry and (not isinstance(entry["lab_scope"], str) or not entry["lab_scope"]):
@@ -156,7 +168,7 @@ def load_document() -> dict[str, object]:
         seen.add(identifier)
     names: set[tuple[str, str]] = set()
     for program in programs:
-        allowed = {"group", "name", "entries", "live"} | set(SELECTORS)
+        allowed = {"group", "name", "entries", "live", "partial"} | set(SELECTORS)
         if not isinstance(program, dict) or not {"group", "name", "entries"} <= set(program) <= allowed:
             raise SystemExit(f"invalid support-matrix program: {program}")
         key = (program["group"], program["name"])
@@ -166,7 +178,7 @@ def load_document() -> dict[str, object]:
         unknown = set(program["entries"]) - seen
         if unknown:
             raise SystemExit(f"program {program['name']} names unknown entries: {sorted(unknown)}")
-        for field in (*SELECTORS, "live"):
+        for field in (*SELECTORS, "live", "partial"):
             if field in program and (not isinstance(program[field], str) or not program[field]):
                 raise SystemExit(f"invalid {field} in program {program['name']}")
     return document
@@ -197,12 +209,19 @@ def program_status(
     program: dict[str, object],
     entries: list[dict[str, object]],
     index: list[dict[str, object]],
-) -> tuple[str, list[str], list[str]]:
-    """(symbol, lab scenarios, binding-only scenarios) of one program."""
+) -> tuple[str, list[str], list[str], list[str]]:
+    """(symbol, exact lab scenarios, binding-only scenarios, tolerated
+    scenarios) of one program.
+
+    Verified (✅) needs a scenario that matched exactly and nothing that
+    weakens it: no selected scenario that passed only as honest uncertainty
+    and no recorded `partial` note. Only tolerated, binding-only or live
+    evidence is partial (🟡)."""
     by_id = {str(entry["id"]): entry for entry in entries}
     credited = [by_id[name] for name in program["entries"]]
     lab = {scenario for entry in credited for scenario in entry["lab"]}
     named = {scenario for entry in credited for scenario in entry.get("lab_binding", [])}
+    soft = {scenario for entry in credited for scenario in entry.get("lab_tolerated", [])}
     selected = [
         str(item["id"])
         for item in index
@@ -213,31 +232,34 @@ def program_status(
     ]
     proven = sorted(set(selected) & lab)
     binding = sorted((set(selected) & named) - lab)
-    if proven:
-        return VERIFIED, proven, binding
-    if binding or program.get("live"):
-        return PARTIAL, [], binding
-    return UNVERIFIED, [], []
+    tolerated = sorted(set(selected) & soft)
+    if proven and not tolerated and not program.get("partial"):
+        return VERIFIED, proven, binding, tolerated
+    if proven or binding or tolerated or program.get("live"):
+        return PARTIAL, proven, binding, tolerated
+    return UNVERIFIED, [], [], []
 
 
-def program_rows(document: dict[str, object]) -> list[tuple[dict[str, object], str, list[str], list[str]]]:
+def program_rows(
+    document: dict[str, object],
+) -> list[tuple[dict[str, object], str, list[str], list[str], list[str]]]:
     entries = document["entries"]
     index = scenario_index()
     rows = []
     for program in document["programs"]:
-        symbol, lab, binding = program_status(program, entries, index)
-        rows.append((program, symbol, lab, binding))
+        symbol, lab, binding, tolerated = program_status(program, entries, index)
+        rows.append((program, symbol, lab, binding, tolerated))
     return rows
 
 
 def readme_table(document: dict[str, object]) -> str:
     groups: dict[str, list[str]] = {}
-    for program, symbol, _, _ in program_rows(document):
+    for program, symbol, *_ in program_rows(document):
         groups.setdefault(str(program["group"]), []).append(f"{symbol} {program['name']}")
     lines = [
         f"{VERIFIED} verified against the real program in the [lab](lab/README.md) ·",
-        f"{PARTIAL} verified in part (the lab scenarios were decided by the X11 grab probe,",
-        "or only checked by hand on the maintainer's machine) ·",
+        f"{PARTIAL} verified in part (some lab scenarios pass only as honest uncertainty, the X11",
+        "grab probe decided the verdict, a known limit applies, or it was only checked by hand) ·",
         f"{UNVERIFIED} not verified: implemented from documentation, configuration files and",
         "fixtures, with no lab scenario or live check behind it",
         "",
@@ -295,33 +317,44 @@ def proven_entries(record: dict[str, object]) -> tuple[set[str], set[str]]:
 
 
 def fold_results(entries: list[dict[str, object]], records: list[dict[str, object]]) -> None:
-    """Fold one lab run into the entries' `lab` and `lab_binding` lists in place."""
+    """Fold one lab run into the entries' `lab`, `lab_binding` and
+    `lab_tolerated` lists in place."""
     known = {str(entry["id"]) for entry in entries}
-    lab = {str(entry["id"]): set(entry["lab"]) for entry in entries}
-    named = {str(entry["id"]): set(entry.get("lab_binding", [])) for entry in entries}
+    fields = ("lab", "lab_binding", "lab_tolerated")
+    held = {
+        field: {str(entry["id"]): set(entry.get(field, [])) for entry in entries}
+        for field in fields
+    }
     for record in records:
         scenario = record.get("scenario")
         if not isinstance(scenario, str):
             raise SystemExit(f"lab result without a scenario id: {record}")
-        proof = record.get("pass") is True and record.get("tolerated") is not True
-        proven, binding = proven_entries(record) if proof else (set(), set())
+        passed = record.get("pass") is True
+        tolerated = passed and record.get("tolerated") is True
+        proven, binding = proven_entries(record) if passed else (set(), set())
         unknown = (proven | binding) - known
         if unknown:
             raise SystemExit(f"lab mapping names unknown matrix entries: {sorted(unknown)}")
+        credit = {
+            "lab": set() if tolerated else proven,
+            "lab_binding": set() if tolerated else binding,
+            "lab_tolerated": (proven | binding) if tolerated else set(),
+        }
         for identifier in known:
-            for scenarios, credited in ((lab, proven), (named, binding)):
-                if identifier in credited:
-                    scenarios[identifier].add(scenario)
+            for field in fields:
+                if identifier in credit[field]:
+                    held[field][identifier].add(scenario)
                 else:
-                    scenarios[identifier].discard(scenario)
+                    held[field][identifier].discard(scenario)
     existing = scenario_ids()
     for entry in entries:
-        entry["lab"] = sorted(lab[str(entry["id"])] & existing)
-        binding = sorted(named[str(entry["id"])] & existing)
-        if binding:
-            entry["lab_binding"] = binding
-        else:
-            entry.pop("lab_binding", None)
+        entry["lab"] = sorted(held["lab"][str(entry["id"])] & existing)
+        for field in ("lab_binding", "lab_tolerated"):
+            kept = sorted(held[field][str(entry["id"])] & existing)
+            if kept:
+                entry[field] = kept
+            else:
+                entry.pop(field, None)
 
 
 def load_results(path: Path) -> list[dict[str, object]]:
@@ -365,6 +398,8 @@ def verification(entry: dict[str, object]) -> str:
         parts.append(
             f"named the grabbing binding in {count(entry['lab_binding'])} where the X11 grab probe decided"
         )
+    if "lab_tolerated" in entry:
+        parts.append(f"passed only as honest uncertainty (PASS~) in {count(entry['lab_tolerated'])}")
     if "live" in entry:
         parts.append(f"live-verified on maintainer machine: {entry['live']}")
     return "; ".join(parts) or "unverified"
@@ -403,7 +438,11 @@ def markdown(entries: list[dict[str, object]], programs: list | None = None) -> 
             f"| `{entry['id']}` | {entry['area']} | {status} | {verification(entry)} | {summary} |"
         )
     lines += ["", "## Lab evidence", ""]
-    verified = [entry for entry in entries if entry["lab"] or "lab_binding" in entry]
+    verified = [
+        entry
+        for entry in entries
+        if entry["lab"] or "lab_binding" in entry or "lab_tolerated" in entry
+    ]
     if not verified:
         lines.append("No lab scenario has been recorded yet.")
     for entry in verified:
@@ -413,6 +452,9 @@ def markdown(entries: list[dict[str, object]], programs: list | None = None) -> 
         if "lab_binding" in entry:
             scenarios = ", ".join(f"`{scenario}`" for scenario in entry["lab_binding"])
             lines.append(f"- `{entry['id']}` (binding only, X11 grab probe decided): {scenarios}")
+        if "lab_tolerated" in entry:
+            scenarios = ", ".join(f"`{scenario}`" for scenario in entry["lab_tolerated"])
+            lines.append(f"- `{entry['id']}` (only as honest uncertainty, PASS~): {scenarios}")
     if programs:
         lines += [
             "",
@@ -425,10 +467,14 @@ def markdown(entries: list[dict[str, object]], programs: list | None = None) -> 
             "| Group | Program | Status | Lab scenarios | Capability entries |",
             "| --- | --- | --- | --- | --- |",
         ]
-        for program, symbol, lab, binding in programs:
+        for program, symbol, lab, binding, tolerated in programs:
             evidence = f"{len(lab)}" if lab else "0"
             if binding:
                 evidence += f" + {len(binding)} binding-only"
+            if tolerated:
+                evidence += f" + {len(tolerated)} only as honest uncertainty"
+            if program.get("partial"):
+                evidence += f" ({program['partial']})"
             if program.get("live") and not lab:
                 evidence += f" (live: {program['live']})"
             names = ", ".join(f"`{name}`" for name in program["entries"]) or "none"
@@ -468,7 +514,7 @@ def main() -> int:
             {
                 scenario
                 for entry in entries
-                for scenario in entry["lab"] + entry.get("lab_binding", [])
+                for scenario in entry["lab"] + entry.get("lab_binding", []) + entry.get("lab_tolerated", [])
             }
             - scenario_ids()
         )

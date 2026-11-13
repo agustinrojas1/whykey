@@ -16,10 +16,12 @@ INDEX = [
 ]
 
 
-def entry(identifier, lab=(), binding=()):
+def entry(identifier, lab=(), binding=(), tolerated=()):
     row = {"id": identifier, "lab": list(lab)}
     if binding:
         row["lab_binding"] = list(binding)
+    if tolerated:
+        row["lab_tolerated"] = list(tolerated)
     return row
 
 
@@ -45,10 +47,39 @@ class ProgramStatus(unittest.TestCase):
         self.assertEqual(self.status(live, entries), gsm.PARTIAL)
         self.assertEqual(self.status({"name": "River", "entries": ["x"]}, entries), gsm.UNVERIFIED)
 
+    def test_a_tolerated_scenario_or_a_partial_note_keeps_it_from_verified(self):
+        program = {"name": "kitty", "entries": ["t"], "layer": "Kitty"}
+        both = [entry("t", lab=["a-bound"], tolerated=["a-bound2"])]
+        index = INDEX + [{"id": "a-bound2", "layers": ["Kitty"], "environment": "terminals"}]
+        self.assertEqual(gsm.program_status(program, both, index)[0], gsm.PARTIAL)
+        self.assertEqual(
+            gsm.program_status({**program, "partial": "x"}, [entry("t", lab=["a-bound"])], INDEX)[0],
+            gsm.PARTIAL,
+        )
+
+    def test_only_tolerated_scenarios_is_partial(self):
+        program = {"name": "kitty", "entries": ["t"], "layer": "Kitty"}
+        self.assertEqual(self.status(program, [entry("t", tolerated=["a-bound"])]), gsm.PARTIAL)
+
+    def test_fold_records_exact_and_tolerated_passes_apart(self):
+        entries = [entry("editor.terminal-apps")]
+        records = [
+            {"scenario": "vim-a", "pass": True, "tolerated": False, "layer": "Vim"},
+            {"scenario": "vim-b", "pass": True, "tolerated": True, "layer": "Vim"},
+        ]
+        real = gsm.scenario_ids
+        gsm.scenario_ids = lambda: {"vim-a", "vim-b"}
+        try:
+            gsm.fold_results(entries, records)
+        finally:
+            gsm.scenario_ids = real
+        self.assertEqual(entries[0]["lab"], ["vim-a"])
+        self.assertEqual(entries[0]["lab_tolerated"], ["vim-b"])
+
     def test_every_program_of_the_manifest_has_a_symbol_and_the_readme_matches(self):
         document = gsm.load_document()
         rows = gsm.program_rows(document)
-        self.assertTrue(all(symbol in (gsm.VERIFIED, gsm.PARTIAL, gsm.UNVERIFIED) for _, symbol, _, _ in rows))
+        self.assertTrue(all(row[1] in (gsm.VERIFIED, gsm.PARTIAL, gsm.UNVERIFIED) for row in rows))
         self.assertEqual(gsm.README.read_text(encoding="utf-8"), gsm.spliced_readme(document))
 
 
