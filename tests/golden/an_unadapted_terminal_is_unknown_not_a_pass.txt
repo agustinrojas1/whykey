@@ -8,7 +8,7 @@ Route
   2  Hyprland          v  no binding
   3  Unknown terminal  ?  terminal key bindings are unknown; the key most likely
                           continues
-  4  Input method      -  not inspected
+  4  Input method      v  none detected
   5  TTY driver        -  not inspected
   6  Multiplexer       -  not inspected
   7  Shell input       ?  terminal byte encoding is unknown; shell line editing

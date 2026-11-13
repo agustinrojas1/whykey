@@ -607,13 +607,16 @@ fn route_rows(
             if group.optional {
                 continue;
             }
-            let remapper = group.ids == [LayerId::Remapper];
+            // Remapper and input-method detection run for every command, and a
+            // layer exists only when it found something: no layer there is a
+            // finding ("none detected"), not a gap in what whykey checked.
+            let none_detected = matches!(group.ids, [LayerId::Remapper] | [LayerId::Ime]);
             rows.push(Row {
                 name: group.generic.to_owned(),
-                mark: if remapper { Mark::Pass } else { Mark::Off },
+                mark: if none_detected { Mark::Pass } else { Mark::Off },
                 outcome: None,
                 from_remapper: false,
-                detail: if remapper {
+                detail: if none_detected {
                     "none detected".into()
                 } else {
                     "not inspected".into()
