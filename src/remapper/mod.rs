@@ -1,4 +1,5 @@
-//! Pre-compositor remappers: keyd, kanata, kmonad, input-remapper, xremap.
+//! Pre-compositor remappers: keyd, kanata, kmonad, input-remapper, xremap,
+//! and the swhkd hotkey daemon, which grabs the same evdev devices.
 //!
 //! Detection finds running daemons and their configuration without opening
 //! input devices. Each configuration is evaluated for the queried key where
@@ -11,6 +12,7 @@ mod keyd;
 pub(crate) mod keys;
 mod kmonad;
 mod sexp;
+mod swhkd;
 mod xremap;
 
 use crate::recording::PathInputs;
@@ -31,7 +33,14 @@ const MAX_CONFIG_FILES: usize = 64;
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 /// Substrings of the virtual keyboards remappers create. An event read from
 /// one was already transformed.
-const VIRTUAL_DEVICE_MARKERS: &[&str] = &["keyd", "kanata", "xremap", "kmonad", "input-remapper"];
+const VIRTUAL_DEVICE_MARKERS: &[&str] = &[
+    "keyd",
+    "kanata",
+    "xremap",
+    "kmonad",
+    "input-remapper",
+    "swhkd",
+];
 /// xremap options that take a separate value argument.
 const XREMAP_VALUE_OPTIONS: &[&str] = &[
     "--device",
@@ -238,6 +247,8 @@ enum Engine {
     InputRemapper(Vec<input_remapper::Preset>),
     /// Each entry is one merged xremap invocation or candidate file.
     Xremap(Vec<xremap::Config>),
+    /// Each entry is one swhkdrc (with its includes) a swhkd process may run.
+    Swhkd(Vec<swhkd::Config>),
 }
 
 /// Configuration files found for one remapper.
@@ -279,6 +290,11 @@ pub fn detect_with_snapshot(snapshot: &crate::util::ProcessSnapshot) -> Vec<Dete
     let mut detections: BTreeMap<String, Detection> = BTreeMap::new();
     for (name, process_names, config_env, defaults) in known_remappers() {
         let pids = snapshot.matching_pids(process_names);
+        // A hotkey daemon that is not running grabs nothing, so its
+        // configuration is looked for only while a process runs.
+        if name == "swhkd" && pids.is_empty() {
+            continue;
+        }
         let located = locate(name, &pids, config_env);
         let mut detection = Detection {
             name: name.to_owned(),
@@ -657,6 +673,10 @@ impl Analysis {
                 .iter()
                 .flat_map(|config| config.evaluate(press))
                 .collect(),
+            Engine::Swhkd(configs) => configs
+                .iter()
+                .flat_map(|config| config.evaluate(press))
+                .collect(),
         }
     }
 
@@ -814,6 +834,15 @@ fn analyze(name: &str, running: bool, located: Located) -> Analysis {
             }
             Engine::Kmonad(configs)
         }
+        "swhkd" => {
+            let mut configs = Vec::new();
+            for group in &groups {
+                for path in &group.paths {
+                    configs.push(swhkd::load(path, group.device_scoped, &mut unreadable));
+                }
+            }
+            Engine::Swhkd(configs)
+        }
         "input-remapper" => {
             let symbols = layout_symbols.as_deref().and_then(|path| {
                 let loaded = read_config(path).and_then(|content| {
@@ -850,11 +879,12 @@ fn analyze(name: &str, running: bool, located: Located) -> Analysis {
         Engine::Kmonad(configs) if configs.is_empty() => Engine::Idle,
         Engine::InputRemapper(presets) if presets.is_empty() => Engine::Idle,
         Engine::Xremap(configs) if configs.is_empty() => Engine::Idle,
+        Engine::Swhkd(configs) if configs.is_empty() => Engine::Idle,
         engine => engine,
     };
     if engine == Engine::Idle && running && unreadable.is_empty() && unevaluated.is_empty() {
         match name {
-            "kanata" | "xremap" | "kmonad" => unevaluated.push(format!(
+            "kanata" | "xremap" | "kmonad" | "swhkd" => unevaluated.push(format!(
                 "no {name} configuration was found for the running process"
             )),
             "input-remapper" => unevaluated.push(
@@ -970,6 +1000,26 @@ fn locate(name: &str, pids: &[u32], config_env: &str) -> Located {
                     None => files_with_extensions("~/.config/xremap", &["yml", "yaml"]),
                 };
                 located.groups.extend(single_file_groups(candidates));
+            }
+        }
+        "swhkd" => {
+            for pid in pids {
+                let (path, device_scoped) = match process_args(*pid) {
+                    Some(args) => swhkd_args(&args),
+                    None => (None, false),
+                };
+                let path = match path {
+                    Some(path) => resolve_process_path(*pid, &path),
+                    None => Ok(swhkd_default_config(config_env)),
+                };
+                match path {
+                    Ok(path) => located.groups.push(Group {
+                        paths: vec![path],
+                        device_scoped,
+                        ..Group::default()
+                    }),
+                    Err(reason) => located.unreadable.push(reason),
+                }
             }
         }
         "kmonad" => {
@@ -1121,6 +1171,42 @@ fn xremap_config_args(args: &[String]) -> (Vec<String>, bool) {
     (paths, device_scoped)
 }
 
+/// swhkd's `-c FILE`, `-cFILE`, `--config FILE` or `--config=FILE`, and
+/// whether `-D/--device` limits the keyboards it grabs.
+fn swhkd_args(args: &[String]) -> (Option<String>, bool) {
+    let mut config = None;
+    let mut device_scoped = false;
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        if arg == "-c" || arg == "--config" {
+            config = iter.next().cloned();
+        } else if let Some(value) = arg.strip_prefix("--config=") {
+            config = Some(value.to_owned());
+        } else if let Some(value) = arg.strip_prefix("-c").filter(|value| !value.is_empty()) {
+            config = Some(value.to_owned());
+        } else if arg.starts_with("-D") || arg == "--device" || arg.starts_with("--device=") {
+            device_scoped = true;
+        }
+    }
+    (config, device_scoped)
+}
+
+/// The swhkdrc swhkd reads without `-c`: `$XDG_CONFIG_HOME/swhkd/swhkdrc`
+/// (`~/.config` when unset), falling back to `/etc/swhkd/swhkdrc` as
+/// `man 1 swhkd` documents. `config_env` overrides both.
+fn swhkd_default_config(config_env: &str) -> PathBuf {
+    if let Some(path) = crate::recording::env_var_os(config_env) {
+        return PathBuf::from(path);
+    }
+    let user =
+        match crate::recording::env_var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+            Some(config) => Some(PathBuf::from(config).join("swhkd/swhkdrc")),
+            None => expand_home("~/.config/swhkd/swhkdrc"),
+        };
+    user.filter(|path| path.recorded_is_file())
+        .unwrap_or_else(|| PathBuf::from("/etc/swhkd/swhkdrc"))
+}
+
 fn process_args(pid: u32) -> Option<Vec<String>> {
     let raw = crate::recording::read(format!("/proc/{pid}/cmdline")).ok()?;
     Some(
@@ -1214,7 +1300,7 @@ fn known_remappers() -> [(
     &'static [&'static str],
     &'static str,
     &'static [&'static str],
-); 5] {
+); 6] {
     [
         (
             "keyd",
@@ -1251,6 +1337,8 @@ fn known_remappers() -> [(
             "XREMAP_CONFIG",
             &["~/.config/xremap"],
         ),
+        // The default swhkdrc is chosen by `swhkd_default_config`.
+        ("swhkd", &["swhkd"], "WHYKEY_SWHKD_CONFIG", &[]),
     ]
 }
 
@@ -1769,6 +1857,66 @@ mod tests {
         // Without the layout, a printable key's position is an assumption.
         let assumed = inspect_detections(&query("ctrl+a"), None, &[xremap], false);
         assert_eq!(assumed.outcome, Outcome::HandledUncertain);
+    }
+
+    const SWHKDRC: &str = "super + Return\n    alacritty\n\n~super + w\n    firefox\n";
+
+    #[test]
+    fn swhkd_binding_consumes_the_key_before_the_compositor() {
+        let swhkd = detection("swhkd", true, &[("swhkdrc", SWHKDRC)]);
+        let result = inspect_detections(
+            &query("super+Return"),
+            None,
+            std::slice::from_ref(&swhkd),
+            true,
+        );
+        assert_eq!(result.layer, LAYER);
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(result.tier, Some(EvidenceTier::ConfigFile));
+        assert!(result.summary.contains("alacritty"), "{}", result.summary);
+        assert_eq!(
+            result
+                .binding
+                .as_ref()
+                .and_then(|binding| binding.source.as_ref())
+                .and_then(|source| source.line),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn swhkd_send_binding_is_uncertain_and_unbound_key_passes() {
+        let swhkd = detection("swhkd", true, &[("swhkdrc", SWHKDRC)]);
+        let send = inspect_detections(&query("super+w"), None, std::slice::from_ref(&swhkd), true);
+        assert_eq!(send.outcome, Outcome::HandledUncertain);
+        let unbound = inspect_detections(&query("super+q"), None, &[swhkd], true);
+        assert_eq!(unbound.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn swhkd_binding_is_conditional_when_no_process_runs() {
+        let swhkd = detection("swhkd", false, &[("swhkdrc", SWHKDRC)]);
+        let result = inspect_detections(&query("super+Return"), None, &[swhkd], true);
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+    }
+
+    #[test]
+    fn swhkd_command_line_gives_config_and_device_scope() {
+        let args = |list: &[&str]| list.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            swhkd_args(&args(&["swhkd", "-c", "/tmp/rc", "-D", "kbd"])),
+            (Some("/tmp/rc".into()), true)
+        );
+        assert_eq!(
+            swhkd_args(&args(&["/usr/bin/swhkd", "--config=/tmp/rc"])),
+            (Some("/tmp/rc".into()), false)
+        );
+        assert_eq!(swhkd_args(&args(&["swhkd"])), (None, false));
+    }
+
+    #[test]
+    fn swhkd_virtual_output_counts_as_remapped_input() {
+        assert!(is_remapper_device("swhkd virtual output"));
     }
 
     #[test]

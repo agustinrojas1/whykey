@@ -2,7 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- swhkd is now detected while it runs, and its `swhkdrc` (with `include`,
+  `ignore`, `mode`/`endmode`, `~` and `@`) is read for the queried key. swhkd
+  grabs the keyboards' evdev devices, so a binding takes the key in the
+  remapper row, before the compositor. A `~`, mode, `ignore`d or
+  `swallow`-mode case stays uncertain. It is listed as unverified: no lab
+  scenario runs swhkd yet.
+
 ### Fixed
+
+- Only the best-scored compositor or hotkey adapter was inspected, so a key
+  grabbed by a second one (a Wayland session also running a configured
+  hotkey adapter) read as a clean pass. whykey now inspects every other
+  applicable adapter too, reports a binding the selected one lacks, names the
+  others in the details, and downgrades a no-match to uncertain when another
+  adapter could not be checked.
 
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
   rest) are now read from `fcitx5/config`, with Fcitx5's defaults when a
