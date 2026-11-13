@@ -4,6 +4,7 @@
 //! GSettings and rebind as soon as a value changes, so `gsettings
 //! list-recursively` reports the configuration the running session uses.
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::command;
@@ -24,6 +25,13 @@ const CUSTOM_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys.custom
 const MEDIA_KEYS_OWNER: &str = "org.gnome.SettingsDaemon.MediaKeys";
 /// Bus name GNOME Shell owns; it grabs the `org.gnome.shell.keybindings` keys.
 const SHELL_OWNER: &str = "org.gnome.Shell";
+/// GNOME Shell's own settings: which extensions are enabled.
+const SHELL_SETTINGS: &str = "org.gnome.shell";
+/// Prefix of the component name of a binding an extension registered.
+const EXTENSION_COMPONENT: &str = "GNOME Shell extension";
+/// The xdg-desktop-portal GlobalShortcuts API only lets an application
+/// register its own shortcuts; no call lists them.
+const PORTAL_NOTE: &str = "shortcuts applications register through the xdg-desktop-portal GlobalShortcuts API cannot be listed, so they are not checked";
 
 /// A keybinding schema, the component that grabs its keys, and the bus name
 /// that component owns while it runs (`None` for mutter, which is the
@@ -233,11 +241,15 @@ struct Binding {
     /// Accelerator as stored in GSettings.
     accelerator: String,
     schema: String,
-    component: &'static str,
+    component: String,
     /// Bus name whose owner grabs this key, when the component is a daemon.
     owner: Option<&'static str>,
     action: String,
     command: Option<String>,
+    /// Registered by a GNOME Shell extension through its own settings. The
+    /// extension's code decides when it grabs the key, so a match is not
+    /// proof the key is consumed.
+    extension: bool,
 }
 
 #[derive(Debug, Default)]
@@ -246,6 +258,11 @@ struct Loaded {
     /// Facts about bindings that could not be compared or schemas that are
     /// not installed.
     notes: Vec<String>,
+    /// Enabled GNOME Shell extensions whose keybindings could not be read;
+    /// while any exist, "no binding matched" is not an answer.
+    unread_extensions: Vec<String>,
+    /// Enabled extensions whose settings were read, for the details.
+    read_extensions: Vec<String>,
 }
 
 fn inspect(
@@ -273,7 +290,28 @@ fn inspect(
         .filter(|binding| binding.combo == *key)
         .collect::<Vec<_>>();
     if matches.is_empty() {
+        if !loaded.read_extensions.is_empty() {
+            details.push(format!(
+                "GNOME Shell extensions read: {}",
+                loaded.read_extensions.join(", ")
+            ));
+        }
         details.extend(loaded.notes);
+        details.push(PORTAL_NOTE.into());
+        if !loaded.unread_extensions.is_empty() {
+            details.extend(loaded.unread_extensions);
+            details.push(
+                "extensions register keys through their own settings or code, so an unread extension may still take this key"
+                    .into(),
+            );
+            return LayerResult::uncertain_continues(
+                LAYER,
+                LayerId::Compositor,
+                "no readable GNOME global shortcut uses this key; some enabled extensions could not be read",
+                details,
+            )
+            .with_tier(EvidenceTier::LiveQuery);
+        }
         return LayerResult::pass(
             LAYER,
             LayerId::Compositor,
@@ -331,8 +369,22 @@ fn inspect(
             );
         }
     }
-    let Some(first) = grabbed.first() else {
+    let Some(first) = grabbed
+        .iter()
+        .find(|binding| !binding.extension)
+        .or_else(|| grabbed.first())
+    else {
         details.extend(loaded.notes);
+        if !loaded.unread_extensions.is_empty() {
+            details.extend(loaded.unread_extensions);
+            return LayerResult::uncertain_continues(
+                LAYER,
+                LayerId::Compositor,
+                "GNOME shortcut is configured but its daemon is not running; some enabled extensions could not be read",
+                details,
+            )
+            .with_tier(EvidenceTier::LiveQuery);
+        }
         return LayerResult::pass(
             LAYER,
             LayerId::Compositor,
@@ -345,7 +397,22 @@ fn inspect(
         "not active while the focused window holds a keyboard-shortcuts inhibitor that the user allowed"
             .into(),
     );
+    // An extension grabs its keys from its own code: it may register them
+    // only when one of its options is on, or only in some shell modes.
+    let (outcome, summary) = if first.extension {
+        details.push(
+            "the extension decides when it grabs this key (its own options and the shell mode); whykey cannot read that"
+                .into(),
+        );
+        (
+            Outcome::HandledUncertain,
+            "a GNOME Shell extension binds this key",
+        )
+    } else {
+        (Outcome::Consumed, "GNOME global shortcut consumes the key")
+    };
     details.extend(loaded.notes);
+    details.extend(loaded.unread_extensions);
     let evidence = BindingEvidence::action(
         first
             .command
@@ -357,17 +424,11 @@ fn inspect(
             None,
         )),
     )
-    .with_dispatcher(first.component)
+    .with_dispatcher(first.component.clone())
     .with_description(first.action.clone());
-    LayerResult::new(
-        LAYER,
-        LayerId::Compositor,
-        Outcome::Consumed,
-        "GNOME global shortcut consumes the key",
-        details,
-    )
-    .with_binding(evidence)
-    .with_tier(EvidenceTier::LiveQuery)
+    LayerResult::new(LAYER, LayerId::Compositor, outcome, summary, details)
+        .with_binding(evidence)
+        .with_tier(EvidenceTier::LiveQuery)
 }
 
 /// Whether a bus name has an owner on the session bus.
@@ -478,6 +539,7 @@ fn load() -> Result<Loaded, String> {
             );
         }
     }
+    load_extensions(&mut loaded);
     Ok(loaded)
 }
 
@@ -485,10 +547,33 @@ fn push_accelerator(
     loaded: &mut Loaded,
     accelerator: String,
     schema: String,
-    component: &'static str,
+    component: impl Into<String>,
     owner: Option<&'static str>,
     action: String,
     command: Option<String>,
+) {
+    push_binding(
+        loaded,
+        accelerator,
+        schema,
+        component.into(),
+        owner,
+        action,
+        command,
+        false,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_binding(
+    loaded: &mut Loaded,
+    accelerator: String,
+    schema: String,
+    component: String,
+    owner: Option<&'static str>,
+    action: String,
+    command: Option<String>,
+    extension: bool,
 ) {
     let combos = match parse_accelerator(&accelerator) {
         Accelerator::Disabled => return,
@@ -505,10 +590,11 @@ fn push_accelerator(
             combo,
             accelerator: accelerator.clone(),
             schema: schema.clone(),
-            component,
+            component: component.clone(),
             owner,
             action: action.clone(),
             command: command.clone(),
+            extension,
         });
     }
 }
@@ -543,7 +629,16 @@ enum ListError {
 }
 
 fn list_recursively(schema: &str) -> Result<String, ListError> {
+    list_recursively_in(schema, None)
+}
+
+/// `gsettings list-recursively`, reading `schema` from `schema_dir` (an
+/// extension's compiled schemas) as well as the installed ones when given.
+fn list_recursively_in(schema: &str, schema_dir: Option<&Path>) -> Result<String, ListError> {
     let mut gsettings = Command::new("gsettings");
+    if let Some(dir) = schema_dir {
+        gsettings.arg("--schemadir").arg(dir);
+    }
     gsettings.args(["list-recursively", schema]);
     let output = command::output(&mut gsettings)
         .map_err(|error| ListError::Failed(format!("gsettings: {error}")))?;
@@ -567,6 +662,223 @@ fn list_recursively(schema: &str) -> Result<String, ListError> {
     }
     String::from_utf8(output.stdout)
         .map_err(|error| ListError::Failed(format!("gsettings returned invalid UTF-8: {error}")))
+}
+
+/// A GNOME Shell extension that is enabled and installed.
+#[derive(Debug, PartialEq, Eq)]
+struct Extension {
+    uuid: String,
+    name: String,
+    /// `settings-schema` of its `metadata.json`.
+    schema: Option<String>,
+    /// Directory holding compiled schemas, when the extension ships them.
+    schema_dir: Option<PathBuf>,
+    /// Installed under the user's data directory, which
+    /// `disable-user-extensions` switches off.
+    user: bool,
+}
+
+/// Directories GNOME Shell searches for extensions, user directory first,
+/// each with whether it is the user's.
+fn extension_roots() -> Vec<(PathBuf, bool)> {
+    let mut roots = Vec::new();
+    if let Some(base) = crate::util::data_base() {
+        roots.push((base.join("gnome-shell/extensions"), true));
+    }
+    let dirs = crate::recording::env_var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    for dir in dirs.split(':').filter(|dir| !dir.is_empty()) {
+        roots.push((Path::new(dir).join("gnome-shell/extensions"), false));
+    }
+    roots
+}
+
+/// Find an installed extension by UUID in the first root that has it.
+fn find_extension(uuid: &str, roots: &[(PathBuf, bool)]) -> Option<Extension> {
+    for (root, user) in roots {
+        let dir = root.join(uuid);
+        let Ok(metadata) = crate::recording::read_to_string(dir.join("metadata.json")) else {
+            continue;
+        };
+        let metadata = serde_json::from_str::<serde_json::Value>(&metadata).ok();
+        let field = |name: &str| {
+            metadata
+                .as_ref()
+                .and_then(|value| value.get(name))
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let compiled = dir.join("schemas");
+        let has_schemas = crate::recording::metadata(compiled.join("gschemas.compiled")).is_ok();
+        return Some(Extension {
+            uuid: uuid.to_owned(),
+            name: field("name").unwrap_or_else(|| uuid.to_owned()),
+            schema: field("settings-schema"),
+            schema_dir: has_schemas.then_some(compiled),
+            user: *user,
+        });
+    }
+    None
+}
+
+/// Strings of a GVariant `as` value (`['a', 'b']` or `@as []`); `None` when
+/// the text is not an array of strings.
+fn string_array(value: &str) -> Option<Vec<String>> {
+    let value = value.trim();
+    let value = value.strip_prefix("@as").map_or(value, str::trim_start);
+    (value.starts_with('[') && value.ends_with(']')).then(|| quoted_values(value))
+}
+
+/// Whether a string reads like a keybinding accelerator rather than any
+/// other string in an `as` setting (an app list, a layout name).
+fn looks_like_accelerator(value: &str) -> bool {
+    value.contains('<')
+        || value.starts_with("XF86")
+        || value.strip_prefix('F').is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+/// Add the keybindings in `output` (an extension schema's
+/// `list-recursively`) to `loaded`: every `as` key holding accelerators.
+fn add_extension_bindings(loaded: &mut Loaded, extension: &Extension, schema: &str, output: &str) {
+    let component = format!("{EXTENSION_COMPONENT} {}", extension.name);
+    for (key, value) in schema_entries(output, schema) {
+        let Some(values) = string_array(value) else {
+            continue;
+        };
+        for accelerator in values
+            .into_iter()
+            .filter(|value| looks_like_accelerator(value))
+        {
+            push_binding(
+                loaded,
+                accelerator,
+                schema.to_owned(),
+                component.clone(),
+                Some(SHELL_OWNER),
+                key.to_owned(),
+                None,
+                true,
+            );
+        }
+    }
+}
+
+/// Read the keybindings of the enabled GNOME Shell extensions. Extensions
+/// register keys through `Main.wm.addKeybinding` from their own schemas,
+/// which none of [`SCHEMAS`] covers.
+fn load_extensions(loaded: &mut Loaded) {
+    let enabled = match gsettings_get(SHELL_SETTINGS, "enabled-extensions") {
+        Ok(Some(value)) => value,
+        // No GNOME Shell settings: no extensions to ask.
+        Ok(None) => return,
+        Err(error) => {
+            loaded.unread_extensions.push(format!(
+                "could not read the enabled GNOME Shell extensions: {error}"
+            ));
+            return;
+        }
+    };
+    let Some(uuids) = string_array(&enabled) else {
+        loaded.unread_extensions.push(format!(
+            "unexpected value for org.gnome.shell enabled-extensions: {}",
+            enabled.trim()
+        ));
+        return;
+    };
+    if uuids.is_empty() {
+        return;
+    }
+    let disable_user = match gsettings_get(SHELL_SETTINGS, "disable-user-extensions") {
+        Ok(value) => value.is_some_and(|value| value.trim() == "true"),
+        Err(error) => {
+            loaded.notes.push(format!(
+                "could not read disable-user-extensions ({error}); assuming user extensions are on"
+            ));
+            false
+        }
+    };
+    load_extensions_from(
+        loaded,
+        &uuids,
+        disable_user,
+        &extension_roots(),
+        list_recursively_in,
+    );
+}
+
+fn load_extensions_from(
+    loaded: &mut Loaded,
+    uuids: &[String],
+    disable_user: bool,
+    roots: &[(PathBuf, bool)],
+    list: impl Fn(&str, Option<&Path>) -> Result<String, ListError>,
+) {
+    for uuid in uuids {
+        let Some(extension) = find_extension(uuid, roots) else {
+            loaded.notes.push(format!(
+                "enabled extension {uuid} is not installed, so it grabs nothing"
+            ));
+            continue;
+        };
+        if disable_user && extension.user {
+            loaded.notes.push(format!(
+                "extension {} is skipped: disable-user-extensions is on",
+                extension.name
+            ));
+            continue;
+        }
+        let Some(schema) = extension.schema.as_deref() else {
+            loaded.notes.push(format!(
+                "extension {} declares no settings schema, so it has no settings-backed keybindings",
+                extension.name
+            ));
+            loaded.read_extensions.push(extension.name.clone());
+            continue;
+        };
+        match list(schema, extension.schema_dir.as_deref()) {
+            Ok(output) => {
+                add_extension_bindings(loaded, &extension, schema, &output);
+                loaded.read_extensions.push(extension.name.clone());
+            }
+            Err(ListError::NoSchema) => loaded.unread_extensions.push(format!(
+                "extension {} ({}): schema {schema} could not be found, so its keybindings are unread",
+                extension.name, extension.uuid
+            )),
+            Err(ListError::Failed(error)) => loaded.unread_extensions.push(format!(
+                "extension {} ({}): could not read schema {schema}: {error}",
+                extension.name, extension.uuid
+            )),
+        }
+    }
+}
+
+/// `gsettings get`; `Ok(None)` when the schema or key is not installed.
+fn gsettings_get(schema: &str, key: &str) -> Result<Option<String>, String> {
+    let mut gsettings = Command::new("gsettings");
+    gsettings.args(["get", schema, key]);
+    let output = command::output(&mut gsettings).map_err(|error| format!("gsettings: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        if stderr.contains("No such schema") || stderr.contains("No such key") {
+            return Ok(None);
+        }
+        return Err(super::gsettings::command_error(
+            "gsettings",
+            output.status,
+            &output.stderr,
+        ));
+    }
+    if stderr.contains("'memory' GSettings backend") {
+        return Err(
+            "gsettings fell back to the memory backend (dconf unreachable), so it reports schema defaults, not the session's values".into(),
+        );
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -857,5 +1169,308 @@ mod tests {
         let key = KeyCombo::parse_alone("super").unwrap();
         let result = inspect_alone(&key, Err("gsettings: not found".into()));
         assert_eq!(result.outcome, Outcome::Unavailable);
+    }
+
+    const DOCK_SCHEMA: &str = "org.gnome.shell.extensions.dash-to-dock";
+    /// `gsettings list-recursively` of Dash to Dock, trimmed: keybinding
+    /// arrays, an empty one, and values of other types.
+    const DOCK_OUTPUT: &str = "org.gnome.shell.extensions.dash-to-dock app-hotkey-1 ['<Super>1']\n\
+        org.gnome.shell.extensions.dash-to-dock app-hotkey-2 ['<Super>2']\n\
+        org.gnome.shell.extensions.dash-to-dock shortcut ['<Super>q']\n\
+        org.gnome.shell.extensions.dash-to-dock shortcut-text '<Super>q'\n\
+        org.gnome.shell.extensions.dash-to-dock app-hotkey-3 @as []\n\
+        org.gnome.shell.extensions.dash-to-dock preferred-monitor-by-connector ['DP-1']\n\
+        org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'\n\
+        org.gnome.shell.extensions.dash-to-dock dash-max-icon-size 48\n";
+
+    fn dock() -> Extension {
+        Extension {
+            uuid: "dash-to-dock@micxgx.gmail.com".into(),
+            name: "Dash to Dock".into(),
+            schema: Some(DOCK_SCHEMA.into()),
+            schema_dir: None,
+            user: true,
+        }
+    }
+
+    fn loaded_with_dock() -> Loaded {
+        let mut loaded = Loaded::default();
+        add_extension_bindings(&mut loaded, &dock(), DOCK_SCHEMA, DOCK_OUTPUT);
+        loaded.read_extensions.push("Dash to Dock".into());
+        loaded
+    }
+
+    #[test]
+    fn reads_extension_keybindings_and_ignores_other_settings() {
+        let loaded = loaded_with_dock();
+        let actions = loaded
+            .bindings
+            .iter()
+            .map(|binding| (binding.action.as_str(), binding.accelerator.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actions,
+            vec![
+                ("app-hotkey-1", "<Super>1"),
+                ("app-hotkey-2", "<Super>2"),
+                ("shortcut", "<Super>q")
+            ]
+        );
+        assert!(loaded.bindings.iter().all(|binding| binding.extension));
+        assert!(loaded.notes.is_empty(), "{:?}", loaded.notes);
+    }
+
+    #[test]
+    fn an_extension_keybinding_is_handled_not_a_pass() {
+        let result = inspect(
+            Ok(loaded_with_dock()),
+            &"super+1".parse().unwrap(),
+            |name| {
+                assert_eq!(name, SHELL_OWNER);
+                Ok(true)
+            },
+        );
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+        let binding = result.binding.expect("the extension key is the binding");
+        assert_eq!(
+            binding.dispatcher.as_deref(),
+            Some("GNOME Shell extension Dash to Dock")
+        );
+        assert_eq!(binding.description.as_deref(), Some("app-hotkey-1"));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line.contains(DOCK_SCHEMA) && line.contains("'<Super>1'"))
+        );
+    }
+
+    #[test]
+    fn an_extension_does_not_grab_while_gnome_shell_is_down() {
+        let result = inspect(Ok(loaded_with_dock()), &"super+1".parse().unwrap(), |_| {
+            Ok(false)
+        });
+        assert_eq!(result.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn a_mutter_binding_outranks_an_extension_one() {
+        let mut loaded = loaded_with_dock();
+        push_accelerator(
+            &mut loaded,
+            "<Super>q".into(),
+            "org.gnome.desktop.wm.keybindings".into(),
+            "mutter",
+            None,
+            "close".into(),
+            None,
+        );
+        let result = inspect(Ok(loaded), &"super+q".parse().unwrap(), |_| Ok(true));
+        assert_eq!(result.outcome, Outcome::Consumed);
+        let binding = result.binding.unwrap();
+        assert_eq!(binding.dispatcher.as_deref(), Some("mutter"));
+    }
+
+    #[test]
+    fn a_key_no_readable_extension_binds_still_passes() {
+        let result = inspect(Ok(loaded_with_dock()), &"super+9".parse().unwrap(), |_| {
+            Ok(true)
+        });
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line.contains("extensions read: Dash to Dock"))
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line.contains("GlobalShortcuts"))
+        );
+    }
+
+    #[test]
+    fn unread_extensions_make_a_miss_uncertain() {
+        let mut loaded = Loaded::default();
+        loaded.unread_extensions.push(
+            "extension Pop Shell (pop-shell@system76.com): schema org.gnome.shell.extensions.pop-shell could not be found, so its keybindings are unread".into(),
+        );
+        let result = inspect(Ok(loaded), &"super+1".parse().unwrap(), |_| Ok(true));
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(result.summary.contains("could not be read"));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line.contains("pop-shell@system76.com"))
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|line| line.contains("GlobalShortcuts"))
+        );
+    }
+
+    /// A temporary extensions root holding the named extensions, each with
+    /// a `metadata.json` body.
+    fn extension_root(extensions: &[(&str, &str)]) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "whykey-gnome-ext-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        for (uuid, metadata) in extensions {
+            let dir = root.join(uuid);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("metadata.json"), metadata).unwrap();
+        }
+        root
+    }
+
+    fn uuids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|uuid| (*uuid).to_owned()).collect()
+    }
+
+    #[test]
+    fn enabled_extensions_are_found_by_uuid_and_read_by_schema() {
+        let user = extension_root(&[(
+            "dash-to-dock@micxgx.gmail.com",
+            r#"{"name": "Dash to Dock", "settings-schema": "org.gnome.shell.extensions.dash-to-dock"}"#,
+        )]);
+        let system = extension_root(&[
+            (
+                "tiling-assistant@leleat-on-github",
+                r#"{"name": "Tiling Assistant", "settings-schema": "org.gnome.shell.extensions.tiling-assistant"}"#,
+            ),
+            ("plain@example.org", r#"{"name": "Plain"}"#),
+        ]);
+        let roots = vec![(user.clone(), true), (system.clone(), false)];
+        let mut loaded = Loaded::default();
+        load_extensions_from(
+            &mut loaded,
+            &uuids(&[
+                "dash-to-dock@micxgx.gmail.com",
+                "tiling-assistant@leleat-on-github",
+                "plain@example.org",
+                "gone@example.org",
+            ]),
+            false,
+            &roots,
+            |schema, _| match schema {
+                DOCK_SCHEMA => Ok(DOCK_OUTPUT.to_owned()),
+                "org.gnome.shell.extensions.tiling-assistant" => Ok(
+                    "org.gnome.shell.extensions.tiling-assistant tile-maximize ['<Super>Up']\n"
+                        .to_owned(),
+                ),
+                other => panic!("unexpected schema {other}"),
+            },
+        );
+        assert!(loaded.unread_extensions.is_empty());
+        assert_eq!(
+            loaded.read_extensions,
+            vec!["Dash to Dock", "Tiling Assistant", "Plain"]
+        );
+        assert!(loaded.bindings.iter().any(|binding| {
+            binding.action == "tile-maximize" && binding.component.ends_with("Tiling Assistant")
+        }));
+        assert!(
+            loaded
+                .notes
+                .iter()
+                .any(|note| note.contains("gone@example.org is not installed"))
+        );
+        assert!(
+            loaded
+                .notes
+                .iter()
+                .any(|note| note.contains("Plain declares no settings schema"))
+        );
+        let _ = std::fs::remove_dir_all(user);
+        let _ = std::fs::remove_dir_all(system);
+    }
+
+    #[test]
+    fn user_extensions_are_skipped_when_user_extensions_are_disabled() {
+        let user = extension_root(&[(
+            "dash-to-dock@micxgx.gmail.com",
+            r#"{"name": "Dash to Dock", "settings-schema": "org.gnome.shell.extensions.dash-to-dock"}"#,
+        )]);
+        let mut loaded = Loaded::default();
+        load_extensions_from(
+            &mut loaded,
+            &uuids(&["dash-to-dock@micxgx.gmail.com"]),
+            true,
+            &[(user.clone(), true)],
+            |_, _| panic!("a skipped extension must not be read"),
+        );
+        assert!(loaded.bindings.is_empty());
+        assert!(loaded.unread_extensions.is_empty());
+        assert!(
+            loaded
+                .notes
+                .iter()
+                .any(|note| note.contains("disable-user-extensions"))
+        );
+        let _ = std::fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn an_extension_whose_schema_cannot_be_read_is_unread() {
+        let user = extension_root(&[
+            (
+                "pop-shell@system76.com",
+                r#"{"name": "Pop Shell", "settings-schema": "org.gnome.shell.extensions.pop-shell"}"#,
+            ),
+            (
+                "forge@jmmaranan.com",
+                r#"{"name": "Forge", "settings-schema": "org.gnome.shell.extensions.forge"}"#,
+            ),
+        ]);
+        let mut loaded = Loaded::default();
+        load_extensions_from(
+            &mut loaded,
+            &uuids(&["pop-shell@system76.com", "forge@jmmaranan.com"]),
+            false,
+            &[(user.clone(), true)],
+            |schema, _| {
+                if schema.ends_with("pop-shell") {
+                    Err(ListError::NoSchema)
+                } else {
+                    Err(ListError::Failed("dconf unreachable".into()))
+                }
+            },
+        );
+        assert_eq!(loaded.unread_extensions.len(), 2);
+        assert!(loaded.unread_extensions[0].contains("Pop Shell"));
+        assert!(loaded.unread_extensions[1].contains("dconf unreachable"));
+        assert!(loaded.read_extensions.is_empty());
+        let _ = std::fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn parses_enabled_extension_lists() {
+        assert_eq!(
+            string_array("['a@b', 'c@d']\n"),
+            Some(vec!["a@b".to_owned(), "c@d".to_owned()])
+        );
+        assert_eq!(string_array("@as []"), Some(Vec::new()));
+        assert_eq!(string_array("true"), None);
+        assert_eq!(string_array("'x'"), None);
+    }
+
+    #[test]
+    fn only_accelerator_shaped_strings_are_keybindings() {
+        for accelerator in ["<Super>1", "<Primary><Alt>t", "XF86AudioMute", "F12"] {
+            assert!(looks_like_accelerator(accelerator), "{accelerator}");
+        }
+        for other in ["", "DP-1", "firefox.desktop", "Foo", "F"] {
+            assert!(!looks_like_accelerator(other), "{other}");
+        }
     }
 }
