@@ -796,10 +796,12 @@ fn confidence_text(
     })
 }
 
-/// One executable command and why to run it.
+/// One executable command and why to run it, optionally followed by a
+/// second command that only makes sense after the first.
 struct Step {
     command: String,
     reason: String,
+    then: Option<(String, String)>,
 }
 
 fn next_steps_for(
@@ -812,6 +814,7 @@ fn next_steps_for(
         return vec![Step {
             command: "whykey listen --suppress".into(),
             reason: "inspect a binding without letting its action run".into(),
+            then: None,
         }];
     }
     if let Conclusion::Remapped {
@@ -826,6 +829,7 @@ fn next_steps_for(
         steps.push(Step {
             command: "whykey listen --window".into(),
             reason: "press the shortcut in the probe window to see if it arrives".into(),
+            then: None,
         });
     }
     if let Some(command) = layers
@@ -841,7 +845,11 @@ fn next_steps_for(
     {
         steps.push(Step {
             command: command.to_owned(),
-            reason: format!("then run whykey {} again", combo_arg(key)),
+            reason: "load the live shell bindings".into(),
+            then: Some((
+                format!("whykey {}", combo_arg(key)),
+                "then run this again".into(),
+            )),
         });
     }
     if !observe_desktop
@@ -856,6 +864,7 @@ fn next_steps_for(
         steps.push(Step {
             command: "whykey listen".into(),
             reason: "see whether the key reaches the layer that takes it".into(),
+            then: None,
         });
     }
     if layers.iter().any(|layer| {
@@ -865,6 +874,7 @@ fn next_steps_for(
         steps.push(Step {
             command: "whykey doctor".into(),
             reason: "see which integration is unavailable".into(),
+            then: None,
         });
     }
     steps.truncate(2);
@@ -1015,24 +1025,33 @@ pub(super) fn render_report(
         output.push('\n');
         // Commands are never wrapped; the reason takes the rest of the line
         // or moves under it when the terminal is narrow.
+        // A follow-up command gets its own line, with the reasons aligned,
+        // so it reads as a command to type rather than part of a sentence.
         for step in &steps {
-            let used = 2 + style::display_width(&step.command) + 2;
-            if used + style::display_width(&step.reason) <= options.width {
-                output.push_str(&format!(
-                    "  {}  {}\n",
-                    step.command,
-                    options.muted(&step.reason)
-                ));
-            } else {
-                output.push_str(&format!("  {}\n", step.command));
-                push_prose(
-                    &mut output,
-                    &step.reason,
-                    options,
-                    "    ",
-                    "    ",
-                    |o, t| o.muted(t),
-                );
+            let lines = std::iter::once((&step.command, &step.reason)).chain(
+                step.then
+                    .as_ref()
+                    .map(|(command, reason)| (command, reason)),
+            );
+            let column = lines
+                .clone()
+                .map(|(command, _)| style::display_width(command))
+                .max()
+                .unwrap_or(0);
+            for (command, reason) in lines {
+                let used = 2 + column + 2;
+                if used + style::display_width(reason) <= options.width {
+                    let padding = " ".repeat(column - style::display_width(command));
+                    output.push_str(&format!(
+                        "  {command}{padding}  {}\n",
+                        options.muted(reason)
+                    ));
+                } else {
+                    output.push_str(&format!("  {command}\n"));
+                    push_prose(&mut output, reason, options, "    ", "    ", |o, t| {
+                        o.muted(t)
+                    });
+                }
             }
         }
         output.push('\n');

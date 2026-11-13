@@ -19,6 +19,7 @@ Bound in
 Confidence  startup file: read from /home/user/.inputrc; the running bash may have rebound the key.
 
 To confirm
-  eval "$(whykey shell-init bash)"  then run whykey ctrl+t again
+  eval "$(whykey shell-init bash)"  load the live shell bindings
+  whykey ctrl+t                     then run this again
 
 More  whykey ctrl+t -v  -  whykey listen

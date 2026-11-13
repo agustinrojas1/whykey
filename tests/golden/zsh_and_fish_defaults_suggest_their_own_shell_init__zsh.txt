@@ -15,6 +15,7 @@ Route
 Confidence  default: zsh's built-in default; your configuration may override it.
 
 To confirm
-  eval "$(whykey shell-init zsh)"  then run whykey ctrl+t again
+  eval "$(whykey shell-init zsh)"  load the live shell bindings
+  whykey ctrl+t                    then run this again
 
 More  whykey ctrl+t -v  -  whykey listen
