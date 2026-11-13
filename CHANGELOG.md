@@ -9,6 +9,21 @@
   section is absent. Fcitx5 takes these even while the input method is
   inactive, so `whykey ctrl+alt+p` now reports Fcitx5's default
   `TogglePreedit` hotkey instead of "keys pass through".
+- Fcitx5's addon hotkeys are read from `fcitx5/conf/<addon>.conf` too:
+  QuickPhrase and Clipboard triggers, Unicode search and direct input, and
+  the input method selector's keys, with Fcitx5's defaults, skipping addons in
+  `[Behavior] DisabledAddons`. `whykey super+semicolon` on a host whose
+  `quickphrase.conf` sets that trigger now reports Fcitx5 QuickPhrase instead
+  of "keys pass through".
+- IBus's `triggers` hotkey (default `<Super>space`) is read with
+  `gsettings get org.freedesktop.ibus.general.hotkey triggers`. It is consumed
+  only when IBus's panel (`ibus-ui-gtk3`) runs on X11, uncertain otherwise.
+- A pass of the input-method layer no longer claims a live query for the key
+  verdict: it carries the weakest tier of the hotkey sources it checked, and
+  lists them instead of the generic "hotkeys were not inspected" note.
+- A Fcitx5 hotkey match is reported as uncertain, not consumed: the daemon's
+  state is that of its most recently focused input context, which may not be
+  the terminal's.
 - The shell-init hint puts the command to rerun on its own line, so it is not
   mistaken for part of a sentence.
 
