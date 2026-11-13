@@ -114,11 +114,27 @@ struct Binding {
     global: bool,
     all: bool,
     performable: bool,
+    /// A performable default of Ghostty itself (never written by the user):
+    /// with nothing to act on, which is the usual state, it sends the key on.
+    default_performable: bool,
+}
+
+/// A multi-key binding. Its first key opens the sequence: Ghostty holds it
+/// until the next key and only then runs the action or, when the next key
+/// completes nothing, sends the held keys to the program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sequence {
+    leader: KeyCombo,
+    /// The trigger as written, without prefixes and spaces, lowercase.
+    trigger: String,
+    action: String,
 }
 
 #[derive(Debug, Default)]
 struct ConfigState {
     bindings: Vec<Binding>,
+    /// Multi-key bindings (`ctrl+a>n=new_window`), by their first key.
+    sequences: Vec<Sequence>,
     loaded_files: Vec<PathBuf>,
     source: Option<String>,
     unresolved_triggers: Vec<String>,
@@ -169,7 +185,11 @@ impl Ghostty {
         let has_binding = config
             .bindings
             .iter()
-            .any(|binding| &binding.trigger == key);
+            .any(|binding| &binding.trigger == key)
+            || config
+                .sequences
+                .iter()
+                .any(|sequence| &sequence.leader == key);
         if has_binding {
             let input = Self::input_from_config(&config, key, protocol_flags, layout);
             return (layer, input);
@@ -188,10 +208,29 @@ impl Ghostty {
         protocol_flags: Option<u32>,
         layout: Option<&KeyboardLayout>,
     ) -> Option<TerminalInput> {
-        let binding = config
+        let Some(binding) = config
             .bindings
             .iter()
-            .find(|binding| &binding.trigger == key)?;
+            .find(|binding| &binding.trigger == key)
+        else {
+            // The first key of a sequence: when the next key completes
+            // nothing the held key is sent as the terminal normally encodes it.
+            if config
+                .sequences
+                .iter()
+                .any(|sequence| &sequence.leader == key)
+            {
+                return default_encoding_for_protocol(key, protocol_flags, layout)
+                    .into_bytes()
+                    .map(|bytes| {
+                        TerminalInput::predicted(
+                            bytes,
+                            "default encoding if the key sequence is not completed",
+                        )
+                    });
+            }
+            return None;
+        };
         if binding.global || binding.all || binding.action == "ignore" {
             return None;
         }
@@ -335,6 +374,9 @@ fn inspect_config(
         .iter()
         .find(|binding| &binding.trigger == key)
     else {
+        if let Some(layer) = sequence_leader_layer(config, key) {
+            return layer;
+        }
         let mut details = vec![format!("config: {}", config_path.display())];
         if let Some(source) = &config.source {
             details.push(format!("source: {source}"));
@@ -434,6 +476,20 @@ fn inspect_config(
             LayerId::Terminal,
             Outcome::Consumed,
             "binding ignores the key input",
+            details,
+        );
+    }
+
+    if binding.performable && binding.default_performable {
+        details.push(
+            "a Ghostty default that acts only when there is something to act on (a selection, an open search, another tab or split); otherwise the key reaches the program"
+                .into(),
+        );
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::UncertainContinues,
+            "Ghostty default binding acts only when it has something to act on; the key most likely continues",
             details,
         );
     }
@@ -548,14 +604,84 @@ fn parse_cli_keybinds(output: &str) -> Option<ConfigState> {
         let Some(value) = line.strip_prefix("keybind =") else {
             continue;
         };
-        let _ = parse_keybind(value.trim(), &mut state);
+        let value = value.trim();
+        let before = state.bindings.len();
+        let _ = parse_keybind(value, &mut state);
+        // The listing does not print the `performable:` flag of Ghostty's own
+        // default bindings, so a default that is performable is recognised by
+        // its trigger and action.
+        if is_performable_default(value) && state.bindings.len() > before {
+            if let Some(binding) = state.bindings.last_mut() {
+                binding.performable = true;
+                binding.default_performable = true;
+            }
+        }
     }
     Some(state)
+}
+
+/// Default bindings Ghostty registers as `performable` on Linux
+/// (`src/config/Config.zig`, `Keybinds.init`): the key goes on to the program
+/// when the action has nothing to act on (no selection to copy or adjust, no
+/// search to end, no second tab or split, ...). Written as
+/// `ghostty +list-keybinds --plain` prints them.
+const PERFORMABLE_DEFAULTS: &[&str] = &[
+    "ctrl+shift+c=copy_to_clipboard:mixed",
+    "ctrl+shift+v=paste_from_clipboard",
+    "shift+arrow_left=adjust_selection:left",
+    "shift+arrow_right=adjust_selection:right",
+    "shift+arrow_up=adjust_selection:up",
+    "shift+arrow_down=adjust_selection:down",
+    "shift+page_up=adjust_selection:page_up",
+    "shift+page_down=adjust_selection:page_down",
+    "shift+home=adjust_selection:home",
+    "shift+end=adjust_selection:end",
+    "ctrl+shift+arrow_left=previous_tab",
+    "ctrl+shift+arrow_right=next_tab",
+    "ctrl+page_up=previous_tab",
+    "ctrl+page_down=next_tab",
+    "super+ctrl+[=goto_split:previous",
+    "super+ctrl+]=goto_split:next",
+    "ctrl+alt+arrow_up=goto_split:up",
+    "ctrl+alt+arrow_down=goto_split:down",
+    "ctrl+alt+arrow_left=goto_split:left",
+    "ctrl+alt+arrow_right=goto_split:right",
+    "super+ctrl+shift+arrow_up=resize_split:up,10",
+    "super+ctrl+shift+arrow_down=resize_split:down,10",
+    "super+ctrl+shift+arrow_left=resize_split:left,10",
+    "super+ctrl+shift+arrow_right=resize_split:right,10",
+    "ctrl+shift+page_up=move_tab:-1",
+    "ctrl+shift+page_down=move_tab:1",
+    "ctrl+shift+f=start_search",
+    "escape=end_search",
+    "alt+1=goto_tab:1",
+    "alt+2=goto_tab:2",
+    "alt+3=goto_tab:3",
+    "alt+4=goto_tab:4",
+    "alt+5=goto_tab:5",
+    "alt+6=goto_tab:6",
+    "alt+7=goto_tab:7",
+    "alt+8=goto_tab:8",
+    "alt+9=last_tab",
+    "alt+digit_1=goto_tab:1",
+    "alt+digit_2=goto_tab:2",
+    "alt+digit_3=goto_tab:3",
+    "alt+digit_4=goto_tab:4",
+    "alt+digit_5=goto_tab:5",
+    "alt+digit_6=goto_tab:6",
+    "alt+digit_7=goto_tab:7",
+    "alt+digit_8=goto_tab:8",
+    "alt+digit_9=last_tab",
+];
+
+fn is_performable_default(value: &str) -> bool {
+    PERFORMABLE_DEFAULTS.contains(&value)
 }
 
 fn parse_keybind(value: &str, state: &mut ConfigState) -> Result<(), String> {
     if value == "clear" {
         state.bindings.clear();
+        state.sequences.clear();
         state.unresolved_triggers.clear();
         return Ok(());
     }
@@ -567,6 +693,24 @@ fn parse_keybind(value: &str, state: &mut ConfigState) -> Result<(), String> {
         return Err("keybind must contain trigger=action".into());
     };
     let action = raw_action.trim().to_owned();
+    if let Some(sequence) = parse_sequence(raw_trigger.trim(), &action) {
+        if action == "unbind" {
+            state
+                .sequences
+                .retain(|existing| existing.trigger != sequence.trigger);
+        } else {
+            // A sequence replaces a plain binding of its first key, and the
+            // same sequence written again.
+            state
+                .bindings
+                .retain(|binding| binding.trigger != sequence.leader);
+            state
+                .sequences
+                .retain(|existing| existing.trigger != sequence.trigger);
+            state.sequences.push(sequence);
+        }
+        return Ok(());
+    }
     let Some((trigger, prefixes)) = parse_trigger(raw_trigger.trim()) else {
         state
             .unresolved_triggers
@@ -574,6 +718,10 @@ fn parse_keybind(value: &str, state: &mut ConfigState) -> Result<(), String> {
         return Ok(());
     };
 
+    // A plain binding replaces a sequence that starts with the same key.
+    state
+        .sequences
+        .retain(|sequence| sequence.leader != trigger);
     if action == "unbind" {
         state.bindings.retain(|binding| binding.trigger != trigger);
         return Ok(());
@@ -587,6 +735,7 @@ fn parse_keybind(value: &str, state: &mut ConfigState) -> Result<(), String> {
         global: prefixes.global,
         all: prefixes.all,
         performable: prefixes.performable,
+        default_performable: false,
     });
     Ok(())
 }
@@ -599,11 +748,31 @@ struct TriggerPrefixes {
     performable: bool,
 }
 
+/// `ctrl+a>n` and longer sequences whose first key is a plain trigger. A
+/// sequence led by a physical key is left to the unresolved triggers.
+fn parse_sequence(raw_trigger: &str, action: &str) -> Option<Sequence> {
+    let (leader, _) = raw_trigger.split_once('>')?;
+    let (leader, _prefixes) = parse_trigger_prefixes(leader)?;
+    Some(Sequence {
+        leader,
+        trigger: raw_trigger
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase(),
+        action: action.to_owned(),
+    })
+}
+
 fn parse_trigger(raw_trigger: &str) -> Option<(KeyCombo, TriggerPrefixes)> {
     if raw_trigger.contains('>') {
         return None;
     }
 
+    parse_trigger_prefixes(raw_trigger)
+}
+
+fn parse_trigger_prefixes(raw_trigger: &str) -> Option<(KeyCombo, TriggerPrefixes)> {
     let mut trigger = raw_trigger.trim();
     let mut prefixes = TriggerPrefixes::default();
     while let Some((prefix, rest)) = trigger.split_once(':') {
@@ -664,6 +833,44 @@ fn default_config_path() -> PathBuf {
             modern
         }
     }
+}
+
+/// A key that starts a configured multi-key binding. Ghostty holds the first
+/// key until the next one: the program sees nothing yet, and either the
+/// action runs or the held keys are sent on, so the key is neither plainly
+/// consumed nor plainly forwarded.
+fn sequence_leader_layer(config: &ConfigState, key: &KeyCombo) -> Option<LayerResult> {
+    let sequences: Vec<&Sequence> = config
+        .sequences
+        .iter()
+        .filter(|sequence| &sequence.leader == key)
+        .collect();
+    let first = sequences.first()?;
+    let mut details: Vec<String> = sequences
+        .iter()
+        .take(3)
+        .map(|sequence| format!("binding: {} = {}", sequence.trigger, sequence.action))
+        .collect();
+    if sequences.len() > 3 {
+        details.push(format!(
+            "{} more sequence(s) start with this key",
+            sequences.len() - 3
+        ));
+    }
+    details.push(
+        "Ghostty holds the first key of a sequence until the next key; if that key completes no binding, the held keys are sent to the program"
+            .into(),
+    );
+    Some(LayerResult::new(
+        "Ghostty",
+        LayerId::Terminal,
+        Outcome::HandledUncertain,
+        format!(
+            "key starts the Ghostty key sequence {}; it is held until the next key",
+            first.trigger
+        ),
+        details,
+    ))
 }
 
 fn trigger_label(binding: &Binding) -> String {
@@ -1490,6 +1697,73 @@ xkb_symbols "pc" {
         assert!(result.details.iter().any(|detail| {
             detail.contains("trigger(s) not resolved") && detail.contains("physical:ctrl+left")
         }));
+    }
+
+    #[test]
+    fn the_first_key_of_a_sequence_is_held_not_forwarded() {
+        let result = inspect("ctrl+a", "keybind = ctrl+a>n=new_window");
+        assert_eq!(result.outcome, Outcome::HandledUncertain, "{result:?}");
+        assert!(result.summary.contains("ctrl+a>n"), "{}", result.summary);
+        // A key that only appears later in the sequence is not a leader.
+        assert_eq!(
+            inspect("n", "keybind = ctrl+a>n=new_window").outcome,
+            Outcome::Pass
+        );
+    }
+
+    #[test]
+    fn sequences_follow_clear_unbind_and_replacement() {
+        for config in [
+            "keybind = ctrl+a>n=new_window\nkeybind = clear",
+            "keybind = ctrl+a>n=new_window\nkeybind = ctrl+a>n=unbind",
+            "keybind = ctrl+a>n=new_window\nkeybind = ctrl+a=unbind",
+            "keybind = ctrl+a>n=new_window\nkeybind = ctrl+a=ignore",
+        ] {
+            assert_ne!(
+                inspect("ctrl+a", config).outcome,
+                Outcome::HandledUncertain,
+                "{config}"
+            );
+        }
+        // A sequence replaces a plain binding of the same key, and one of
+        // several sequences keeps the leader open.
+        let both = "keybind = ctrl+a=ignore\nkeybind = ctrl+a>n=new_window";
+        assert_eq!(inspect("ctrl+a", both).outcome, Outcome::HandledUncertain);
+        let two =
+            "keybind = ctrl+a>n=new_window\nkeybind = ctrl+a>t=new_tab\nkeybind = ctrl+a>n=unbind";
+        assert_eq!(inspect("ctrl+a", two).outcome, Outcome::HandledUncertain);
+    }
+
+    #[test]
+    fn sequences_from_the_live_listing_are_read() {
+        let config =
+            parse_cli_keybinds("keybind = ctrl+a>n=new_window\nkeybind = ctrl+a>shift+n=new_tab\n")
+                .unwrap();
+        let key: KeyCombo = "ctrl+a".parse().unwrap();
+        let result = inspect_config(&key, Path::new("/tmp/config"), &config, None);
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+    }
+
+    #[test]
+    fn performable_defaults_may_pass_the_key_on() {
+        // Escape and Shift+arrows are Ghostty defaults that act only with a
+        // search open or a selection to adjust; otherwise the program gets
+        // them (lab `ghostty-default-escape`, `ghostty-default-shift-left`).
+        let config = parse_cli_keybinds(
+            "keybind = escape=end_search\nkeybind = shift+arrow_left=adjust_selection:left\nkeybind = ctrl+shift+t=new_tab\nkeybind = ctrl+x=end_search\n",
+        )
+        .unwrap();
+        for (text, outcome) in [
+            ("escape", Outcome::UncertainContinues),
+            ("shift+left", Outcome::UncertainContinues),
+            ("ctrl+shift+t", Outcome::Consumed),
+            // The same action on another trigger is not a default.
+            ("ctrl+x", Outcome::Consumed),
+        ] {
+            let key: KeyCombo = text.parse().unwrap();
+            let result = inspect_config(&key, Path::new("/tmp/config"), &config, None);
+            assert_eq!(result.outcome, outcome, "{text}");
+        }
     }
 
     #[test]

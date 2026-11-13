@@ -2,8 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- swhkd is now detected while it runs, and its `swhkdrc` (with `include`,
+  `ignore`, `mode`/`endmode`, `~` and `@`) is read for the queried key. swhkd
+  grabs the keyboards' evdev devices, so a binding takes the key in the
+  remapper row, before the compositor. A `~`, mode, `ignore`d or
+  `swallow`-mode case stays uncertain. It is listed as unverified: no lab
+  scenario runs swhkd yet.
+
 ### Fixed
 
+- The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
+  reported as held by Ghostty (handled, uncertain) instead of "no binding,
+  forwarded to the terminal". Ghostty consumes it until the next key arrives.
+- Ghostty's performable default bindings (Escape for `end_search`,
+  Shift+arrows for `adjust_selection`, Ctrl+Shift+C/V, Alt+digit tab
+  switching, split and tab navigation) are no longer reported as consuming the
+  key: they act only when there is something to act on, so the key most likely
+  continues to the program.
 - `whykey inspect --pid` and `--focused` now resolve the multiplexer row for
   the target, not for whykey's own pane: the target's tmux server and pane
   (from its environment, or the pane in front of a `tmux: client`), Screen and
@@ -15,6 +32,39 @@
   whykey's shell is cooked. The terminal is read-only (`tcgetattr`), the
   evidence names the device and the foreground process group, and a terminal
   that cannot be read answers unknown instead of reusing whykey's own.
+- A configured X11 binding (i3, Openbox, sxhkd, xbindkeys, Cinnamon and the
+  rest) is no longer reported as a confident "not active" pass when the grab
+  probe sees no grab. The probe sees passive key grabs only, so an active
+  keyboard grab, an XRecord or XInput2 raw-event reader, or a grab off the
+  focused window's path can still take the key. The layer now reads
+  "configured, but no passive grab observed; the program may use XI2/active
+  grabs", keeps the binding, and lists what the probe cannot see.
+- GNOME keys bound by Shell extensions (Dash to Dock's Super+1..9, Pop
+  Shell, Tiling Assistant, Forge and the rest) are now read from the
+  enabled extensions' settings. A match is reported as handled by "GNOME
+  Shell extension <name>"; when an enabled extension's settings cannot be
+  read, a miss is reported as uncertain instead of "no GNOME shortcut uses
+  this key". A miss also notes that xdg-desktop-portal GlobalShortcuts
+  registrations cannot be listed.
+- Only the best-scored compositor or hotkey adapter was inspected, so a key
+  grabbed by a second one (a Wayland session also running a configured
+  hotkey adapter) read as a clean pass. whykey now inspects every other
+  applicable adapter too, reports a binding the selected one lacks, names the
+  others in the details, and downgrades a no-match to uncertain when another
+  adapter could not be checked.
+
+- A Konsole keytab entry that names an application action
+  (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
+  consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
+  commands, so such an entry is an unknown outcome. The lab scenarios that
+  claimed otherwise took "a window went fullscreen" from a Sway tree check that
+  was always true; they now check the terminal's own window.
+- With no input method detected, the Input method row of the route table says
+  "none detected" instead of "not inspected": whykey did look.
+- An X11 (XWayland) terminal under a Wayland session with Fcitx5's
+  input-method-v2 frontend is no longer drawn behind the input method: such a
+  terminal (detected by its `$WINDOWID`) reaches Fcitx5 through XIM or a
+  toolkit module, so the input method follows it in the route.
 - A tmux pane in copy mode is read from tmux: keys resolve in the `copy-mode`
   or `copy-mode-vi` table (by `mode-keys`) and the evidence names it, instead
   of `q`, `Space` or `Enter` being reported as passing to the application. A
