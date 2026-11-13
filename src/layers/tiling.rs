@@ -630,7 +630,7 @@ fn unquote(value: &str) -> String {
 
 /// The shell expansion Sway/i3 apply to include paths that matters for
 /// locating files: `~` and environment variables.
-fn expand_shell_path(path: &str) -> String {
+pub(crate) fn expand_shell_path(path: &str) -> String {
     let home = crate::recording::env_var("HOME").unwrap_or_default();
     let path = match path.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
@@ -665,7 +665,7 @@ fn expand_shell_path(path: &str) -> String {
 
 /// Expand `*`/`?` wildcards in the final path component, sorted like the
 /// shell does. Wildcards in directory components are not supported.
-fn expand_glob(path: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn expand_glob(path: &Path) -> Result<Vec<PathBuf>, String> {
     let is_pattern = |text: &str| text.contains(['*', '?', '[']);
     let parent = path.parent().unwrap_or(Path::new("/"));
     if is_pattern(&parent.to_string_lossy()) {
