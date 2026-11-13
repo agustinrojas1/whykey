@@ -7,8 +7,8 @@ Route
   1  Remapper      v  none detected
   2  Hyprland      v  no active binding
   3  Kitty         >  dead_acute starts composition; no bytes until the next key
-  4  TTY driver    -  not reached
-  5  Input method  -  not reached
+  4  Input method  -  not reached
+  5  TTY driver    -  not reached
   6  Multiplexer   -  not reached
   7  Shell         -  not reached
 
