@@ -207,7 +207,7 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
             "input",
             !remappers.is_empty(),
             if remappers.is_empty() {
-                "no keyd, kanata, kmonad, input-remapper, or xremap process/configuration was detected"
+                "no keyd, kanata, kmonad, input-remapper, xremap, or swhkd process/configuration was detected"
             } else {
                 "a common remapper was detected; transformations remain conditional until observed"
             },

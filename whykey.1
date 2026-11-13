@@ -210,7 +210,7 @@ budget, and no command starts once it is spent. Set
 .B WHYKEY_DIAGNOSTIC_TIMEOUT_MS
 to override it.
 .PP
-keyd, kanata, kmonad, input-remapper, and xremap configurations are
+keyd, kanata, kmonad, input-remapper, xremap, and swhkd configurations are
 evaluated for the queried key. A
 remap re-runs the later layers on the target key, and the report reads, for
 example, "keyd remaps Caps Lock to Esc." A layer switch, macro, or command
@@ -500,8 +500,8 @@ emits a versioned list of before/after values.
 .TP
 .B doctor
 Check read-only prerequisites and report which integrations are available.
-It also reports detected keyd, kanata, kmonad, input-remapper, and xremap
-processes or configuration files and their literal mappings; transformations
+It also reports detected keyd, kanata, kmonad, input-remapper, xremap, and
+swhkd processes or configuration files and their literal mappings; transformations
 that cannot be observed remain conditional. It lists the observation taps
 available now (native compositor, probe window, X11 grab probe, terminal,
 evdev) and, for each layer, whether its answer comes from a live query, a
