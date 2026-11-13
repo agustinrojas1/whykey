@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- A tmux pane in copy mode is read from tmux: keys resolve in the `copy-mode`
+  or `copy-mode-vi` table (by `mode-keys`) and the evidence names it, instead
+  of `q`, `Space` or `Enter` being reported as passing to the application. A
+  key unbound there is reported as dropped, not passed on; `send-keys -X`
+  bindings no longer read as generated input; a pane in another tmux mode
+  (tree, client, buffer) reports uncertain.
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
   rest) are now read from `fcitx5/config`, with Fcitx5's defaults when a
   section is absent. Fcitx5 takes these even while the input method is
