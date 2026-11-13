@@ -20,7 +20,7 @@ pub fn inspect_with_byte_status(
     key: &KeyCombo,
     bytes_verified: bool,
 ) -> LayerResult {
-    let active_table = tmux_active_table();
+    let pane = tmux_pane_state();
     let prefixes = tmux_prefixes();
     let mut details = Vec::new();
     if let Some(pane) = crate::recording::env_var_os("TMUX_PANE") {
@@ -34,7 +34,7 @@ pub fn inspect_with_byte_status(
             .clone()
     };
     let mut result = inspect_with_tables(
-        active_table.as_deref(),
+        &pane,
         &prefixes,
         preceding,
         key,
@@ -48,21 +48,14 @@ pub fn inspect_with_byte_status(
 /// Key-table resolution over an injectable `list-keys` source. The tables
 /// come from the running tmux server, so every answer is a live query.
 fn inspect_with_tables(
-    active_table: Option<&str>,
+    pane: &PaneState,
     raw_prefixes: &[String],
     preceding: &[KeyCombo],
     key: &KeyCombo,
     bytes_verified: bool,
     tables: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> LayerResult {
-    let result = resolve_with_tables(
-        active_table,
-        raw_prefixes,
-        preceding,
-        key,
-        bytes_verified,
-        tables,
-    );
+    let result = resolve_with_tables(pane, raw_prefixes, preceding, key, bytes_verified, tables);
     if result.outcome == Outcome::Unavailable {
         result
     } else {
@@ -73,9 +66,11 @@ fn inspect_with_tables(
 /// Mirrors tmux's client key handling: the prefix switches to the prefix
 /// table, a binding runs and returns the client to root (or the table named
 /// by `switch-client -T`), and an unbound key in a non-root table is retried
-/// in root and otherwise discarded.
+/// in root and otherwise discarded. A pane in copy mode takes the keys of the
+/// client's root state through its own table (`copy-mode` or `copy-mode-vi`)
+/// instead of root, so that table is where a key starts.
 fn resolve_with_tables(
-    active_table: Option<&str>,
+    pane: &PaneState,
     raw_prefixes: &[String],
     preceding: &[KeyCombo],
     key: &KeyCombo,
@@ -83,9 +78,19 @@ fn resolve_with_tables(
     tables: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> LayerResult {
     let mut details = Vec::new();
-    match active_table {
+    match pane.client_table.as_deref() {
         Some(table) => details.push(format!("active client key table: {table}")),
         None => details.push("active client key table: unknown; assuming root".into()),
+    }
+    let mut mode = pane.mode.clone();
+    match &mode {
+        PaneMode::Normal => {}
+        PaneMode::Copy { name, table } => details.push(format!(
+            "pane mode: {name}; keys the client's root table would take go to the {table} table"
+        )),
+        PaneMode::Unmodelled { name } => details.push(format!(
+            "pane mode: {name}; whykey does not model how tmux routes keys in this mode"
+        )),
     }
     for prefix in raw_prefixes {
         details.push(format!("prefix: {prefix}"));
@@ -95,7 +100,12 @@ fn resolve_with_tables(
         .filter_map(|prefix| parse_tmux_key(prefix))
         .collect::<Vec<_>>();
 
-    let mut table = active_table.unwrap_or("root").to_owned();
+    // The mode table applies where the client is in its default (root) table;
+    // a pending prefix or `switch-client -T` table keeps priority.
+    let mut table = match pane.client_table.as_deref() {
+        Some(table) if table != "root" => table.to_owned(),
+        _ => mode.home_table().to_owned(),
+    };
     for earlier in preceding {
         let resolution = resolve_key(&table, earlier, &prefixes, tables);
         if let Resolution::TableUnavailable { table, message } = resolution {
@@ -108,7 +118,17 @@ fn resolve_with_tables(
                 details,
             );
         }
-        let next = resolution.next_table();
+        if let Resolution::Bound { binding, .. } = &resolution {
+            let after = mode.after(&binding.action, pane.copy_table);
+            if after != mode {
+                details.push(format!(
+                    "sequence: {earlier} changes the pane mode to {}",
+                    after.name()
+                ));
+                mode = after;
+            }
+        }
+        let next = resolution.next_table(mode.home_table());
         details.push(format!(
             "sequence: {earlier} in table {table} -> table {next}"
         ));
@@ -148,9 +168,16 @@ fn resolve_with_tables(
             result_for_binding(&binding.action, &table, details, bytes_verified)
         }
         Resolution::Discarded { table } => {
-            details.push(format!(
-                "no binding in tmux {table} table or root; tmux returns to root and drops the key"
-            ));
+            if matches!(mode, PaneMode::Copy { .. }) && table == mode.home_table() {
+                details.push(format!(
+                    "no binding in tmux {table} table or root; the pane is in {}, so tmux does not pass the key to the application",
+                    mode.name()
+                ));
+            } else {
+                details.push(format!(
+                    "no binding in tmux {table} table or root; tmux returns to root and drops the key"
+                ));
+            }
             let (outcome, summary) = if bytes_verified {
                 (
                     Outcome::Consumed,
@@ -166,19 +193,33 @@ fn resolve_with_tables(
             };
             LayerResult::new("tmux", LayerId::Multiplexer, outcome, summary, details)
         }
-        Resolution::Forwarded => LayerResult::new(
-            "tmux",
-            LayerId::Multiplexer,
-            Outcome::Pass,
-            if bytes_verified {
-                format!("no binding in the tmux {table} table; forwarded to the pane")
-            } else {
-                format!(
-                    "no binding in the tmux {table} table; terminal byte delivery remains unverified"
-                )
-            },
-            details,
-        ),
+        Resolution::Forwarded => {
+            if let PaneMode::Unmodelled { name } = &mode {
+                details.push(format!(
+                    "no binding in the tmux {table} table, but the pane is in {name}, which takes keys itself"
+                ));
+                return LayerResult::new(
+                    "tmux",
+                    LayerId::Multiplexer,
+                    Outcome::Unknown,
+                    format!("pane is in tmux {name}; whether it takes the key is not modelled"),
+                    details,
+                );
+            }
+            LayerResult::new(
+                "tmux",
+                LayerId::Multiplexer,
+                Outcome::Pass,
+                if bytes_verified {
+                    format!("no binding in the tmux {table} table; forwarded to the pane")
+                } else {
+                    format!(
+                        "no binding in the tmux {table} table; terminal byte delivery remains unverified"
+                    )
+                },
+                details,
+            )
+        }
     }
 }
 
@@ -202,16 +243,16 @@ enum Resolution {
 }
 
 impl Resolution {
-    /// The client key table after this key was handled.
-    fn next_table(&self) -> String {
+    /// The key table the next key starts in after this one was handled:
+    /// `home` (root, or the copy-mode table of a pane in copy mode) unless
+    /// the key was the prefix or a `switch-client -T` binding.
+    fn next_table(&self, home: &str) -> String {
         match self {
             Self::PrefixEntered => "prefix".into(),
             Self::Bound { binding, .. } => switch_client_table(&binding.action)
-                .unwrap_or("root")
+                .unwrap_or(home)
                 .to_owned(),
-            Self::Discarded { .. } | Self::Forwarded | Self::TableUnavailable { .. } => {
-                "root".into()
-            }
+            Self::Discarded { .. } | Self::Forwarded | Self::TableUnavailable { .. } => home.into(),
         }
     }
 }
@@ -280,20 +321,164 @@ fn list_keys(table: &str) -> Result<Vec<u8>, String> {
     Ok(output.stdout)
 }
 
-fn tmux_active_table() -> Option<String> {
+/// What tmux reports for the pane whykey inspects (`$TMUX_PANE`, else the
+/// current client's pane), from one `display-message` call.
+#[derive(Debug, Default)]
+struct PaneState {
+    client_table: Option<String>,
+    mode: PaneMode,
+    /// The copy-mode table the window's `mode-keys` selects, when known.
+    copy_table: Option<&'static str>,
+}
+
+/// The pane's mode decides which table receives the keys of the client's
+/// default state. tmux uses `copy-mode`, or `copy-mode-vi` under
+/// `mode-keys vi`, for a pane in copy mode or view mode; the other modes
+/// (tree, client, buffer, customize) take keys themselves.
+#[derive(Debug, Default, Clone, PartialEq)]
+enum PaneMode {
+    #[default]
+    Normal,
+    Copy {
+        name: String,
+        table: &'static str,
+    },
+    Unmodelled {
+        name: String,
+    },
+}
+
+impl PaneMode {
+    fn home_table(&self) -> &str {
+        match self {
+            Self::Copy { table, .. } => table,
+            Self::Normal | Self::Unmodelled { .. } => "root",
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Self::Normal => "no mode",
+            Self::Copy { name, .. } | Self::Unmodelled { name } => name,
+        }
+    }
+
+    /// The mode after a binding with `action` ran: `copy-mode` enters copy
+    /// mode, a copy-mode command that cancels (`send-keys -X cancel`,
+    /// `copy-pipe-and-cancel`, ...) leaves it, and the `choose-*` family
+    /// opens a mode whose keys are not modelled.
+    fn after(&self, action: &str, copy_table: Option<&'static str>) -> Self {
+        let mut mode = self.clone();
+        for command in action
+            .split(" \\; ")
+            .flat_map(|command| command.split("; "))
+        {
+            let tokens = command
+                .trim()
+                .trim_end_matches([';', '\\'])
+                .split_whitespace()
+                .collect::<Vec<_>>();
+            match tokens.first().copied() {
+                Some("copy-mode") => {
+                    mode = match copy_table {
+                        Some(table) => Self::Copy {
+                            name: "copy-mode".into(),
+                            table,
+                        },
+                        None => Self::Unmodelled {
+                            name: "copy-mode (mode-keys could not be read)".into(),
+                        },
+                    };
+                }
+                Some("choose-tree" | "choose-buffer" | "choose-client" | "customize-mode") => {
+                    mode = Self::Unmodelled {
+                        name: format!("{} mode", tokens[0]),
+                    };
+                }
+                Some("send-keys" | "send")
+                    if is_copy_mode_command(&tokens)
+                        && matches!(mode, Self::Copy { .. })
+                        && tokens.iter().any(|token| token.ends_with("cancel")) =>
+                {
+                    mode = Self::Normal;
+                }
+                _ => {}
+            }
+        }
+        mode
+    }
+}
+
+/// `send-keys -X` runs a copy-mode command instead of sending keys.
+fn is_copy_mode_command(tokens: &[&str]) -> bool {
+    tokens.iter().skip(1).any(|token| {
+        token.len() > 1
+            && token.starts_with('-')
+            && token[1..].chars().all(|c| c.is_ascii_alphabetic())
+            && token.contains('X')
+    })
+}
+
+const PANE_FORMAT: &str = "#{client_key_table}\t#{pane_in_mode}\t#{pane_mode}\t#{mode-keys}";
+
+fn tmux_pane_state() -> PaneState {
     let mut command = Command::new("tmux");
     if let Some(pane) = crate::recording::env_var_os("TMUX_PANE") {
         let pane = pane.to_string_lossy().into_owned();
-        command.args(["display-message", "-p", "-t", &pane, "#{client_key_table}"]);
+        command.args(["display-message", "-p", "-t", &pane, PANE_FORMAT]);
     } else {
-        command.args(["display-message", "-p", "#{client_key_table}"]);
+        command.args(["display-message", "-p", PANE_FORMAT]);
     }
-    let output = command::output(&mut command).ok()?;
+    let Ok(output) = command::output(&mut command) else {
+        return PaneState::default();
+    };
     if !output.status.success() {
-        return None;
+        return PaneState::default();
     }
-    let table = String::from_utf8(output.stdout).ok()?.trim().to_owned();
-    (!table.is_empty()).then_some(table)
+    parse_pane_state(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parses [`PANE_FORMAT`] output. An older tmux expands the formats it lacks
+/// (`pane_mode`, `mode-keys`) to nothing, so a pane reported in a mode whose
+/// name or `mode-keys` is missing is [`PaneMode::Unmodelled`], never guessed.
+fn parse_pane_state(output: &str) -> PaneState {
+    let mut fields = output.trim_end_matches(['\n', '\r']).split('\t');
+    let client_table = fields
+        .next()
+        .map(str::trim)
+        .filter(|table| !table.is_empty())
+        .map(str::to_owned);
+    let in_mode = fields.next().map(str::trim) == Some("1");
+    let pane_mode = fields.next().map(str::trim).unwrap_or("");
+    let copy_table = match fields.next().map(str::trim) {
+        Some("vi") => Some("copy-mode-vi"),
+        Some("emacs") => Some("copy-mode"),
+        _ => None,
+    };
+    let mode = if !in_mode {
+        PaneMode::Normal
+    } else {
+        match (pane_mode, copy_table) {
+            ("copy-mode" | "view-mode", Some(table)) => PaneMode::Copy {
+                name: pane_mode.to_owned(),
+                table,
+            },
+            ("copy-mode" | "view-mode", None) => PaneMode::Unmodelled {
+                name: format!("{pane_mode} (mode-keys could not be read)"),
+            },
+            ("", _) => PaneMode::Unmodelled {
+                name: "a pane mode tmux did not name".into(),
+            },
+            (other, _) => PaneMode::Unmodelled {
+                name: other.to_owned(),
+            },
+        }
+    };
+    PaneState {
+        client_table,
+        mode,
+        copy_table,
+    }
 }
 
 fn result_for_binding(
@@ -329,7 +514,8 @@ fn result_for_binding(
         )
         .with_binding(binding);
     }
-    if action == "send-keys" || action.starts_with("send-keys ") {
+    let is_send_keys = action == "send-keys" || action.starts_with("send-keys ");
+    if is_send_keys && !is_copy_mode_command(&action.split_whitespace().collect::<Vec<_>>()) {
         details.push("tmux emits another key sequence downstream".into());
         return LayerResult::new(
             "tmux",
@@ -712,13 +898,20 @@ bind-key  -T root M--                       display-message m
         })
     }
 
+    fn client_in(table: &str) -> PaneState {
+        PaneState {
+            client_table: Some(table.to_owned()),
+            ..PaneState::default()
+        }
+    }
+
     fn run(preceding: &[&str], key: &str) -> LayerResult {
         let preceding = preceding
             .iter()
             .map(|key| key.parse().unwrap())
             .collect::<Vec<KeyCombo>>();
         inspect_with_tables(
-            Some("root"),
+            &client_in("root"),
             &["C-b".to_owned()],
             &preceding,
             &key.parse().unwrap(),
@@ -745,7 +938,7 @@ bind-key  -T root M--                       display-message m
     fn list_keys_answers_are_live_even_with_the_table_assumed() {
         assert_eq!(run(&[], "ctrl+b").tier, Some(EvidenceTier::LiveQuery));
         let assumed = inspect_with_tables(
-            None,
+            &PaneState::default(),
             &[],
             &[],
             &"ctrl+left".parse().unwrap(),
@@ -754,7 +947,7 @@ bind-key  -T root M--                       display-message m
         );
         assert_eq!(assumed.tier, Some(EvidenceTier::LiveQuery));
         let unreachable = inspect_with_tables(
-            Some("root"),
+            &client_in("root"),
             &[],
             &[],
             &"ctrl+left".parse().unwrap(),
@@ -816,5 +1009,258 @@ bind-key  -T root M--                       display-message m
             result.binding.and_then(|binding| binding.action).as_deref(),
             Some("resize-pane -L \\; switch-client -T resize")
         );
+    }
+
+    /// `list-keys -a -T` lines in the shape tmux 3.x prints for the default
+    /// copy-mode tables, plus a root and prefix table with a `copy-mode`
+    /// entry and a binding in root only.
+    fn mode_tables(table: &str) -> Result<Vec<u8>, String> {
+        Ok(match table {
+            "root" => b"bind-key -T root C-t display-message root-bound\n".to_vec(),
+            "prefix" => b"bind-key -T prefix [ copy-mode\nbind-key -T prefix t choose-tree -Zs\n".to_vec(),
+            "copy-mode" => b"bind-key -T copy-mode C-c send-keys -X cancel\nbind-key -T copy-mode q send-keys -X cancel\nbind-key -T copy-mode Space send-keys -X begin-selection\n".to_vec(),
+            "copy-mode-vi" => b"bind-key -T copy-mode-vi q send-keys -X cancel\nbind-key -T copy-mode-vi h send-keys -X cursor-left\nbind-key -T copy-mode-vi Enter send-keys -X copy-pipe-and-cancel\n".to_vec(),
+            _ => Vec::new(),
+        })
+    }
+
+    fn in_pane(state: &str, preceding: &[&str], key: &str) -> LayerResult {
+        let preceding = preceding
+            .iter()
+            .map(|key| key.parse().unwrap())
+            .collect::<Vec<KeyCombo>>();
+        inspect_with_tables(
+            &parse_pane_state(state),
+            &["C-b".to_owned()],
+            &preceding,
+            &key.parse().unwrap(),
+            true,
+            &mut mode_tables,
+        )
+    }
+
+    const VI_COPY: &str = "root\t1\tcopy-mode\tvi\n";
+    const EMACS_COPY: &str = "root\t1\tcopy-mode\temacs\n";
+
+    fn action_of(result: &LayerResult) -> Option<String> {
+        result
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.action.clone())
+    }
+
+    #[test]
+    fn pane_state_is_read_from_one_format_line() {
+        let normal = parse_pane_state("root\t0\t\temacs\n");
+        assert_eq!(normal.client_table.as_deref(), Some("root"));
+        assert_eq!(normal.mode, PaneMode::Normal);
+        assert_eq!(normal.copy_table, Some("copy-mode"));
+
+        let vi = parse_pane_state(VI_COPY);
+        assert_eq!(
+            vi.mode,
+            PaneMode::Copy {
+                name: "copy-mode".into(),
+                table: "copy-mode-vi"
+            }
+        );
+        let emacs = parse_pane_state(EMACS_COPY);
+        assert_eq!(emacs.mode.home_table(), "copy-mode");
+        let view = parse_pane_state("root\t1\tview-mode\tvi\n");
+        assert_eq!(view.mode.home_table(), "copy-mode-vi");
+
+        let pending_prefix = parse_pane_state("prefix\t1\tcopy-mode\tvi\n");
+        assert_eq!(pending_prefix.client_table.as_deref(), Some("prefix"));
+
+        let no_client = parse_pane_state("\t0\t\temacs\n");
+        assert_eq!(no_client.client_table, None);
+    }
+
+    #[test]
+    fn pane_state_degrades_on_a_tmux_without_the_mode_formats() {
+        // tmux before pane_mode / mode-keys expands the missing formats to
+        // nothing: not in a mode reads as normal, and an unnamed mode is
+        // never guessed to be copy mode.
+        assert_eq!(parse_pane_state("root\t0\t\t\n").mode, PaneMode::Normal);
+        assert_eq!(parse_pane_state("root\n").mode, PaneMode::Normal);
+        assert!(matches!(
+            parse_pane_state("root\t1\t\t\n").mode,
+            PaneMode::Unmodelled { .. }
+        ));
+        let unreadable = parse_pane_state("root\t1\tcopy-mode\t\n");
+        assert!(
+            matches!(&unreadable.mode, PaneMode::Unmodelled { name } if name.contains("mode-keys"))
+        );
+        assert_eq!(
+            parse_pane_state("root\t1\ttree-mode\temacs\n").mode,
+            PaneMode::Unmodelled {
+                name: "tree-mode".into()
+            }
+        );
+    }
+
+    #[test]
+    fn vi_copy_mode_resolves_keys_in_the_vi_table() {
+        let result = in_pane(VI_COPY, &[], "h");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(
+            result.summary,
+            "binding in tmux copy-mode-vi table consumes the key"
+        );
+        assert_eq!(
+            action_of(&result).as_deref(),
+            Some("send-keys -X cursor-left")
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.starts_with("pane mode: copy-mode;")),
+            "{:?}",
+            result.details
+        );
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+    }
+
+    #[test]
+    fn copy_mode_commands_are_not_generated_input() {
+        // `send-keys -X` runs a copy-mode command; it sends nothing downstream.
+        let result = in_pane(EMACS_COPY, &[], "q");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(action_of(&result).as_deref(), Some("send-keys -X cancel"));
+        assert!(!is_copy_mode_command(&["send-keys", "C-x"]));
+        assert!(!is_copy_mode_command(&["send-keys", "-l", "X"]));
+        assert!(is_copy_mode_command(&["send-keys", "-X", "cancel"]));
+        assert!(is_copy_mode_command(&[
+            "send-keys",
+            "-N",
+            "3",
+            "-X",
+            "cursor-down"
+        ]));
+    }
+
+    #[test]
+    fn key_bound_only_in_the_other_copy_table_is_dropped() {
+        // `h` is bound in copy-mode-vi but not in the emacs table.
+        let result = in_pane(EMACS_COPY, &[], "h");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(
+            result.summary.contains("copy-mode table"),
+            "{}",
+            result.summary
+        );
+        assert!(result.summary.contains("discards"), "{}", result.summary);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("does not pass the key to the application")),
+            "{:?}",
+            result.details
+        );
+        // Outside copy mode the same key reaches the pane.
+        let normal = in_pane("root\t0\t\temacs\n", &[], "h");
+        assert_eq!(normal.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn root_bindings_still_apply_in_copy_mode() {
+        let result = in_pane(VI_COPY, &[], "ctrl+t");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert_eq!(
+            result.summary,
+            "binding in tmux root table consumes the key"
+        );
+    }
+
+    #[test]
+    fn the_prefix_still_wins_in_copy_mode() {
+        let result = in_pane(VI_COPY, &[], "ctrl+b");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(result.summary.starts_with("tmux prefix key"));
+        // After it, the prefix table, not the copy-mode table, takes the key.
+        let after = in_pane(VI_COPY, &["ctrl+b"], "q");
+        assert!(
+            after.summary.contains("tmux prefix table"),
+            "{}",
+            after.summary
+        );
+        assert!(after.summary.contains("discards"), "{}", after.summary);
+    }
+
+    #[test]
+    fn a_pending_prefix_in_the_client_table_keeps_priority_over_the_mode() {
+        let result = in_pane("prefix\t1\tcopy-mode\tvi\n", &[], "h");
+        assert!(
+            result.summary.contains("tmux prefix table"),
+            "{}",
+            result.summary
+        );
+    }
+
+    #[test]
+    fn entering_copy_mode_with_the_prefix_sends_the_next_key_to_the_mode_table() {
+        let result = in_pane("root\t0\t\tvi\n", &["ctrl+b", "["], "h");
+        assert_eq!(
+            result.summary,
+            "binding in tmux copy-mode-vi table consumes the key"
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("changes the pane mode to copy-mode")),
+            "{:?}",
+            result.details
+        );
+        // Without the mode, the same bare key is forwarded.
+        assert_eq!(in_pane("root\t0\t\tvi\n", &[], "h").outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn cancelling_copy_mode_returns_following_keys_to_root() {
+        let result = in_pane(VI_COPY, &["q"], "h");
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(result.summary.contains("root table"), "{}", result.summary);
+        let still_in_mode = in_pane(VI_COPY, &["h"], "h");
+        assert!(still_in_mode.summary.contains("copy-mode-vi table"));
+        let pipe_and_cancel = in_pane(VI_COPY, &["enter"], "h");
+        assert_eq!(pipe_and_cancel.outcome, Outcome::Pass);
+    }
+
+    #[test]
+    fn a_mode_that_whykey_cannot_model_is_reported_uncertain() {
+        let unbound = in_pane("root\t1\ttree-mode\temacs\n", &[], "h");
+        assert_eq!(unbound.outcome, Outcome::Unknown);
+        assert!(unbound.summary.contains("tree-mode"), "{}", unbound.summary);
+        // A root binding still runs in front of the mode.
+        let bound = in_pane("root\t1\ttree-mode\temacs\n", &[], "ctrl+t");
+        assert_eq!(bound.outcome, Outcome::Consumed);
+        // A pane in a mode tmux did not name is not assumed to be normal.
+        let unnamed = in_pane("root\t1\t\t\n", &[], "h");
+        assert_eq!(unnamed.outcome, Outcome::Unknown);
+        // The prefix menu opening choose-tree makes the next key uncertain.
+        let after_choose = in_pane("root\t0\t\temacs\n", &["ctrl+b", "t"], "h");
+        assert_eq!(after_choose.outcome, Outcome::Unknown);
+    }
+
+    #[test]
+    fn the_copy_mode_table_being_unreadable_is_not_a_confident_answer() {
+        let result = inspect_with_tables(
+            &parse_pane_state(VI_COPY),
+            &["C-b".to_owned()],
+            &[],
+            &"h".parse().unwrap(),
+            true,
+            &mut |table| {
+                if table == "copy-mode-vi" {
+                    Err("unknown table".into())
+                } else {
+                    mode_tables(table)
+                }
+            },
+        );
+        assert_eq!(result.outcome, Outcome::Unknown);
     }
 }

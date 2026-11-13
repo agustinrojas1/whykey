@@ -1,0 +1,63 @@
+{
+  "id": "tmux-copy-mode-bind",
+  "description": "a pane in copy mode takes keys through the copy-mode table: a binding there (bind -T copy-mode C-t) fires and tmux consumes the key; whykey asks about the pane from outside it, because typing whykey into a pane in copy mode would reach the copy-mode table instead of the shell",
+  "tier": "observed",
+  "environment": "pty",
+  "files": {
+    "/root/.tmux.conf": [
+      "set -g status off",
+      "bind -T copy-mode C-t run-shell 'touch /tmp/fired'"
+    ],
+    "/root/.bashrc": [
+      "PS1='$ '",
+      "bind -x '\"\\C-t\": touch /tmp/reached-shell'",
+      "bind -x '\"\\C-b\": touch /tmp/reached-shell'"
+    ]
+  },
+  "pty": {
+    "command": [
+      "tmux",
+      "-f",
+      "/root/.tmux.conf",
+      "new-session",
+      "-s",
+      "lab",
+      "bash",
+      "-i"
+    ],
+    "env": {
+      "SHELL": "/usr/bin/bash"
+    }
+  },
+  "actions": [
+    {
+      "type": "\\x02["
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "\\x14"
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "file": "/tmp/fired"
+    },
+    "delivered": {
+      "file": "/tmp/reached-shell"
+    }
+  },
+  "whykey": {
+    "args": [
+      "ctrl+t"
+    ],
+    "layer": "tmux",
+    "run": "direct",
+    "env": {
+      "TMUX": "/tmp/tmux-0/default,1,0",
+      "TMUX_PANE": "%0"
+    },
+    "summary": "copy-mode table"
+  }
+}
