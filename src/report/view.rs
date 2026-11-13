@@ -3,6 +3,7 @@
 //! from `evaluate_conclusion` and is never changed by wording.
 
 use super::*;
+use crate::layers::{route_context_of, route_order, route_stage};
 use crate::style::{Mark, TableRow};
 
 /// Column the report's panel (header, table) is laid out in. Prose wraps at
@@ -521,67 +522,83 @@ fn layer_row(
     }
 }
 
-/// The seven route positions in order. A position nothing answered for is
-/// still listed, so the table always shows the whole chain.
+/// One route position: the layer ids that answer for it and how to name it
+/// when nothing did.
+struct Group {
+    ids: &'static [LayerId],
+    generic: &'static str,
+    optional: bool,
+}
+
+/// The route position a stage of [`route_order`] draws as one row group.
+/// Stages the table does not list (diagnostics) follow the route.
+fn group_for(stage: LayerId) -> Option<Group> {
+    Some(match stage {
+        LayerId::Remapper => Group {
+            ids: &[LayerId::Remapper],
+            generic: "Remapper",
+            optional: false,
+        },
+        LayerId::Compositor => Group {
+            ids: &[LayerId::Compositor],
+            generic: "Compositor",
+            optional: false,
+        },
+        LayerId::Terminal => Group {
+            ids: &[LayerId::Terminal],
+            generic: "Terminal",
+            optional: false,
+        },
+        LayerId::Tty => Group {
+            ids: &[LayerId::Tty],
+            generic: "TTY driver",
+            optional: false,
+        },
+        LayerId::Ime => Group {
+            ids: &[LayerId::Ime],
+            generic: "Input method",
+            optional: false,
+        },
+        LayerId::Multiplexer => Group {
+            ids: &[LayerId::Multiplexer, LayerId::Session],
+            generic: "Multiplexer",
+            optional: false,
+        },
+        LayerId::Application => Group {
+            ids: &[LayerId::Application],
+            generic: "Application",
+            optional: true,
+        },
+        LayerId::Shell => Group {
+            ids: &[LayerId::Shell],
+            generic: "Shell",
+            optional: false,
+        },
+        LayerId::Session | LayerId::Diagnostic | LayerId::Unknown => return None,
+    })
+}
+
+/// The route positions in route order (see [`route_order`], the one place
+/// that order is decided). A position nothing answered for is still listed,
+/// so the table always shows the whole chain.
 fn route_rows(
     layers: &[LayerResult],
     observation: Option<&ObservedKey>,
     terminal_observed: bool,
 ) -> Vec<Row> {
-    struct Group {
-        ids: &'static [LayerId],
-        generic: &'static str,
-        optional: bool,
+    let mut groups: Vec<Group> = Vec::new();
+    for stage in route_order(route_context_of(layers)) {
+        if stage == route_stage(stage) {
+            groups.extend(group_for(stage));
+        }
     }
-    const GROUPS: &[Group] = &[
-        Group {
-            ids: &[LayerId::Remapper],
-            generic: "Remapper",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Compositor],
-            generic: "Compositor",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Terminal],
-            generic: "Terminal",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Tty],
-            generic: "TTY driver",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Ime],
-            generic: "Input method",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Multiplexer, LayerId::Session],
-            generic: "Multiplexer",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Application],
-            generic: "Application",
-            optional: true,
-        },
-        Group {
-            ids: &[LayerId::Shell],
-            generic: "Shell",
-            optional: false,
-        },
-        Group {
-            ids: &[LayerId::Diagnostic, LayerId::Unknown],
-            generic: "Other",
-            optional: true,
-        },
-    ];
+    groups.push(Group {
+        ids: &[LayerId::Diagnostic, LayerId::Unknown],
+        generic: "Other",
+        optional: true,
+    });
     let mut rows: Vec<Row> = Vec::new();
-    for group in GROUPS {
+    for group in &groups {
         let members: Vec<&LayerResult> = layers
             .iter()
             .filter(|layer| group.ids.contains(&layer.id))

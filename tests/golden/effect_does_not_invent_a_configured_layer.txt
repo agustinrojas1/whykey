@@ -7,9 +7,9 @@ Route
   1  Remapper      v  none detected
   2  Compositor    -  not inspected
   3  Kitty         v  no Kitty binding
-  4  TTY driver    -  not inspected
-  5  Input method  ?  an active input method may transform this input before
+  4  Input method  ?  an active input method may transform this input before
                       text is committed
+  5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected
   7  Shell         -  not inspected
 

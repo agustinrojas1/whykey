@@ -603,6 +603,28 @@ fn inspect_default_chain_inner_without_remapper(
         return acc.finish();
     }
 
+    // The input method sits where the key meets it. A Wayland
+    // input-method-v2 frontend grabs the keyboard, so the compositor hands
+    // each key to it before the terminal; when it takes the key the
+    // terminal and everything after it never see it.
+    let in_multiplexer = session.tmux || session.screen || session.zellij;
+    let context = RouteContext {
+        ime: session.ime_frontend.placement(),
+        in_multiplexer,
+    };
+    if context.ime == ImePlacement::BeforeTerminal
+        && !session.ime.is_empty()
+        && !acc.append(
+            inspect_ime(key, session),
+            ContinuationPolicy::StopOnTerminalInterception,
+        )
+    {
+        return acc.finish();
+    }
+    if acc.check_deadline() {
+        return acc.finish();
+    }
+
     // 2. Terminal emulator
     let mut emulator = terminal_dispatch::TerminalAnalysis::analyze(request, session);
     let observed_fallback = request.observed_bytes.map(|bytes| TerminalInput {
@@ -628,14 +650,16 @@ fn inspect_default_chain_inner_without_remapper(
         emulator.layer,
         ContinuationPolicy::StopOnTerminalInterception,
     );
-    // The input method is a client of the terminal: it sees every key the
-    // compositor delivers to the terminal, including keys the terminal then
-    // consumes, so its finding is kept even when the route stops here. Any
-    // detected IME is reported, even when inactive, so its evidence stays
-    // visible in verbose and JSON output.
-    if !session.ime.is_empty()
+    // Behind XIM or a toolkit input-method module the input method is a
+    // client of the terminal: it sees every key the compositor delivers to
+    // the terminal, including keys the terminal then consumes, so its
+    // finding is kept even when the route stops here. Any detected IME is
+    // reported, even when inactive, so its evidence stays visible in verbose
+    // and JSON output. Also the order assumed when the frontend is unknown.
+    if context.ime == ImePlacement::AfterTerminal
+        && !session.ime.is_empty()
         && !acc.append(
-            crate::ime::inspect_key(key, &session.ime),
+            inspect_ime(key, session),
             ContinuationPolicy::StopOnTerminalInterception,
         )
     {
@@ -646,7 +670,6 @@ fn inspect_default_chain_inner_without_remapper(
     }
 
     // 3-4. TTY driver and session / multiplexer, in route order.
-    let in_multiplexer = session.tmux || session.screen || session.zellij;
     let continues = append_tty_and_session(&mut acc, in_multiplexer, |step, acc| match step {
         RouteStep::TtyDriver => {
             let terminal = terminal::Terminal;
@@ -710,15 +733,26 @@ enum RouteStep {
     Session,
 }
 
-/// A multiplexer reads the terminal through its own raw client tty and
-/// writes what it forwards into the pane's pty, so inside one it comes
-/// before the pane's TTY driver (the termios whykey reads is the pane's).
+/// The TTY driver and session steps in the order the route lists them.
 fn tty_and_session_order(in_multiplexer: bool) -> [RouteStep; 2] {
-    if in_multiplexer {
+    let order = route_order(RouteContext {
+        in_multiplexer,
+        ..RouteContext::default()
+    });
+    let position = |wanted: LayerId| order.iter().position(|id| *id == wanted);
+    if position(LayerId::Session) < position(LayerId::Tty) {
         [RouteStep::Session, RouteStep::TtyDriver]
     } else {
         [RouteStep::TtyDriver, RouteStep::Session]
     }
+}
+
+/// The input-method finding, with the frontend that placed it on the route.
+fn inspect_ime(key: &KeyCombo, session: &crate::environment::Environment) -> LayerResult {
+    let mut layer = crate::ime::inspect_key(key, &session.ime)
+        .with_ime_placement(session.ime_frontend.placement());
+    layer.details.extend(session.ime_frontend.detail());
+    layer
 }
 
 /// Appends the TTY driver and session layers in route order; false when the

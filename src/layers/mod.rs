@@ -127,6 +127,10 @@ mod tests {
             .position(|id| *id == LayerId::Ime)
             .unwrap();
         assert!(ime < tty, "IME must precede the TTY stage");
+        assert!(
+            ROUTE_ORDER.iter().position(|id| *id == LayerId::Terminal) < Some(ime),
+            "the default order places the IME after the terminal"
+        );
         for id in [
             LayerId::Remapper,
             LayerId::Compositor,
@@ -160,11 +164,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ime_result_follows_the_terminal_and_precedes_the_tty_stage() {
-        let key: KeyCombo = "ctrl+f".parse().unwrap();
-        let mut request = InspectRequest::new(&key);
-        request.force_continue = true;
+    fn session_with_ime(
+        frontend: crate::ime_frontend::ImeFrontend,
+    ) -> crate::environment::Environment {
         let mut session = crate::environment::Environment::collect();
         session.ime = vec![crate::ime::Detection {
             engine: "fcitx5".into(),
@@ -177,13 +179,122 @@ mod tests {
             panel: false,
             text_reconstruction: Default::default(),
         }];
-        let results = inspect_with_environment(&request, &session);
-        let ids: Vec<LayerId> = results.iter().map(|result| result.id).collect();
-        let terminal = ids.iter().position(|id| *id == LayerId::Terminal);
-        let ime = ids.iter().position(|id| *id == LayerId::Ime);
-        let tty = ids.iter().position(|id| *id == LayerId::Tty);
-        assert_eq!(ime, terminal.map(|index| index + 1), "{ids:?}");
-        assert!(ime < tty, "{ids:?}");
+        session.ime_frontend = frontend;
+        session
+    }
+
+    fn emitted_ids(session: &crate::environment::Environment) -> Vec<LayerId> {
+        let key: KeyCombo = "ctrl+f".parse().unwrap();
+        let mut request = InspectRequest::new(&key);
+        request.force_continue = true;
+        inspect_with_environment(&request, session)
+            .iter()
+            .map(|result| result.id)
+            .collect()
+    }
+
+    #[test]
+    fn ime_follows_the_terminal_for_client_modules_and_when_undetermined() {
+        for frontend in [
+            crate::ime_frontend::ImeFrontend::ClientModule {
+                evidence: "test".into(),
+            },
+            crate::ime_frontend::ImeFrontend::Undetermined {
+                reason: "test".into(),
+            },
+        ] {
+            let ids = emitted_ids(&session_with_ime(frontend));
+            let terminal = ids.iter().position(|id| *id == LayerId::Terminal);
+            let ime = ids.iter().position(|id| *id == LayerId::Ime);
+            let tty = ids.iter().position(|id| *id == LayerId::Tty);
+            assert_eq!(ime, terminal.map(|index| index + 1), "{ids:?}");
+            assert!(ime < tty, "{ids:?}");
+        }
+    }
+
+    #[test]
+    fn ime_precedes_the_terminal_for_a_wayland_input_method_grab() {
+        let session = session_with_ime(crate::ime_frontend::ImeFrontend::WaylandInputMethodV2 {
+            evidence: "test".into(),
+        });
+        let ids = emitted_ids(&session);
+        let terminal = ids.iter().position(|id| *id == LayerId::Terminal).unwrap();
+        let ime = ids.iter().position(|id| *id == LayerId::Ime).unwrap();
+        assert_eq!(ime + 1, terminal, "{ids:?}");
+    }
+
+    #[test]
+    fn emitted_layers_follow_the_single_route_order() {
+        for frontend in [
+            crate::ime_frontend::ImeFrontend::WaylandInputMethodV2 {
+                evidence: "test".into(),
+            },
+            crate::ime_frontend::ImeFrontend::ClientModule {
+                evidence: "test".into(),
+            },
+            crate::ime_frontend::ImeFrontend::Undetermined {
+                reason: "test".into(),
+            },
+        ] {
+            for in_multiplexer in [false, true] {
+                let mut session = session_with_ime(frontend.clone());
+                session.tmux = in_multiplexer;
+                let ids = emitted_ids(&session);
+                let context = RouteContext {
+                    ime: session.ime_frontend.placement(),
+                    in_multiplexer,
+                };
+                let order = route_order(context);
+                let positions: Vec<usize> = ids
+                    .iter()
+                    .filter(|id| order.contains(id))
+                    .map(|id| order.iter().position(|item| item == id).unwrap())
+                    .collect();
+                assert!(
+                    positions.windows(2).all(|pair| pair[0] < pair[1]),
+                    "inspection emitted {ids:?}, route order is {order:?}"
+                );
+                // The report and JSON recover the same context from the
+                // emitted layers.
+                let key: KeyCombo = "ctrl+f".parse().unwrap();
+                let mut request = InspectRequest::new(&key);
+                request.force_continue = true;
+                let layers = inspect_with_environment(&request, &session);
+                assert_eq!(route_context_of(&layers), context, "{ids:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn route_order_has_one_input_method_slot_and_every_stage() {
+        for ime in [ImePlacement::BeforeTerminal, ImePlacement::AfterTerminal] {
+            for in_multiplexer in [false, true] {
+                let order = route_order(RouteContext {
+                    ime,
+                    in_multiplexer,
+                });
+                assert_eq!(order.len(), ROUTE_ORDER.len(), "{order:?}");
+                for id in ROUTE_ORDER {
+                    assert_eq!(
+                        order.iter().filter(|item| *item == id).count(),
+                        1,
+                        "{order:?}"
+                    );
+                }
+                let at = |id: LayerId| order.iter().position(|item| *item == id).unwrap();
+                assert_eq!(
+                    at(LayerId::Ime) < at(LayerId::Terminal),
+                    ime == ImePlacement::BeforeTerminal
+                );
+                assert!(at(LayerId::Ime) < at(LayerId::Tty), "{order:?}");
+                assert_eq!(
+                    at(LayerId::Session) < at(LayerId::Tty),
+                    in_multiplexer,
+                    "{order:?}"
+                );
+                assert!(at(LayerId::Tty) < at(LayerId::Application), "{order:?}");
+            }
+        }
     }
 
     #[test]

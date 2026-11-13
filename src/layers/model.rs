@@ -121,8 +121,11 @@ impl Outcome {
     }
 }
 
-/// Explicit typed route order: remapper, compositor, terminal, IME, TTY,
-/// multiplexer/session, application, shell.
+/// Explicit typed route order, the default every other order derives from:
+/// remapper, compositor, terminal, input method, TTY driver, multiplexer /
+/// session, application, shell. [`route_order`] adjusts it for the two
+/// placements that depend on the session; inspection, the report table and
+/// the JSON/NDJSON path all take their order from there.
 pub const ROUTE_ORDER: &[LayerId] = &[
     LayerId::Remapper,
     LayerId::Compositor,
@@ -134,6 +137,81 @@ pub const ROUTE_ORDER: &[LayerId] = &[
     LayerId::Application,
     LayerId::Shell,
 ];
+
+/// Where the input method meets a key relative to the terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImePlacement {
+    /// A Wayland input-method-v2 frontend grabs the keyboard: the compositor
+    /// hands each key to the input method before the focused terminal.
+    BeforeTerminal,
+    /// The terminal forwards keys to the input method (X11 XIM, GTK/Qt input
+    /// method modules). Also the assumed order when the frontend cannot be
+    /// determined.
+    #[default]
+    AfterTerminal,
+}
+
+/// The session facts that decide the route order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RouteContext {
+    pub ime: ImePlacement,
+    /// A multiplexer reads the terminal through its own client tty and
+    /// writes what it forwards into the pane's pty, so inside one it comes
+    /// before the pane's TTY driver.
+    pub in_multiplexer: bool,
+}
+
+/// The single route order. Layers keep this order in the inspection result,
+/// the report's route table and the JSON/NDJSON path.
+pub fn route_order(context: RouteContext) -> Vec<LayerId> {
+    let mut order: Vec<LayerId> = ROUTE_ORDER.to_vec();
+    let position = |order: &[LayerId], id: LayerId| order.iter().position(|item| *item == id);
+    if context.ime == ImePlacement::BeforeTerminal {
+        order.retain(|id| *id != LayerId::Ime);
+        let terminal = position(&order, LayerId::Terminal).expect("terminal is on the route");
+        order.insert(terminal, LayerId::Ime);
+    }
+    if context.in_multiplexer {
+        order.retain(|id| *id != LayerId::Tty);
+        let multiplexer =
+            position(&order, LayerId::Multiplexer).expect("multiplexer is on the route");
+        // After the multiplexer and session stages, before the application.
+        let session = position(&order, LayerId::Session).expect("session is on the route");
+        order.insert(multiplexer.max(session) + 1, LayerId::Tty);
+    }
+    order
+}
+
+/// The route position of a layer id: the multiplexer and session stages
+/// share one position in the report.
+pub fn route_stage(id: LayerId) -> LayerId {
+    match id {
+        LayerId::Session => LayerId::Multiplexer,
+        other => other,
+    }
+}
+
+/// Recovers the session facts from layers already emitted in route order
+/// (a report has no session to ask). The input method records its own
+/// placement; the multiplexer order is read from the emitted order, and a
+/// route that stopped before showing it keeps the default, which only
+/// reorders rows nothing answered for.
+pub fn route_context_of(layers: &[LayerResult]) -> RouteContext {
+    let index = |wanted: &dyn Fn(LayerId) -> bool| layers.iter().position(|l| wanted(l.id));
+    let terminal = index(&|id| id == LayerId::Terminal);
+    let ime = index(&|id| id == LayerId::Ime);
+    let tty = index(&|id| id == LayerId::Tty);
+    let session = index(&|id| matches!(id, LayerId::Session | LayerId::Multiplexer));
+    let recorded = layers.iter().find_map(|layer| layer.ime_placement);
+    RouteContext {
+        ime: match (recorded, ime, terminal) {
+            (Some(placement), _, _) => placement,
+            (None, Some(ime), Some(terminal)) if ime < terminal => ImePlacement::BeforeTerminal,
+            _ => ImePlacement::AfterTerminal,
+        },
+        in_multiplexer: matches!((session, tty), (Some(session), Some(tty)) if session < tty),
+    }
+}
 
 /// Earlier steps of a multi-key sequence, as delivered to the stateful
 /// layers that interpret sequences (tmux key tables, the shell editor).
@@ -426,6 +504,10 @@ pub struct LayerResult {
     /// Other matching bindings that fire together with `binding` (Hyprland
     /// runs every matching non-submap bind), in execution order.
     pub also_fires: Vec<BindingEvidence>,
+    /// Where the input method sat on this route; set only on the input
+    /// method's own result. The report needs it even when the route stopped
+    /// at the input method and no terminal result exists to compare with.
+    pub ime_placement: Option<ImePlacement>,
 }
 
 impl Serialize for LayerResult {
@@ -470,7 +552,14 @@ impl LayerResult {
             tier: None,
             endpoint: false,
             also_fires: Vec::new(),
+            ime_placement: None,
         }
+    }
+
+    /// Record where the input method met the key on this route.
+    pub fn with_ime_placement(mut self, placement: ImePlacement) -> Self {
+        self.ime_placement = Some(placement);
+        self
     }
 
     /// Record where this answer came from.
