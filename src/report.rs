@@ -3851,6 +3851,108 @@ mod tests {
         assert!(v1["layers"][0].get("tier").is_none());
     }
 
+    /// The step follows the layer the verdict is about: an input method that
+    /// may take the key is settled by pressing it, never by the shell's live
+    /// bindings, even when the shell below is itself answering from defaults.
+    #[test]
+    fn next_targets_the_uncertain_layer_not_the_shell() {
+        let input_method = LayerResult::new(
+            "Fcitx5",
+            LayerId::Ime,
+            Outcome::HandledUncertain,
+            "TogglePreedit (toggles embedded preedit)",
+            vec![],
+        )
+        .with_binding(BindingEvidence::action(
+            "TogglePreedit",
+            BindingScope::Unknown,
+            None,
+        ))
+        .with_tier(EvidenceTier::Default);
+        // The shell answers from its startup files, as on a host without
+        // `shell-init`: unbound there, so its live bindings cannot matter.
+        let shell = LayerResult::uncertain_continues(
+            "Bash / Readline",
+            LayerId::Shell,
+            "no Readline default or INPUTRC binding",
+            vec![],
+        )
+        .with_tier(EvidenceTier::ConfigFile);
+        let output = render_wide("ctrl+alt+p", &[input_method, shell.clone()]);
+        assert!(output.contains("whykey listen"), "{output}");
+        assert!(!output.contains("shell-init"), "{output}");
+
+        // An unreadable terminal is settled by pressing the key too.
+        let terminal = LayerResult::uncertain_continues(
+            "Unknown terminal",
+            LayerId::Terminal,
+            "terminal key bindings are unknown; the key most likely continues",
+            vec![],
+        );
+        let output = render_wide("ctrl+alt+p", &[terminal.clone(), shell]);
+        assert!(output.contains("press it: `whykey listen`"), "{output}");
+        let output = render_wide("ctrl+alt+p", &[terminal]);
+        assert!(output.contains("press it: `whykey listen`"), "{output}");
+        assert!(!output.contains("shell-init"), "{output}");
+
+        // A question about the shell keeps the shell step.
+        let output = render_wide("ctrl+t", &[readline_default(None)]);
+        assert!(output.contains("shell-init bash"), "{output}");
+    }
+
+    #[test]
+    fn an_all_uncertain_route_leads_with_one_sentence_and_the_action() {
+        let layers = [
+            LayerResult::uncertain_continues(
+                "Unknown terminal",
+                LayerId::Terminal,
+                "terminal key bindings are unknown; the key most likely continues",
+                vec![],
+            ),
+            LayerResult::new(
+                "Shell input",
+                LayerId::Shell,
+                Outcome::Unknown,
+                "terminal byte encoding is unknown",
+                vec![],
+            ),
+        ];
+        let output = render_wide("ctrl+f9", &layers);
+        let headline = output
+            .lines()
+            .skip_while(|line| !line.starts_with('?'))
+            .take_while(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            headline.contains("found nothing that takes Ctrl+F9")
+                && headline.contains("press it: `whykey listen`"),
+            "{headline}"
+        );
+        // The layer names stay in the route table, not the headline.
+        assert!(!headline.contains("Shell input"), "{headline}");
+        // The action is in the headline once, not again under "To confirm".
+        assert_eq!(output.matches("`whykey listen`").count(), 1, "{output}");
+        assert!(!output.contains("To confirm"), "{output}");
+    }
+
+    #[test]
+    fn confidence_is_left_out_when_it_only_repeats_the_tier_column() {
+        let layers = [LayerResult::pass(
+            "Hyprland",
+            LayerId::Compositor,
+            "no binding",
+            vec![],
+            crate::layers::Checked::fixture(),
+        )];
+        let output = render_wide("ctrl+x", &layers);
+        assert!(!output.contains("Confidence"), "{output}");
+        // A layer that holds the answer keeps its paragraph: it says what the
+        // tier cannot (the file, the submap, what was not observed).
+        let output = render_wide("super+t", &[sway_bind()]);
+        assert!(output.contains("Confidence"), "{output}");
+    }
+
     #[test]
     fn next_names_the_observation_for_an_uncertain_desktop_and_shell_init() {
         let desktop = LayerResult::new(

@@ -31,6 +31,18 @@ pub struct Inventory {
 }
 
 pub fn current() -> Inventory {
+    collect(false)
+}
+
+/// As [`current`], with the active terminal's own bindings: its defaults and
+/// configuration are a layer of the key's route like the compositor's, but
+/// listing them without a key to look for would bury the desktop's bindings
+/// under a few hundred defaults, so only a `--key` query asks for them.
+pub fn current_with_terminal() -> Inventory {
+    collect(true)
+}
+
+fn collect(include_terminal: bool) -> Inventory {
     // One discovery pass: applicability comes from the shared Environment
     // snapshot instead of re-running desktop detection per adapter.
     let environment = crate::environment::Environment::collect();
@@ -60,6 +72,13 @@ pub fn current() -> Inventory {
     }
 
     append_extension_inventory(&environment, &mut inventory);
+    if include_terminal {
+        match crate::layers::terminal_dispatch::TerminalAnalysis::binding_inventory() {
+            Some(Ok(mut records)) => inventory.bindings.append(&mut records),
+            Some(Err(error)) => inventory.unavailable.push(error),
+            None => {}
+        }
+    }
 
     if environment.desktop("compositor").applicable
         && !crate::registry::DESKTOPS.iter().any(|entry| {

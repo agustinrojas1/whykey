@@ -30,6 +30,18 @@ mode, and one route order with the input method where the key meets it.
 
 ### Fixed
 
+- "To confirm" targets the layer the verdict is about: an uncertain input
+  method, terminal or TTY suggests `whykey listen`, and `shell-init` is
+  suggested only when the open question is the shell's (`whykey ctrl+alt+p` on
+  a Fcitx5 host no longer sends the user to `shell-init`). When nothing was
+  found and not everything could be checked, the headline is one sentence plus
+  the action (`Whykey found nothing that takes Ctrl+F9, but could not check
+  everything — press it: whykey listen`); the route table keeps the detail. The
+  Confidence paragraph is left out when it only repeats the tier column.
+- `whykey bindings --key K` lists the active terminal's bindings (Ghostty's
+  live listing, or kitty, Alacritty, foot, WezTerm and Konsole defaults plus
+  configuration) next to the desktop's, so a key the report says Ghostty takes
+  is no longer "0 source(s)".
 - A "no binding" answer can no longer be reported without saying what was
   checked. Every pass records its evidence tier and the sources it read
   (`--verbose` shows them; schema-v2 and NDJSON path entries of passes carry

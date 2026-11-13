@@ -14,8 +14,6 @@ Route
   6  Multiplexer   -  not inspected
   7  Shell         -  not inspected
 
-Confidence  live query: no layer reported a binding.
-
 
 Step 2/2 - Ctrl+S
 
