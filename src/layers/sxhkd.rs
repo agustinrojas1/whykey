@@ -394,8 +394,8 @@ impl LineBuffer {
 /// One hotkey/command pair expanded as sxhkd `process_hotkey` does: the
 /// `{…}` sequences of the hotkey and of the command are rendered in lockstep,
 /// the n-th hotkey with the n-th command, until either runs out; text
-/// without a sequence stays fixed.
-fn process_hotkey(hotkey: &str, command: &str) -> Option<Vec<Binding>> {
+/// without a sequence stays fixed. `None` when a side expands too far.
+pub(crate) fn render_pairs(hotkey: &str, command: &str) -> Option<Vec<(String, String)>> {
     let (hotkeys, hotkey_fixed) = expand(hotkey);
     let (commands, command_fixed) = expand(command);
     let (Some(hotkeys), Some(commands)) = (hotkeys, commands) else {
@@ -407,19 +407,32 @@ fn process_hotkey(hotkey: &str, command: &str) -> Option<Vec<Binding>> {
         (false, true) => hotkeys.len(),
         (false, false) => hotkeys.len().min(commands.len()),
     };
-    let bindings = (0..count)
-        .filter_map(|index| {
-            let hotkey = &hotkeys[if hotkey_fixed { 0 } else { index }];
-            let command = &commands[if command_fixed { 0 } else { index }];
-            parse_chord(hotkey).map(|(combo, replay, release)| Binding {
-                combo,
-                command: command.clone(),
-                replay,
-                release,
+    Some(
+        (0..count)
+            .map(|index| {
+                (
+                    hotkeys[if hotkey_fixed { 0 } else { index }].clone(),
+                    commands[if command_fixed { 0 } else { index }].clone(),
+                )
             })
-        })
-        .collect();
-    Some(bindings)
+            .collect(),
+    )
+}
+
+fn process_hotkey(hotkey: &str, command: &str) -> Option<Vec<Binding>> {
+    Some(
+        render_pairs(hotkey, command)?
+            .into_iter()
+            .filter_map(|(hotkey, command)| {
+                parse_chord(&hotkey).map(|(combo, replay, release)| Binding {
+                    combo,
+                    command,
+                    replay,
+                    release,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Most renderings one hotkey or command line may expand to; a line beyond
@@ -544,7 +557,7 @@ fn sequence_elements(text: &str) -> Vec<String> {
 
 /// sxhkd `get_token`: tokens between runs of `separators`, where a backslash
 /// makes the next character literal.
-fn tokens(text: &str, separators: &[char]) -> Vec<String> {
+pub(crate) fn tokens(text: &str, separators: &[char]) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut characters = text.chars();
