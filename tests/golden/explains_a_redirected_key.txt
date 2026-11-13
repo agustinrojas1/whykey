@@ -8,8 +8,8 @@ Route
   2  Hyprland      >  active binding found; event is redirected to another
                       window
   3  Terminal      -  not reached
-  4  TTY driver    -  not reached
-  5  Input method  -  not reached
+  4  Input method  -  not reached
+  5  TTY driver    -  not reached
   6  Multiplexer   -  not reached
   7  Shell         -  not reached
 

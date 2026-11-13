@@ -34,6 +34,9 @@ pub struct Environment {
     pub remappers: Vec<remapper::Detection>,
     pub(crate) hyprland_probe: Option<hyprland::Probe>,
     pub ime: Vec<ime::Detection>,
+    /// How the input method reaches applications, which decides where the
+    /// route places it.
+    pub ime_frontend: crate::ime_frontend::ImeFrontend,
     /// Selected compositor in inspect priority order, if any.
     pub selected_compositor: Option<&'static str>,
     /// Every applicable compositor candidate, scored from the same snapshot.
@@ -218,6 +221,8 @@ impl Environment {
             names.join(" + ")
         };
 
+        let ime = ime::detect_with_snapshot(&snapshot);
+        let ime_frontend = crate::ime_frontend::detect(&snapshot, &ime);
         Self {
             ssh: crate::recording::env_var_os("SSH_CONNECTION").is_some()
                 || crate::recording::env_var_os("SSH_TTY").is_some(),
@@ -243,7 +248,8 @@ impl Environment {
             compositor_context,
             remappers: remapper::detect_with_snapshot(&snapshot),
             hyprland_probe,
-            ime: ime::detect_with_snapshot(&snapshot),
+            ime,
+            ime_frontend,
             selected_compositor,
             compositor_candidates,
             extension_adapters,

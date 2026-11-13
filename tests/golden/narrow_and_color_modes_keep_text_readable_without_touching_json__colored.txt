@@ -6,8 +6,8 @@
   1  Remapper      [32mv[0m  none detected
   2  Compositor    [2m-[0m  not inspected
   3  Terminal      [2m-[0m  not inspected
-  4  TTY driver    [2m-[0m  not inspected
-  5  Input method  [2m-[0m  not inspected
+  4  Input method  [2m-[0m  not inspected
+  5  TTY driver    [2m-[0m  not inspected
   6  Multiplexer   [2m-[0m  not inspected
   7  Shell         [2m-[0m  not inspected
 

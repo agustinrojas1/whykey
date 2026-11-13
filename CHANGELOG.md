@@ -11,6 +11,17 @@
   `TogglePreedit` hotkey instead of "keys pass through".
 - The shell-init hint puts the command to rerun on its own line, so it is not
   mistaken for part of a sentence.
+- The route has one order. Under a Wayland input-method-v2 frontend (for
+  example Hyprland with Fcitx5) the input method now comes before the
+  terminal, where the key meets it; with XIM or a toolkit input-method module
+  it still follows the terminal, and when whykey cannot tell it keeps that
+  order and says so in the input-method row. Inside a multiplexer the report
+  lists the multiplexer before the TTY driver, as inspection runs them.
+- Rows after the layer that stops a key read "not reached" instead of "not
+  inspected" (for example the TTY driver after Fcitx5 took Ctrl+Alt+P);
+  "not inspected" is left for positions whykey did not check. JSON and
+  NDJSON are unchanged except that the input-method layer gains a `frontend:`
+  evidence line and may come before the terminal.
 - A terminal whykey has no adapter for (GNOME Terminal, Ptyxis, xterm, st,
   urxvt, any terminal under `TERM=tmux-*`, and an unidentified terminal) is
   now reported as `Unknown terminal` with an uncertain-continues verdict. It

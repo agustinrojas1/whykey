@@ -8,8 +8,8 @@ Route
   2  Hyprland      x  Focus on next window
                       also: Reveal active window on top
   3  Terminal      -  not reached
-  4  TTY driver    -  not reached
-  5  Input method  -  not reached
+  4  Input method  -  not reached
+  5  TTY driver    -  not reached
   6  Multiplexer   -  not reached
   7  Shell         -  not reached
 
