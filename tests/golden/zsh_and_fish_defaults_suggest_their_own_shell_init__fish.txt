@@ -15,6 +15,7 @@ Route
 Confidence  default: fish's built-in default; your configuration may override it.
 
 To confirm
-  whykey shell-init fish | source  then run whykey ctrl+t again
+  whykey shell-init fish | source  load the live shell bindings
+  whykey ctrl+t                    then run this again
 
 More  whykey ctrl+t -v  -  whykey listen

@@ -1669,7 +1669,7 @@ key_bindings:
         assert_eq!(binding.action, "send_text all second");
     }
 
-    // ---- Built-in default bindings (D-186): a stock configuration is not "unbound".
+    // ---- Built-in default bindings (D-188): a stock configuration is not "unbound".
 
     fn key(text: &str) -> KeyCombo {
         text.parse().unwrap()

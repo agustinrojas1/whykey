@@ -18,6 +18,7 @@ Bound in
 Confidence  default: bash's built-in default; your configuration may override it.
 
 To confirm
-  eval "$(whykey shell-init bash)"  then run whykey ctrl+t again
+  eval "$(whykey shell-init bash)"  load the live shell bindings
+  whykey ctrl+t                     then run this again
 
 More  whykey ctrl+t -v  -  whykey listen

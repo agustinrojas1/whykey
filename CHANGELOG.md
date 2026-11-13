@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-### Fixes
+### Fixed
 
+- Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
+  rest) are now read from `fcitx5/config`, with Fcitx5's defaults when a
+  section is absent. Fcitx5 takes these even while the input method is
+  inactive, so `whykey ctrl+alt+p` now reports Fcitx5's default
+  `TogglePreedit` hotkey instead of "keys pass through".
+- The shell-init hint puts the command to rerun on its own line, so it is not
+  mistaken for part of a sentence.
 - A terminal whykey has no adapter for (GNOME Terminal, Ptyxis, xterm, st,
   urxvt, any terminal under `TERM=tmux-*`, and an unidentified terminal) is
   now reported as `Unknown terminal` with an uncertain-continues verdict. It
