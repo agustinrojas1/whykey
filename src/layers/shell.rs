@@ -13,8 +13,8 @@ mod zle;
 use std::path::{Path, PathBuf};
 
 use crate::layers::{
-    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput,
-    UncertaintyReason, readline,
+    BindingEvidence, BindingScope, Checked, EvidenceTier, LayerId, LayerResult, Outcome,
+    TerminalInput, UncertaintyReason, readline,
 };
 
 pub fn inspect_input(input: &TerminalInput) -> LayerResult {
@@ -309,8 +309,18 @@ fn finish(layer: &'static str, origin: &Origin, init_hint: &str, verdict: Verdic
     } = verdict;
     let tier = match origin {
         Origin::Live => {
-            return LayerResult::new(layer, LayerId::Shell, outcome, summary, details)
-                .with_tier(EvidenceTier::LiveQuery);
+            return LayerResult::decided(
+                layer,
+                LayerId::Shell,
+                outcome,
+                Checked::new(
+                    EvidenceTier::LiveQuery,
+                    [format!("{layer} key bindings dumped by shell-init")],
+                ),
+                summary,
+                details,
+            )
+            .with_tier(EvidenceTier::LiveQuery);
         }
         Origin::Static(tier) => *tier,
     };

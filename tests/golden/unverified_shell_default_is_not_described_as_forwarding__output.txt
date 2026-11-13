@@ -6,7 +6,7 @@ Ctrl+T
 Route
   1  Remapper      v  none detected
   2  Compositor    -  not inspected
-  3  Kitty         v  no Kitty binding
+  3  Kitty         v  no Kitty binding                                live query
   4  Input method  v  none detected
   5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected

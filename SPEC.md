@@ -183,6 +183,17 @@ layer data, strongest first:
 | Config file | `config file (static)` | `config_file` | Configuration files were read: user startup files that change shell bindings, INPUTRC or bashrc, terminal, editor, and remapper configs, Konsole keytabs, `config.kdl`, compositor extension manifests, and static desktop configs. |
 | Default | `default (unverified)` | `default` | Only built-in defaults answered: Readline's table, `zsh -f` or `fish --no-config` defaults with no user file changing them, or `zellij setup --dump-config` alone. |
 
+A pass (`Outcome::Pass`, "nothing here takes the key") always names what it
+rests on: the adapter records a `Checked` value, a tier plus the list of
+sources it read, when it builds the result. A result cannot be a pass without
+one (a debug build and the tests fail, a release build reports
+uncertain-continues instead), and an adapter that did not read everything that
+can take the key reports uncertain-continues with a detail naming the gap.
+`--verbose` prints the line `checked (<tier>): <sources>` for each pass;
+schema-v2 and NDJSON path entries of passes carry
+`"checked": {"tier": "...", "sources": ["..."]}` next to `tier` (other outcomes
+omit it, and schema v1 is unchanged).
+
 Unavailable layers, and layers with no recorded source, have no tier. Human
 rows end with the tier in brackets (`[live query]`). Schema-v2 and NDJSON
 path entries carry `tier`; schema v1 is unchanged. Adapters record the

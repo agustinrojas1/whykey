@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -290,14 +290,19 @@ fn inspect_file(key: &KeyCombo) -> LayerResult {
         )
         .with_tier(EvidenceTier::ConfigFile);
     }
-    LayerResult::new(
+    LayerResult::pass(
         "Wayfire",
         LayerId::Compositor,
-        Outcome::Pass,
         "no matching Wayfire binding found",
         details,
+        Checked::new(
+            EvidenceTier::ConfigFile,
+            [
+                format!("wayfire.ini ({})", config_description()),
+                "plugin metadata defaults".to_owned(),
+            ],
+        ),
     )
-    .with_tier(EvidenceTier::ConfigFile)
 }
 
 // ---------------------------------------------------------------------------
@@ -902,10 +907,21 @@ fn inspect_live(
             "no active Wayfire binding for this key in the running config",
         )
     };
-    Ok(
-        LayerResult::new("Wayfire", LayerId::Compositor, outcome, summary, details)
-            .with_tier(EvidenceTier::LiveQuery),
+    Ok(LayerResult::decided(
+        "Wayfire",
+        LayerId::Compositor,
+        outcome,
+        Checked::new(
+            EvidenceTier::LiveQuery,
+            [
+                format!("Wayfire IPC get-config-option ({})", socket.display()),
+                "core/plugins and the plugin options it declares".to_owned(),
+            ],
+        ),
+        summary,
+        details,
     )
+    .with_tier(EvidenceTier::LiveQuery))
 }
 
 fn record_hit(

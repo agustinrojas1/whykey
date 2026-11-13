@@ -1,11 +1,17 @@
 [
   {
+    "checked": {
+      "sources": [
+        "test fixture"
+      ],
+      "tier": "live_query"
+    },
     "evidence": [],
     "layer": "Kitty",
     "propagation": "Continues",
     "status": "NotHandled",
     "summary": "no Kitty binding",
-    "tier": null
+    "tier": "live_query"
   },
   {
     "binding": {

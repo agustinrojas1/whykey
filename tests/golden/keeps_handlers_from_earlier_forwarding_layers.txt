@@ -6,7 +6,7 @@ v Hyprland handles Ctrl+Left and passes it on.
 Route
   1  Remapper      v  none detected
   2  Hyprland      v  binding found
-  3  Ghostty       v  no binding found
+  3  Ghostty       v  no binding found                                live query
   4  Input method  v  none detected
   5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected

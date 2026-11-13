@@ -479,6 +479,37 @@ impl EvidenceTier {
     }
 }
 
+/// What a [`Outcome::Pass`] rests on: the tier of the answer and the
+/// sources that were consulted. "Found nothing" is a claim about the places
+/// that were looked at, so a pass cannot exist without naming them; a layer
+/// that did not look at everything that can take the key reports
+/// [`Outcome::UncertainContinues`] instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Checked {
+    pub tier: EvidenceTier,
+    pub sources: Vec<String>,
+}
+
+impl Checked {
+    pub fn new<S: Into<String>>(tier: EvidenceTier, sources: impl IntoIterator<Item = S>) -> Self {
+        Self {
+            tier,
+            sources: sources.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// Evidence for fixtures that only need some pass to exist.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self::new(EvidenceTier::LiveQuery, ["test fixture"])
+    }
+
+    /// The pass rests on at least one named source.
+    pub fn is_complete(&self) -> bool {
+        self.sources.iter().any(|source| !source.trim().is_empty())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerResult {
     pub layer: &'static str,
@@ -497,6 +528,9 @@ pub struct LayerResult {
     /// Where this answer came from; `None` when nothing answered for the
     /// layer (not running, no data read).
     pub tier: Option<EvidenceTier>,
+    /// What a pass rests on. Present on every [`Outcome::Pass`] result and
+    /// absent on all others (see [`LayerResult::pass`]).
+    pub checked: Option<Checked>,
     /// The layer is the key's last consumer (a shell's line editor): even
     /// an unbound key is read and dropped or inserted there, so nothing
     /// downstream receives it.
@@ -540,6 +574,16 @@ impl LayerResult {
         summary: impl Into<String>,
         details: Vec<String>,
     ) -> Self {
+        Self::raw(layer, id, outcome, summary, details).without_unevidenced_pass()
+    }
+
+    fn raw(
+        layer: &'static str,
+        id: LayerId,
+        outcome: Outcome,
+        summary: impl Into<String>,
+        details: Vec<String>,
+    ) -> Self {
         Self {
             layer,
             id,
@@ -550,10 +594,51 @@ impl LayerResult {
             binding: None,
             dead_key: None,
             tier: None,
+            checked: None,
             endpoint: false,
             also_fires: Vec::new(),
             ime_placement: None,
         }
+    }
+
+    /// A pass that carries no evidence cannot be reported. Builders that
+    /// reach this with [`Outcome::Pass`] are a programming error (debug
+    /// builds and tests fail); a release build reports the honest
+    /// alternative: the key most likely continues, but nothing says what was
+    /// checked.
+    fn without_unevidenced_pass(mut self) -> Self {
+        let evidenced = self.checked.as_ref().is_some_and(Checked::is_complete);
+        if self.outcome == Outcome::Pass && !evidenced {
+            debug_assert!(
+                false,
+                "{}: a Pass needs Checked evidence (use LayerResult::pass or ::decided)",
+                self.layer
+            );
+            self.outcome = Outcome::UncertainContinues;
+            self.checked = None;
+            self.details
+                .push("whykey recorded no evidence for this pass, so it is not reported".into());
+        }
+        self
+    }
+
+    /// What a pass rests on; `None` for every other outcome.
+    pub fn pass_evidence(&self) -> Option<&Checked> {
+        self.checked
+            .as_ref()
+            .filter(|_| self.outcome == Outcome::Pass)
+    }
+
+    /// The same guard the constructors apply, for a result whose fields were
+    /// changed after construction.
+    pub fn with_pass_evidence_enforced(self) -> Self {
+        self.without_unevidenced_pass()
+    }
+
+    /// True when this result is a pass without recorded evidence. Routes are
+    /// validated with it before they are reported.
+    pub fn is_unevidenced_pass(&self) -> bool {
+        self.outcome == Outcome::Pass && !self.checked.as_ref().is_some_and(Checked::is_complete)
     }
 
     /// Record where the input method met the key on this route.
@@ -565,12 +650,24 @@ impl LayerResult {
     /// Record where this answer came from.
     pub fn with_tier(mut self, tier: EvidenceTier) -> Self {
         self.tier = Some(tier);
+        if let Some(checked) = &mut self.checked {
+            checked.tier = tier;
+        }
         self
     }
 
     /// Record where this answer came from when known.
     pub fn with_optional_tier(mut self, tier: Option<EvidenceTier>) -> Self {
-        self.tier = tier;
+        match (&mut self.checked, tier) {
+            // A pass keeps the tier it was checked at unless a stronger
+            // statement replaces it; it never loses it.
+            (Some(_), None) => {}
+            (Some(checked), Some(tier)) => {
+                checked.tier = tier;
+                self.tier = Some(tier);
+            }
+            (None, tier) => self.tier = tier,
+        }
         self
     }
 
@@ -604,13 +701,46 @@ impl LayerResult {
         self
     }
 
+    /// A pass: nothing in `checked.sources` takes the key. The tier and the
+    /// sources are required and recorded on the result.
     pub fn pass(
         layer: &'static str,
         id: LayerId,
         summary: impl Into<String>,
         details: Vec<String>,
+        checked: Checked,
     ) -> Self {
-        Self::new(layer, id, Outcome::Pass, summary, details)
+        let mut result = Self::raw(layer, id, Outcome::Pass, summary, details);
+        result.tier = Some(checked.tier);
+        result.checked = Some(checked);
+        result.without_unevidenced_pass()
+    }
+
+    /// Promote a provisional, still-uncertain result to a pass once every
+    /// source that can take the key has been checked.
+    pub fn confirmed_pass(mut self, checked: Checked) -> Self {
+        debug_assert_eq!(self.outcome, Outcome::UncertainContinues);
+        self.outcome = Outcome::Pass;
+        self.tier = Some(checked.tier);
+        self.checked = Some(checked);
+        self.without_unevidenced_pass()
+    }
+
+    /// A result whose outcome the adapter computes: `checked` is what the
+    /// adapter looked at, recorded only when the outcome is a pass.
+    pub fn decided(
+        layer: &'static str,
+        id: LayerId,
+        outcome: Outcome,
+        checked: Checked,
+        summary: impl Into<String>,
+        details: Vec<String>,
+    ) -> Self {
+        if outcome == Outcome::Pass {
+            Self::pass(layer, id, summary, details, checked)
+        } else {
+            Self::new(layer, id, outcome, summary, details)
+        }
     }
 
     pub fn handled_and_passed(
@@ -709,6 +839,97 @@ mod tests {
         let consumed = LayerResult::consumed("fixture", LayerId::Compositor, "consumed", vec![]);
         assert_eq!(consumed.outcome, Outcome::Consumed);
         assert!(consumed.blocks_chain());
+    }
+
+    #[test]
+    fn a_pass_records_the_tier_and_the_sources_it_checked() {
+        let pass = LayerResult::pass(
+            "fixture",
+            LayerId::Compositor,
+            "no binding",
+            vec![],
+            Checked::new(EvidenceTier::ConfigFile, ["rc.xml", "defaults"]),
+        );
+        assert_eq!(pass.outcome, Outcome::Pass);
+        assert_eq!(pass.tier, Some(EvidenceTier::ConfigFile));
+        let checked = pass.pass_evidence().expect("a pass carries its evidence");
+        assert_eq!(checked.sources, ["rc.xml", "defaults"]);
+        assert!(!pass.is_unevidenced_pass());
+        // Only a pass names what it checked.
+        let consumed = LayerResult::consumed("fixture", LayerId::Compositor, "bound", vec![]);
+        assert!(consumed.pass_evidence().is_none());
+    }
+
+    /// `LayerResult::new` is for every outcome except a pass: a pass built
+    /// without evidence is a bug that debug builds and tests refuse.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a Pass needs Checked evidence")]
+    fn a_pass_without_evidence_cannot_be_built() {
+        let _ = LayerResult::new(
+            "fixture",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "none",
+            vec![],
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "a Pass needs Checked evidence")]
+    fn a_pass_that_names_no_source_cannot_be_built() {
+        let _ = LayerResult::pass(
+            "fixture",
+            LayerId::Compositor,
+            "none",
+            vec![],
+            Checked::new(EvidenceTier::LiveQuery, Vec::<String>::new()),
+        );
+    }
+
+    /// Without debug assertions the same mistake is reported as the honest
+    /// alternative, never as a pass.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn a_pass_without_evidence_is_reported_as_uncertain() {
+        let result = LayerResult::new(
+            "fixture",
+            LayerId::Compositor,
+            Outcome::Pass,
+            "none",
+            vec![],
+        );
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(!result.is_unevidenced_pass());
+    }
+
+    #[test]
+    fn every_pass_on_a_real_route_names_what_it_checked() {
+        for key in [
+            "ctrl+alt+p",
+            "escape",
+            "ctrl+f9",
+            "super+return",
+            "alt+f",
+            "a",
+        ] {
+            let key: crate::key::KeyCombo = key.parse().unwrap();
+            for layer in crate::layers::inspect_default_chain(&key) {
+                assert!(
+                    !layer.is_unevidenced_pass(),
+                    "{} reports a pass without evidence",
+                    layer.layer
+                );
+                if layer.outcome == Outcome::Pass {
+                    let checked = layer.pass_evidence().unwrap();
+                    assert_eq!(layer.tier, Some(checked.tier), "{}", layer.layer);
+                    assert!(!checked.sources.is_empty(), "{}", layer.layer);
+                } else {
+                    assert!(layer.pass_evidence().is_none(), "{}", layer.layer);
+                }
+            }
+        }
     }
 
     #[test]

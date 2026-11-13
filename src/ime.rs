@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// Read-only input-method context discovered from the current session.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -663,31 +663,33 @@ fn inspect_with_hotkey_sources(
     ibus: Option<&IbusTriggers>,
     x11: bool,
 ) -> LayerResult {
-    let mut result = inspect_with_detections(detections);
+    let (mut result, forwards) = state_verdict(detections);
     let mut checked = Vec::new();
     let mut tiers = Vec::new();
+    let mut sources = Vec::new();
     if let Some(files) = fcitx5 {
         let global = files
             .text(GLOBAL_FILE)
             .map(fcitx5_lists)
             .unwrap_or_default();
-        let mut sources = Vec::new();
+        let mut component_sources = Vec::new();
         for component in FCITX5_COMPONENTS {
             match fcitx5_check(component, key, files, &global) {
                 ComponentCheck::Match(hotkey) => {
                     return hotkey_result(hotkey, detections, result);
                 }
                 ComponentCheck::NoMatch { source, tier } => {
-                    sources.push(source);
+                    component_sources.push(source);
                     tiers.push(tier);
                 }
-                ComponentCheck::Disabled { source } => sources.push(source),
+                ComponentCheck::Disabled { source } => component_sources.push(source),
             }
         }
         checked.push(format!(
             "no Fcitx5 hotkey matches; checked {}",
-            sources.join(", ")
+            component_sources.join(", ")
         ));
+        sources.extend(component_sources);
     }
     if let Some(triggers) = ibus {
         let panel = detections
@@ -699,12 +701,14 @@ fn inspect_with_hotkey_sources(
         match triggers {
             IbusTriggers::Live(_) => {
                 checked.push(format!("no IBus hotkey matches (read {IBUS_TRIGGERS_KEY})"));
+                sources.push(format!("IBus {IBUS_TRIGGERS_KEY}"));
                 tiers.push(EvidenceTier::LiveQuery);
             }
             IbusTriggers::Default(error) => {
                 checked.push(format!(
                     "no IBus hotkey matches (built-in default; {IBUS_TRIGGERS_KEY} unreadable: {error})"
                 ));
+                sources.push(format!("IBus built-in default {IBUS_TRIGGERS_KEY}"));
                 tiers.push(EvidenceTier::Default);
             }
         }
@@ -712,14 +716,29 @@ fn inspect_with_hotkey_sources(
     result.details.extend(checked);
     // A pass is only as strong as the weakest thing it rests on: the daemon
     // answered about its state, but the hotkeys came from files or defaults.
-    if result.outcome == Outcome::Pass {
-        // Environment variables and process names merely show a daemon
-        // exists; only its runtime state is a live answer.
-        let state = detections
+    // Every detected daemon's hotkeys must have been read for it to be one.
+    if let Some(state) = forwards {
+        let covered = detections
             .iter()
-            .any(|detection| detection.state.is_some())
-            .then_some(EvidenceTier::LiveQuery);
-        result.tier = tiers.into_iter().chain(state).max_by_key(tier_rank);
+            .all(|detection| match detection.engine.as_str() {
+                "fcitx5" => fcitx5.is_some(),
+                "ibus" => ibus.is_some(),
+                _ => false,
+            });
+        if covered {
+            let tier = tiers
+                .into_iter()
+                .chain([state.tier])
+                .max_by_key(tier_rank)
+                .unwrap_or(state.tier);
+            let mut all = state.sources;
+            all.extend(sources);
+            result = result.confirmed_pass(Checked::new(tier, all));
+        } else {
+            result
+                .details
+                .push("the hotkeys of a detected input method could not be read".into());
+        }
     }
     result
 }
@@ -865,13 +884,37 @@ fn ibus_result(
 /// [`inspect_key`]. A pass here has no evidence tier: the runtime state does
 /// not show that no hotkey takes the key.
 pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
+    let (mut result, forwards) = state_verdict(detections);
+    if forwards.is_some() {
+        result
+            .details
+            .push("input-method hotkeys were not checked".into());
+    }
+    result
+}
+
+/// The runtime state's verdict. A state that forwards keys is not a pass
+/// yet: the daemon takes its own hotkeys in any state. It comes back as an
+/// uncertain result with the [`Checked`] evidence the state contributes, and
+/// [`inspect_with_hotkey_sources`] confirms the pass once the hotkeys of
+/// every detected daemon were read.
+fn state_verdict(detections: &[Detection]) -> (LayerResult, Option<Checked>) {
     if detections.is_empty() {
-        return LayerResult::new(
-            "Input method",
-            LayerId::Ime,
-            Outcome::Pass,
-            "no supported input method was detected",
-            Vec::new(),
+        return (
+            LayerResult::pass(
+                "Input method",
+                LayerId::Ime,
+                "no supported input method was detected",
+                Vec::new(),
+                Checked::new(
+                    EvidenceTier::LiveQuery,
+                    [
+                        "GTK_IM_MODULE, QT_IM_MODULE and XMODIFIERS",
+                        "running processes (Fcitx5, IBus)",
+                    ],
+                ),
+            ),
+            None,
         );
     }
 
@@ -929,17 +972,21 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
         .any(|detection| detection.state.is_some())
         .then_some(EvidenceTier::LiveQuery);
     if transforming {
-        return LayerResult::new(
-            "Input method",
-            LayerId::Ime,
-            Outcome::UncertainContinues,
-            "an active input method may transform this input before text is committed",
-            details,
-        )
-        .with_optional_tier(tier);
+        return (
+            LayerResult::new(
+                "Input method",
+                LayerId::Ime,
+                Outcome::UncertainContinues,
+                "an active input method may transform this input before text is committed",
+                details,
+            )
+            .with_optional_tier(tier),
+            None,
+        );
     }
     if unknown {
-        return LayerResult::new(
+        return (
+            LayerResult::new(
             "Input method",
             LayerId::Ime,
             Outcome::UncertainContinues,
@@ -953,22 +1000,33 @@ pub fn inspect_with_detections(detections: &[Detection]) -> LayerResult {
             },
             details,
         )
-        .with_optional_tier(tier);
+        .with_optional_tier(tier),
+            None,
+        );
     }
     // Every detected daemon reported a runtime state that forwards keys
     // unchanged. The state says nothing about the daemon's own hotkeys
-    // (the trigger key, addon keys), which it takes in any state, so this
-    // pass carries no tier of its own: `inspect_key` adds the hotkey checks
-    // and the weakest tier they used.
-    LayerResult::new(
-        "Input method",
-        LayerId::Ime,
-        Outcome::Pass,
-        format!(
-            "input method was detected but {}; keys pass through unchanged",
-            forwarding_reasons.join(" and ")
+    // (the trigger key, addon keys), which it takes in any state, so this is
+    // not a pass yet: `inspect_with_hotkey_sources` adds the hotkey checks
+    // and confirms it with the weakest tier they used.
+    let state_checked = Checked::new(
+        EvidenceTier::LiveQuery,
+        detections
+            .iter()
+            .map(|detection| format!("{} runtime state", detection.engine)),
+    );
+    (
+        LayerResult::new(
+            "Input method",
+            LayerId::Ime,
+            Outcome::UncertainContinues,
+            format!(
+                "input method was detected but {}; keys pass through unchanged",
+                forwarding_reasons.join(" and ")
+            ),
+            details,
         ),
-        details,
+        Some(state_checked),
     )
 }
 
@@ -1681,8 +1739,8 @@ mod tests {
         // An unreadable addon file falls back to its defaults.
         let unread = with_config("a", fcitx5("keyboard-us", "inactive"), Some("[Behavior]\n"));
         assert_eq!(unread.tier, Some(EvidenceTier::Default));
-        // The state alone never makes a live pass: without the hotkeys the
-        // layer has no tier.
+        // The state alone is never a pass: without the hotkeys it is
+        // uncertain and has no tier.
         assert_eq!(
             inspect_with_detections(&[fcitx5("pinyin", "inactive")]).tier,
             None
@@ -1703,13 +1761,36 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(result.outcome, Outcome::Pass);
+        // The daemon's hotkeys cannot be read, so nothing proves that none
+        // takes the key: a forwarding state alone is not a pass.
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(result.checked.is_none());
         assert!(
-            !result
+            result
                 .details
                 .iter()
-                .any(|detail| detail.contains("hotkey"))
+                .any(|detail| detail.contains("hotkeys of a detected input method"))
         );
+    }
+
+    /// The full key-aware verdict for `a` with every detected daemon's
+    /// hotkey sources readable and empty: the state alone decides.
+    fn inspected(detections: &[Detection]) -> LayerResult {
+        let fcitx5 = detections
+            .iter()
+            .any(|detection| detection.engine == "fcitx5")
+            .then(|| files(None, &[]));
+        let ibus = detections
+            .iter()
+            .any(|detection| detection.engine == "ibus")
+            .then(|| IbusTriggers::Live(Vec::new()));
+        inspect_with_hotkey_sources(
+            &parse_key("a"),
+            detections,
+            fcitx5.as_ref(),
+            ibus.as_ref(),
+            false,
+        )
     }
 
     fn ibus_detection(panel: bool) -> Detection {
@@ -1839,7 +1920,7 @@ mod tests {
 
     #[test]
     fn inactive_fcitx_forwards_keys_with_evidence() {
-        let result = inspect_with_detections(&[fcitx5("pinyin", "inactive")]);
+        let result = inspected(&[fcitx5("pinyin", "inactive")]);
 
         assert_eq!(result.outcome, Outcome::Pass);
         assert!(result.summary.contains("is inactive"));
@@ -1855,7 +1936,7 @@ mod tests {
 
     #[test]
     fn plain_keyboard_engine_forwards_keys_even_when_active() {
-        let result = inspect_with_detections(&[fcitx5("keyboard-us", "active")]);
+        let result = inspected(&[fcitx5("keyboard-us", "active")]);
 
         assert_eq!(result.outcome, Outcome::Pass);
         assert!(
@@ -1900,7 +1981,7 @@ mod tests {
             ("inactive", Outcome::Pass),
             ("closed", Outcome::Pass),
         ] {
-            let result = inspect_with_detections(&[fcitx5("pinyin", state)]);
+            let result = inspected(&[fcitx5("pinyin", state)]);
             assert_eq!(result.outcome, outcome, "state {state}");
             assert!(result.details.iter().any(|detail| {
                 detail.contains("text reconstruction:") && detail.contains("conditional")
@@ -1925,7 +2006,7 @@ mod tests {
         assert!(active.summary.contains("active input method"));
         assert_eq!(active.outcome, Outcome::UncertainContinues);
 
-        let layout = inspect_with_detections(&[ibus("xkb:us::eng")]);
+        let layout = inspected(&[ibus("xkb:us::eng")]);
         assert_eq!(layout.outcome, Outcome::Pass);
 
         let unreachable = inspect_with_detections(&[Detection {
@@ -1968,7 +2049,7 @@ mod tests {
         // `ibus engine` answers "No global engine": the daemon is reachable
         // and no engine is selected, so keys pass unchanged. It is not an
         // unreachable runtime API.
-        let result = inspect_with_detections(&[ibus_no_engine(true)]);
+        let result = inspected(&[ibus_no_engine(true)]);
 
         assert_eq!(result.outcome, Outcome::Pass);
         assert!(result.summary.contains("no engine is set"));

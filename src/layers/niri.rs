@@ -5,7 +5,7 @@ use std::process::Command;
 use serde_json::Value;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_BINDINGS: usize = 4096;
@@ -113,8 +113,15 @@ impl Niri {
                     "a Niri binding could not be read, so no match can be ruled out",
                 )
             };
-            return LayerResult::new("Niri", LayerId::Compositor, outcome, summary, details)
-                .with_tier(EvidenceTier::ConfigFile);
+            return LayerResult::decided(
+                "Niri",
+                LayerId::Compositor,
+                outcome,
+                Checked::new(EvidenceTier::ConfigFile, [sources_description(&loaded)]),
+                summary,
+                details,
+            )
+            .with_tier(EvidenceTier::ConfigFile);
         }
         for binding in matches {
             details.push(format!(

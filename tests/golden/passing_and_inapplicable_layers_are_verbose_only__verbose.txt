@@ -6,8 +6,9 @@ Ctrl+]
 
 Route
   1  Remapper      v  none detected
-  2  Hyprland      v  no binding
+  2  Hyprland      v  no binding                                      live query
   3  Kitty         v  no Kitty binding; forwarded to the terminal input
+                      live query
   4  Input method  v  none detected
   5  TTY driver    ?  terminal byte encoding is unknown; TTY signal checks
                       unevaluated
@@ -15,13 +16,17 @@ Route
   7  Shell input   ?  terminal byte encoding is unknown; shell line editing
                       unevaluated
 
+Confidence  live query: no layer reported a binding.
+
 Technical evidence
   requested key: Ctrl+]
   configuration route (predicted):
     1. Hyprland [NotHandled; Continues]
        summary: no active binding found
+       checked (live query): test fixture
     2. Kitty [NotHandled; Continues]
        summary: no Kitty binding; forwarded to the terminal input
+       checked (live query): test fixture
     3. TTY driver [Indeterminate; Indeterminate]
        summary: terminal byte encoding is unknown; TTY signal checks unevaluated
     4. Shell input [Indeterminate; Indeterminate]

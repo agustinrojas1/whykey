@@ -2,7 +2,7 @@ use crate::recording::PathInputs;
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome, openbox};
+use crate::layers::{BindingRecord, Checked, EvidenceTier, LayerId, LayerResult, Outcome, openbox};
 use crate::util::ProcessSnapshot;
 
 /// Read-only labwc adapter. labwc intentionally keeps an Openbox-compatible
@@ -66,14 +66,31 @@ impl Labwc {
         let mut details = vec![format!("config: {}", path.display())];
         if matches.is_empty() {
             details.push("no matching static labwc keybind found in rc.xml".into());
-            return LayerResult::new(
+            if uses_default_keybinds(&path) {
+                // labwc loads its own keybinds (Alt+Tab, Alt+F4, the Super
+                // shortcuts) when rc.xml has no <keyboard> section or asks
+                // for <default />; whykey carries no table of them.
+                details.push(
+                    "rc.xml loads labwc's built-in default keybinds, which are not checked".into(),
+                );
+                return LayerResult::uncertain_continues(
+                    "labwc",
+                    LayerId::Compositor,
+                    "no labwc keybind in rc.xml, but labwc's default keybinds are not checked",
+                    details,
+                )
+                .with_tier(EvidenceTier::ConfigFile);
+            }
+            return LayerResult::pass(
                 "labwc",
                 LayerId::Compositor,
-                Outcome::Pass,
                 "no matching labwc key binding found",
                 details,
-            )
-            .with_tier(EvidenceTier::ConfigFile);
+                Checked::new(
+                    EvidenceTier::ConfigFile,
+                    [format!("rc.xml {}", path.display())],
+                ),
+            );
         }
         for binding in matches {
             details.push(format!("binding: {}", binding.action));
@@ -101,6 +118,15 @@ impl Labwc {
         )
         .with_tier(EvidenceTier::ConfigFile)
     }
+}
+
+/// Whether rc.xml leaves labwc its built-in keybinds: no `<keyboard>`
+/// section, or one that asks for `<default />`.
+fn uses_default_keybinds(path: &std::path::Path) -> bool {
+    let Ok(content) = crate::recording::read_to_string(path) else {
+        return true;
+    };
+    !content.contains("<keyboard") || content.contains("<default")
 }
 
 fn load_bindings() -> Result<(PathBuf, Vec<openbox::Binding>), String> {

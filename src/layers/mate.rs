@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::key::KeyCombo;
 use crate::layers::gsettings::{self, GsettingsBinding, GsettingsMeta};
-use crate::layers::{BindingRecord, LayerResult};
+use crate::layers::{BindingRecord, LayerResult, Outcome};
 
 /// Read-only MATE global keyboard-shortcut adapter.
 pub struct Mate;
@@ -72,6 +72,12 @@ impl Mate {
         // Partial per-schema failures stay visible after the match details,
         // exactly as the pre-consolidation adapter reported them.
         let mut result = gsettings::inspect(&META, Ok(bindings), key);
+        if !errors.is_empty() && result.outcome == Outcome::Pass {
+            // A schema that could not be read may hold the key.
+            result.outcome = Outcome::UncertainContinues;
+            result.checked = None;
+            result.summary = "no MATE global shortcut found, but not every schema was read".into();
+        }
         result.details.extend(errors);
         result
     }
