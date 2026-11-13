@@ -40,6 +40,12 @@
   others in the details, and downgrades a no-match to uncertain when another
   adapter could not be checked.
 
+- A Konsole keytab entry that names an application action
+  (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
+  consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
+  commands, so such an entry is an unknown outcome. The lab scenarios that
+  claimed otherwise took "a window went fullscreen" from a Sway tree check that
+  was always true; they now check the terminal's own window.
 - With no input method detected, the Input method row of the route table says
   "none detected" instead of "not inspected": whykey did look.
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
