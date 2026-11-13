@@ -14,7 +14,7 @@
     {"tty_log": "stop"}
   ],
   "ground_truth": {
-    "fired": {"sh": "swaymsg -t get_tree | grep -Eq '\"fullscreen_mode\": *1'"},
+    "fired": {"sh": "swaymsg -t get_tree | python3 -c \"import json,sys; t=json.load(sys.stdin); f=lambda n: (n.get('app_id')=='com.mitchellh.ghostty' and n.get('fullscreen_mode')==1) or any(f(c) for c in n.get('nodes',[])+n.get('floating_nodes',[])); sys.exit(0 if f(t) else 1)\""},
     "delivered": {"tty_input": {"any": true}}
   },
   "whykey": {"args": ["ctrl+f11"], "layer": "Ghostty"}
