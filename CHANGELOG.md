@@ -16,6 +16,11 @@
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
   reported as held by Ghostty (handled, uncertain) instead of "no binding,
   forwarded to the terminal". Ghostty consumes it until the next key arrives.
+- Ghostty's performable default bindings (Escape for `end_search`,
+  Shift+arrows for `adjust_selection`, Ctrl+Shift+C/V, Alt+digit tab
+  switching, split and tab navigation) are no longer reported as consuming the
+  key: they act only when there is something to act on, so the key most likely
+  continues to the program.
 - `inspect --pid` and `--focused` read the termios of the target's terminal
   for the TTY driver row, not whykey's own. A program in raw mode (vim, less)
   no longer reads as "IXON consumes Ctrl+S" or "ISIG sends SIGINT" because
