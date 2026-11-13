@@ -969,18 +969,10 @@ pub fn parent_process_id() -> u32 {
 /// The termios settings of the controlling terminal (`/dev/tty`), recorded.
 /// Errors keep the text the caller reports.
 pub fn tty_termios() -> Result<libc::termios, String> {
-    use std::os::unix::io::AsRawFd;
-    let live = || -> Result<libc::termios, String> {
+    let live = || {
         let tty =
             File::open("/dev/tty").map_err(|error| format!("failed to open /dev/tty: {error}"))?;
-        let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
-        if unsafe { libc::tcgetattr(tty.as_raw_fd(), &mut termios) } != 0 {
-            return Err(format!(
-                "failed to read terminal settings: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        Ok(termios)
+        termios_of(&tty)
     };
     if is_live() {
         return live();
@@ -992,6 +984,46 @@ pub fn tty_termios() -> Result<libc::termios, String> {
         encode_termios,
         decode_termios,
     )
+}
+
+/// The termios settings of another process's terminal device, recorded. The
+/// device is opened read-only without becoming whykey's controlling terminal
+/// (`O_NOCTTY`) and without blocking (`O_NONBLOCK`); only `tcgetattr` is
+/// issued, so nothing about the terminal changes. Errors keep the text the
+/// caller reports (for example a device of another user).
+pub fn tty_termios_of(path: &str) -> Result<libc::termios, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let live = || {
+        let tty = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|error| format!("failed to open {path}: {error}"))?;
+        termios_of(&tty)
+    };
+    if is_live() {
+        return live();
+    }
+    answer(
+        "tty_termios_of",
+        json!(path),
+        live,
+        encode_termios,
+        decode_termios,
+    )
+}
+
+fn termios_of(tty: &File) -> Result<libc::termios, String> {
+    use std::os::unix::io::AsRawFd;
+    // Zeroed, not uninit: musl's termios is larger than the kernel's.
+    let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
+    if unsafe { libc::tcgetattr(tty.as_raw_fd(), &mut termios) } != 0 {
+        return Err(format!(
+            "failed to read terminal settings: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(termios)
 }
 
 fn encode_termios(result: &Result<libc::termios, String>) -> Value {
