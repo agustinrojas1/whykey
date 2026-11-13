@@ -1,7 +1,7 @@
 <!-- Generated from README.md by tools/generate_crates_readme.py. Do not edit it by hand; CI checks that it is current. -->
 
 <h1 align="center">
-  <img src="docs/assets/logo/whykey-lockup.svg" alt="whykey" width="354">
+  <img src="docs/assets/logo/whykey-lockup-auto.svg" alt="whykey" width="354">
 </h1>
 
 <p align="center">
@@ -40,7 +40,7 @@ through a chain of programs, and **any one of them can take the key and stop
 it there**:
 
 <p align="center">
-  <img src="docs/assets/key-path-light.svg" alt="The path of a key press on Linux: remapper, compositor or window manager, terminal, TTY driver, input method, multiplexer, and finally the application or shell. Every layer is a checkpoint that can stop the key, pass it on, or rewrite it." width="820">
+  <img src="docs/assets/key-path-auto.svg" alt="The path of a key press on Linux: remapper, compositor or window manager, terminal, TTY driver, input method, multiplexer, and finally the application or shell. Every layer is a checkpoint that can stop the key, pass it on, or rewrite it." width="820">
 </p>
 
 When `Ctrl+Left` does nothing in your editor, the culprit could be a global
@@ -215,13 +215,9 @@ unavailable, not applicable here, and unknown.
 For every layer, whykey uses the strongest source of evidence available and
 labels the answer with it:
 
-```mermaid
-flowchart LR
-    O["<b>1 · Observe</b><br/>capture the key itself<br/><sub>whykey listen</sub>"]
-    A["<b>2 · Ask the running program</b><br/><sub>compositor IPC · D-Bus · X server grabs<br/>tmux · live shell bindings</sub>"]
-    F["<b>3 · Read configuration</b><br/><sub>config files · built-in defaults</sub>"]
-    O -- "not observable" --> A -- "cannot be asked" --> F
-```
+<p align="center">
+  <img src="docs/assets/evidence-tiers.svg" alt="Evidence tiers: observe the key itself (whykey listen); if it is not observable, ask the running program; if it cannot be asked, read configuration files and built-in defaults." width="820">
+</p>
 
 | Tier | Meaning |
 | --- | --- |
@@ -300,21 +296,9 @@ real program in a throwaway container or VM, presses a real key, and records
 what actually happened through an independent path. whykey's verdict must
 match.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant S as Scenario
-    participant P as Real program<br/>(Sway, KWin, tmux…)
-    participant O as Independent oracle
-    participant W as whykey
-    S->>P: start with a test config
-    S->>P: synthetic key press (virtual or kernel keyboard)
-    P-->>O: did the bind run? did a test window receive the key?
-    S->>W: whykey KEY --json
-    W-->>S: verdict
-    O-->>S: ground truth
-    Note over S: passes only if the verdict matches reality
-```
+<p align="center">
+  <img src="docs/assets/reality-lab.svg" alt="A reality-lab scenario starts the real program, presses a synthetic key, and lets an independent oracle record what happened; it passes only if whykey's verdict matches that ground truth." width="820">
+</p>
 
 Every scenario also needs a positive control, so a broken setup can never
 pass by accident. Current run: **249 scenarios: 208 match exactly, 41 pass
