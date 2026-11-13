@@ -537,6 +537,47 @@ fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<Term
     )
 }
 
+/// Every binding the detected terminal applies (its defaults, overridden by
+/// the configuration), for `whykey bindings`.
+pub fn binding_inventory() -> Result<Vec<crate::layers::BindingRecord>, String> {
+    let kind = terminal_kind().ok_or("the terminal is not one whykey reads bindings for")?;
+    let loaded = load(kind).map_err(|layer| {
+        format!(
+            "{}: {}",
+            layer.layer,
+            layer
+                .details
+                .first()
+                .map_or(layer.summary.as_str(), String::as_str)
+        )
+    })?;
+    Ok(loaded
+        .bindings
+        .iter()
+        .map(|binding| {
+            let certainty = match binding.origin {
+                Origin::Default => match defaults::version(kind) {
+                    Some(version) => format!("built-in default ({kind} {version})"),
+                    None => "built-in default".to_owned(),
+                },
+                Origin::Config => loaded.source.clone(),
+            };
+            let action = if binding.unmaps {
+                format!("{} (unmapped)", binding.action)
+            } else {
+                binding.action.clone()
+            };
+            crate::layers::BindingRecord::new(
+                kind.layer_name(),
+                binding.trigger.compact_display(),
+                action,
+                certainty,
+            )
+            .with_context("terminal binding")
+        })
+        .collect())
+}
+
 pub fn applicable() -> bool {
     terminal_kind().is_some()
 }

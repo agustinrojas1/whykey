@@ -228,8 +228,13 @@ fn run_bindings(
     _color: ColorChoice,
 ) -> ExitCode {
     let inventory = command::with_deadline(command::configured_diagnostic_timeout(), || {
+        let inventory = if filters.key.is_some() {
+            bindings::current_with_terminal()
+        } else {
+            bindings::current()
+        };
         bindings::filter(
-            bindings::current(),
+            inventory,
             filters.key.as_deref(),
             filters.action.as_deref(),
             filters.source.as_deref(),

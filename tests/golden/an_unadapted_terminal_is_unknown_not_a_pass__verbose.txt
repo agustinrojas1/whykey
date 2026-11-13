@@ -1,8 +1,7 @@
 Ctrl+Shift+C
 
-? Nothing claims Ctrl+Shift+C before Unknown terminal and Shell input, which
-  whykey could not verify.
-  What those layers do with it is unknown.
+? Whykey found nothing that takes Ctrl+Shift+C, but could not check everything -
+  press it: `whykey listen`
 
 Route
   1  Remapper          v  none detected
@@ -14,8 +13,6 @@ Route
   6  Multiplexer       -  not inspected
   7  Shell input       ?  terminal byte encoding is unknown; shell line editing
                           unevaluated
-
-Confidence  live query: no layer reported a binding.
 
 Technical evidence
   requested key: Ctrl+Shift+C

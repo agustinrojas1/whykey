@@ -279,6 +279,56 @@ impl Ghostty {
         self.analyze(key, protocol_flags, None).1
     }
 
+    /// Every binding Ghostty applies, for `whykey bindings`. The live listing
+    /// includes Ghostty's defaults; a configuration file alone lists only the
+    /// changes.
+    pub fn binding_inventory(&self) -> Result<Vec<crate::layers::BindingRecord>, String> {
+        let config = self.load_config()?;
+        let certainty = match &config.source {
+            Some(source) => format!("live listing ({source})"),
+            None => "configuration file; Ghostty's defaults are not listed".to_owned(),
+        };
+        let record = |trigger: &KeyCombo, action: &str, context: String| {
+            crate::layers::BindingRecord::new(
+                "Ghostty",
+                trigger.compact_display(),
+                action.to_owned(),
+                certainty.clone(),
+            )
+            .with_context(context)
+        };
+        let mut records: Vec<_> = config
+            .bindings
+            .iter()
+            .map(|binding| {
+                let mut flags = Vec::new();
+                if binding.performable {
+                    flags.push("performable");
+                }
+                if binding.unconsumed {
+                    flags.push("unconsumed");
+                }
+                if binding.global {
+                    flags.push("global");
+                }
+                let context = if flags.is_empty() {
+                    "terminal keybind".to_owned()
+                } else {
+                    format!("terminal keybind ({})", flags.join(", "))
+                };
+                record(&binding.trigger, &binding.action, context)
+            })
+            .collect();
+        records.extend(config.sequences.iter().map(|sequence| {
+            record(
+                &sequence.leader,
+                &format!("{} (sequence {})", sequence.action, sequence.trigger),
+                "terminal key sequence (first key)".to_owned(),
+            )
+        }));
+        Ok(records)
+    }
+
     fn load_config(&self) -> Result<ConfigState, String> {
         if self.use_cli {
             if let Some(config) = load_cli_keybinds() {
