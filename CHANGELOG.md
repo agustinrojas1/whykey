@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- GNOME keys bound by Shell extensions (Dash to Dock's Super+1..9, Pop
+  Shell, Tiling Assistant, Forge and the rest) are now read from the
+  enabled extensions' settings. A match is reported as handled by "GNOME
+  Shell extension <name>"; when an enabled extension's settings cannot be
+  read, a miss is reported as uncertain instead of "no GNOME shortcut uses
+  this key". A miss also notes that xdg-desktop-portal GlobalShortcuts
+  registrations cannot be listed.
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
   rest) are now read from `fcitx5/config`, with Fcitx5's defaults when a
   section is absent. Fcitx5 takes these even while the input method is
