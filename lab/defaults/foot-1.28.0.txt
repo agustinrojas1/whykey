@@ -1,0 +1,19 @@
+# whykey default-bindings fixture; regenerate with tools/dump_defaults.py
+# program: foot
+# version: 1.28.0
+# source: the host
+# command: cat /etc/xdg/foot/foot.ini
+scrollback-up-page	Shift+Page_Up Shift+KP_Page_Up
+scrollback-down-page	Shift+Page_Down Shift+KP_Page_Down
+clipboard-copy	Control+Shift+c XF86Copy
+clipboard-paste	Control+Shift+v XF86Paste
+primary-paste	Shift+Insert
+search-start	Control+Shift+r
+font-increase	Control+plus Control+equal Control+KP_Add
+font-decrease	Control+minus Control+KP_Subtract
+font-reset	Control+0 Control+KP_0
+spawn-terminal	Control+Shift+n
+show-urls-launch	Control+Shift+o
+prompt-prev	Control+Shift+z
+prompt-next	Control+Shift+x
+unicode-input	Control+Shift+u
