@@ -20,6 +20,7 @@ pub mod extensions;
 pub mod focus;
 pub mod hyprland_capture;
 pub mod ime;
+pub mod ime_frontend;
 pub mod key;
 pub mod layers;
 pub mod listen;

@@ -3356,6 +3356,138 @@ mod tests {
         crate::style::assert_golden("consumed_tty_row_uses_the_layer_summary", &output);
     }
 
+    /// `(name, detail)` of each row of the rendered route table.
+    fn route_table(output: &str) -> Vec<(String, String)> {
+        output
+            .lines()
+            .skip_while(|line| line.trim() != "Route")
+            .skip(1)
+            .take_while(|line| !line.trim().is_empty())
+            .map(|line| {
+                let mut words = line.split_whitespace().skip(1);
+                let mut name = String::new();
+                let mut rest = Vec::new();
+                for word in words.by_ref() {
+                    if matches!(word, "v" | "x" | "?" | "-" | "~" | ">") {
+                        rest = words.collect();
+                        break;
+                    }
+                    if !name.is_empty() {
+                        name.push(' ');
+                    }
+                    name.push_str(word);
+                }
+                (name, rest.join(" "))
+            })
+            .collect()
+    }
+
+    fn ime_taking_the_key(placement: crate::layers::ImePlacement) -> LayerResult {
+        LayerResult::consumed(
+            "Input method",
+            LayerId::Ime,
+            "Fcitx5 takes the key as a global hotkey",
+            vec![],
+        )
+        .with_ime_placement(placement)
+    }
+
+    #[test]
+    fn a_wayland_input_method_that_takes_the_key_precedes_and_stops_the_terminal() {
+        let layers = [
+            LayerResult::pass(
+                "Compositor",
+                LayerId::Compositor,
+                "no compositor binding matched",
+                vec![],
+            ),
+            ime_taking_the_key(crate::layers::ImePlacement::BeforeTerminal),
+        ];
+        let table = route_table(&render_wide("ctrl+alt+p", &layers));
+        let names: Vec<&str> = table.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Remapper",
+                "Compositor",
+                "Input method",
+                "Terminal",
+                "TTY driver",
+                "Multiplexer",
+                "Shell"
+            ]
+        );
+        for stopped in ["Terminal", "TTY driver", "Multiplexer", "Shell"] {
+            let row = table.iter().find(|(name, _)| name == stopped).unwrap();
+            assert_eq!(row.1, "not reached", "{stopped}: {table:?}");
+        }
+    }
+
+    #[test]
+    fn the_tty_row_after_a_stopping_input_method_is_not_reached() {
+        // Fcitx5 behind a client module takes the key after the terminal.
+        let layers = [
+            LayerResult::pass(
+                "Terminal",
+                LayerId::Terminal,
+                "no terminal binding matched",
+                vec![],
+            ),
+            ime_taking_the_key(crate::layers::ImePlacement::AfterTerminal),
+        ];
+        let table = route_table(&render_wide("ctrl+alt+p", &layers));
+        let row = |wanted: &str| table.iter().find(|(name, _)| name == wanted).unwrap();
+        assert_eq!(row("TTY driver").1, "not reached", "{table:?}");
+        assert_eq!(row("Shell").1, "not reached", "{table:?}");
+        // The compositor precedes the stop and whykey did not check it.
+        assert_eq!(row("Compositor").1, "not inspected", "{table:?}");
+    }
+
+    #[test]
+    fn rows_after_an_unavailable_layer_stay_not_inspected() {
+        let layers = [LayerResult::unavailable(
+            "Compositor",
+            LayerId::Compositor,
+            "the compositor could not be queried",
+            vec![],
+        )];
+        let table = route_table(&render_wide("ctrl+alt+p", &layers));
+        for later in ["Terminal", "TTY driver", "Shell"] {
+            let row = table.iter().find(|(name, _)| name == later).unwrap();
+            assert_eq!(row.1, "not inspected", "{later}: {table:?}");
+        }
+    }
+
+    #[test]
+    fn json_and_ndjson_paths_keep_the_route_order_of_the_layers() {
+        let layers = [
+            LayerResult::pass("Compositor", LayerId::Compositor, "no binding", vec![]),
+            LayerResult::pass("Input method", LayerId::Ime, "forwarded", vec![])
+                .with_ime_placement(crate::layers::ImePlacement::BeforeTerminal),
+            LayerResult::pass("Terminal", LayerId::Terminal, "no binding", vec![]),
+            LayerResult::pass("TTY driver", LayerId::Tty, "plain byte", vec![]),
+        ];
+        let key: KeyCombo = "ctrl+alt+p".parse().unwrap();
+        let expected: Vec<&str> = layers.iter().map(|layer| layer.layer).collect();
+        let v1: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 1)).unwrap();
+        let v2: serde_json::Value =
+            serde_json::from_str(&render_json(&key, &layers, None, 2)).unwrap();
+        let nd: serde_json::Value =
+            serde_json::from_str(&render_ndjson(&key, &layers, None)).unwrap();
+        let names = |value: &serde_json::Value, field: &str| -> Vec<String> {
+            value[field]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["layer"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(names(&v1, "layers"), expected);
+        assert_eq!(names(&v2, "path"), expected);
+        assert_eq!(names(&nd, "path"), expected);
+    }
+
     fn readline_default(source: Option<crate::layers::SourceLocation>) -> LayerResult {
         let tier = if source.is_some() {
             EvidenceTier::ConfigFile
