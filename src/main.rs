@@ -162,12 +162,12 @@ fn run_inspect(
     };
     let has_explicit_target = target_pid.is_some() || focused;
     if let Some(pid) = resolved_pid.filter(|pid| !focus::shares_terminal_with_whykey(*pid)) {
-        // The terminal emulator and TTY driver layers read whykey's own
-        // environment and /dev/tty; only the application and shell layers
-        // follow the target. Say so instead of mixing the two silently.
+        // The terminal emulator layer reads whykey's own environment; the TTY
+        // driver, application and shell layers follow the target. Say so
+        // instead of mixing the two silently.
         eprintln!(
-            "note: process {pid} is not on whykey's terminal; the terminal emulator and TTY \
-             driver rows describe the terminal whykey runs in, the application and shell \
+            "note: process {pid} is not on whykey's terminal; the terminal emulator row \
+             describes the terminal whykey runs in, the TTY driver, application and shell \
              rows describe process {pid}"
         );
     }
