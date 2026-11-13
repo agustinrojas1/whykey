@@ -13,6 +13,9 @@
 
 ### Fixed
 
+- The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
+  reported as held by Ghostty (handled, uncertain) instead of "no binding,
+  forwarded to the terminal". Ghostty consumes it until the next key arrives.
 - Ghostty's performable default bindings (Escape for `end_search`,
   Shift+arrows for `adjust_selection`, Ctrl+Shift+C/V, Alt+digit tab
   switching, split and tab navigation) are no longer reported as consuming the
