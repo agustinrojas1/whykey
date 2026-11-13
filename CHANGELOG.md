@@ -46,6 +46,15 @@ mode, and one route order with the input method where the key meets it.
 
 ### Fixed
 
+- The default-binding tables whykey embeds are checked against the programs
+  themselves. `tools/dump_defaults.py` dumps bash Readline (`bind -p`), kitty
+  (`definition.iter_all_maps()`), foot (its packaged `foot.ini`), Ghostty
+  (`+list-keybinds --default`) and Fcitx5 (its D-Bus configuration) to
+  `lab/defaults/<program>-<version>.txt`, and unit tests compare each embedded
+  table with its fixture (no Docker needed to run them). That found Fcitx5's
+  `ActivateKeys`/`DeactivateKeys` defaults (Hangul_Hanja/Hangul_Romaja) missing
+  and five rows in Ghostty's performable list that are not defaults. Alacritty
+  and Konsole cannot list their defaults, and their table docs say so.
 - A "no binding" answer can no longer be reported without saying what was
   checked. Every pass records its evidence tier and the sources it read
   (`--verbose` shows them; schema-v2 and NDJSON path entries of passes carry

@@ -194,7 +194,8 @@ struct HotkeyOption {
 /// nothing); `Instance` and `IMSelector` filter their hotkeys at the
 /// PreInputMethod phase. Defaults are the `KeyListOption`s of
 /// `modules/{quickphrase,clipboard,unicode,imselector}` and of
-/// `instance.cpp`'s global config. The Chinese addons' hotkeys (chttrans
+/// `instance.cpp`'s global config, and the defaults are compared with the
+/// daemon's own (`lab/defaults/fcitx5-*.txt`, `tools/dump_defaults.py`). The Chinese addons' hotkeys (chttrans
 /// `Hotkey`, fullwidth `Hotkey`, punctuation `Hotkey`) are not listed: their
 /// handlers only act while an engine that registered their status-area
 /// action is active, and that state is already reported as "may transform".
@@ -234,12 +235,12 @@ const FCITX5_COMPONENTS: &[Fcitx5Component] = &[
             },
             HotkeyOption {
                 name: "ActivateKeys",
-                defaults: &[],
+                defaults: &["Hangul_Hanja"],
                 action: "activates the input method",
             },
             HotkeyOption {
                 name: "DeactivateKeys",
-                defaults: &[],
+                defaults: &["Hangul_Romaja"],
                 action: "deactivates the input method",
             },
             HotkeyOption {
@@ -1345,6 +1346,50 @@ fn process_engine(process: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use crate::defaults_fixtures;
+
+    /// Fcitx5's key-list options with a candidate window or an input method
+    /// engine in the loop: they act only while one is shown, so they are not
+    /// modelled (see [`Fcitx5Component`]).
+    const FCITX5_UNMODELLED: &[&str] = &[
+        "global/PrevPage",
+        "global/NextPage",
+        "global/PrevCandidate",
+        "global/NextCandidate",
+    ];
+
+    /// The hotkey defaults are the ones the Fcitx5 daemon itself reports
+    /// (`lab/defaults/fcitx5-*.txt`, read over its D-Bus controller), and a
+    /// key-list option the daemon has that is neither embedded nor listed in
+    /// `FCITX5_UNMODELLED` is a new hotkey whykey does not know.
+    #[test]
+    fn fcitx5_hotkey_defaults_equal_the_daemons() {
+        let Some(fixture) = defaults_fixtures::load("fcitx5") else {
+            return;
+        };
+        assert_eq!(fixture.version, "5.1.23");
+        let mut embedded = Vec::new();
+        for component in FCITX5_COMPONENTS {
+            let config = component.addon.unwrap_or("global");
+            for option in component.options {
+                embedded.push((
+                    format!("{config}/{}", option.name),
+                    option.defaults.join(" "),
+                ));
+            }
+        }
+        let modelled = defaults_fixtures::Fixture {
+            version: fixture.version.clone(),
+            rows: fixture
+                .rows
+                .iter()
+                .filter(|(name, _)| !FCITX5_UNMODELLED.contains(&name.as_str()))
+                .cloned()
+                .collect(),
+        };
+        defaults_fixtures::assert_same_rows("Fcitx5 hotkey defaults", &embedded, &modelled);
+    }
+
     use super::*;
     use crate::layers::EvidenceTier;
 
