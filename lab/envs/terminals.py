@@ -12,6 +12,9 @@ ACTIONS
                                         to the program's tty (ttylog.py);
                                         "flags" pushes Kitty keyboard flags N
     {"tty_log": "stop"}                 end the recording
+    {"term_sh": "COMMAND"[, "timeout": S]}  run COMMAND on the terminal's tty
+                                        (not while a recording runs: the
+                                        terminal runs one command at a time)
 CHECKS
     {"tty_input": {"equals": "\\x1b[1;5D"}}  the program received exactly these bytes
     {"tty_input": {"any": true}}             the program received some byte
@@ -110,6 +113,12 @@ def tty_log(lab, action: dict) -> None:
     wait_for(lambda: os.path.exists(done), 10.0, "the tty recorder to exit")
 
 
+def term_sh(lab, action: dict) -> None:
+    """Run a shell command on the terminal's tty and wait for it to exit."""
+    done = _queue(action["term_sh"])
+    wait_for(lambda: os.path.exists(done), float(action.get("timeout", 10)), "the terminal command")
+
+
 def _received() -> bytes:
     try:
         with open(LOG, "rb") as handle:
@@ -140,5 +149,5 @@ def logs(lab) -> dict[str, str]:
     return {"tty input": repr(_received())[-2000:]}
 
 
-ACTIONS = {"tty_log": tty_log}
+ACTIONS = {"tty_log": tty_log, "term_sh": term_sh}
 CHECKS = {"tty_input": tty_input}
