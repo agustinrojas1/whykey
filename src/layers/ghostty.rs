@@ -114,6 +114,9 @@ struct Binding {
     global: bool,
     all: bool,
     performable: bool,
+    /// A performable default of Ghostty itself (never written by the user):
+    /// with nothing to act on, which is the usual state, it sends the key on.
+    default_performable: bool,
 }
 
 #[derive(Debug, Default)]
@@ -438,6 +441,20 @@ fn inspect_config(
         );
     }
 
+    if binding.performable && binding.default_performable {
+        details.push(
+            "a Ghostty default that acts only when there is something to act on (a selection, an open search, another tab or split); otherwise the key reaches the program"
+                .into(),
+        );
+        return LayerResult::new(
+            "Ghostty",
+            LayerId::Terminal,
+            Outcome::UncertainContinues,
+            "Ghostty default binding acts only when it has something to act on; the key most likely continues",
+            details,
+        );
+    }
+
     if binding.performable {
         details.push("action may pass through when it is not performable".into());
         return LayerResult::new(
@@ -548,9 +565,78 @@ fn parse_cli_keybinds(output: &str) -> Option<ConfigState> {
         let Some(value) = line.strip_prefix("keybind =") else {
             continue;
         };
-        let _ = parse_keybind(value.trim(), &mut state);
+        let value = value.trim();
+        let before = state.bindings.len();
+        let _ = parse_keybind(value, &mut state);
+        // The listing does not print the `performable:` flag of Ghostty's own
+        // default bindings, so a default that is performable is recognised by
+        // its trigger and action.
+        if is_performable_default(value) && state.bindings.len() > before {
+            if let Some(binding) = state.bindings.last_mut() {
+                binding.performable = true;
+                binding.default_performable = true;
+            }
+        }
     }
     Some(state)
+}
+
+/// Default bindings Ghostty registers as `performable` on Linux
+/// (`src/config/Config.zig`, `Keybinds.init`): the key goes on to the program
+/// when the action has nothing to act on (no selection to copy or adjust, no
+/// search to end, no second tab or split, ...). Written as
+/// `ghostty +list-keybinds --plain` prints them.
+const PERFORMABLE_DEFAULTS: &[&str] = &[
+    "ctrl+shift+c=copy_to_clipboard:mixed",
+    "ctrl+shift+v=paste_from_clipboard",
+    "shift+arrow_left=adjust_selection:left",
+    "shift+arrow_right=adjust_selection:right",
+    "shift+arrow_up=adjust_selection:up",
+    "shift+arrow_down=adjust_selection:down",
+    "shift+page_up=adjust_selection:page_up",
+    "shift+page_down=adjust_selection:page_down",
+    "shift+home=adjust_selection:home",
+    "shift+end=adjust_selection:end",
+    "ctrl+shift+arrow_left=previous_tab",
+    "ctrl+shift+arrow_right=next_tab",
+    "ctrl+page_up=previous_tab",
+    "ctrl+page_down=next_tab",
+    "super+ctrl+[=goto_split:previous",
+    "super+ctrl+]=goto_split:next",
+    "ctrl+alt+arrow_up=goto_split:up",
+    "ctrl+alt+arrow_down=goto_split:down",
+    "ctrl+alt+arrow_left=goto_split:left",
+    "ctrl+alt+arrow_right=goto_split:right",
+    "super+ctrl+shift+arrow_up=resize_split:up,10",
+    "super+ctrl+shift+arrow_down=resize_split:down,10",
+    "super+ctrl+shift+arrow_left=resize_split:left,10",
+    "super+ctrl+shift+arrow_right=resize_split:right,10",
+    "ctrl+shift+page_up=move_tab:-1",
+    "ctrl+shift+page_down=move_tab:1",
+    "ctrl+shift+f=start_search",
+    "escape=end_search",
+    "alt+1=goto_tab:1",
+    "alt+2=goto_tab:2",
+    "alt+3=goto_tab:3",
+    "alt+4=goto_tab:4",
+    "alt+5=goto_tab:5",
+    "alt+6=goto_tab:6",
+    "alt+7=goto_tab:7",
+    "alt+8=goto_tab:8",
+    "alt+9=last_tab",
+    "alt+digit_1=goto_tab:1",
+    "alt+digit_2=goto_tab:2",
+    "alt+digit_3=goto_tab:3",
+    "alt+digit_4=goto_tab:4",
+    "alt+digit_5=goto_tab:5",
+    "alt+digit_6=goto_tab:6",
+    "alt+digit_7=goto_tab:7",
+    "alt+digit_8=goto_tab:8",
+    "alt+digit_9=last_tab",
+];
+
+fn is_performable_default(value: &str) -> bool {
+    PERFORMABLE_DEFAULTS.contains(&value)
 }
 
 fn parse_keybind(value: &str, state: &mut ConfigState) -> Result<(), String> {
@@ -587,6 +673,7 @@ fn parse_keybind(value: &str, state: &mut ConfigState) -> Result<(), String> {
         global: prefixes.global,
         all: prefixes.all,
         performable: prefixes.performable,
+        default_performable: false,
     });
     Ok(())
 }
@@ -1490,6 +1577,28 @@ xkb_symbols "pc" {
         assert!(result.details.iter().any(|detail| {
             detail.contains("trigger(s) not resolved") && detail.contains("physical:ctrl+left")
         }));
+    }
+
+    #[test]
+    fn performable_defaults_may_pass_the_key_on() {
+        // Escape and Shift+arrows are Ghostty defaults that act only with a
+        // search open or a selection to adjust; otherwise the program gets
+        // them (lab `ghostty-default-escape`, `ghostty-default-shift-left`).
+        let config = parse_cli_keybinds(
+            "keybind = escape=end_search\nkeybind = shift+arrow_left=adjust_selection:left\nkeybind = ctrl+shift+t=new_tab\nkeybind = ctrl+x=end_search\n",
+        )
+        .unwrap();
+        for (text, outcome) in [
+            ("escape", Outcome::UncertainContinues),
+            ("shift+left", Outcome::UncertainContinues),
+            ("ctrl+shift+t", Outcome::Consumed),
+            // The same action on another trigger is not a default.
+            ("ctrl+x", Outcome::Consumed),
+        ] {
+            let key: KeyCombo = text.parse().unwrap();
+            let result = inspect_config(&key, Path::new("/tmp/config"), &config, None);
+            assert_eq!(result.outcome, outcome, "{text}");
+        }
     }
 
     #[test]
