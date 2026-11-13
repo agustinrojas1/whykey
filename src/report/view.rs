@@ -322,6 +322,12 @@ fn static_verdict(key: &KeyCombo, layers: &[LayerResult], conclusion: &Conclusio
     }
 }
 
+/// The static verdict's mark is "unsure" (see `render_report`).
+pub(super) fn is_unsure(key: &KeyCombo, layers: &[LayerResult]) -> bool {
+    let conclusion = evaluate_conclusion(layers, None, false).conclusion;
+    verdict_for(key, layers, None, &conclusion).mark == Mark::Unsure
+}
+
 fn verdict_for(
     key: &KeyCombo,
     layers: &[LayerResult],
@@ -336,6 +342,19 @@ fn verdict_for(
         if matches!(conclusion, Conclusion::SuppressedHandled { .. }) {
             verdict.mark = Mark::Unsure;
         }
+    }
+    if let Some(lost) = observation.and_then(|value| lost::lost_text(key, value)) {
+        // Seen upstream, never received downstream: the capture's own finding
+        // replaces the static conclusion.
+        return Verdict {
+            mark: Mark::Stop,
+            headline: lost.headline,
+            lines: lost.lines,
+        };
+    }
+    if let Some(reached) = observation.and_then(|value| lost::reached_text(key, value)) {
+        verdict.headline = reached.headline;
+        verdict.lines = reached.lines;
     }
     if let Some(qualification) = qualification_text(key, layers, observation, conclusion) {
         verdict.lines.push(qualification);
@@ -724,6 +743,9 @@ fn confidence_text(
     decider: Option<&LayerResult>,
 ) -> Option<String> {
     if let Some(observation) = observation {
+        if let Some(text) = lost::confidence(observation) {
+            return Some(text);
+        }
         if observation.disposition != crate::listen::CaptureDisposition::NotDelivered {
             return Some(format!(
                 "observed: whykey saw the key at {}. Layers after that point are predicted from configuration.",
@@ -828,7 +850,12 @@ fn next_steps_for(
     observation: Option<&ObservedKey>,
     conclusion: &Conclusion,
 ) -> Vec<Step> {
-    if observation.is_some_and(|value| value.source.proves_compositor_receipt()) {
+    if lost::is_lost(observation) {
+        return Vec::new();
+    }
+    if observation
+        .is_some_and(|value| value.source.proves_compositor_receipt() && !value.reached_terminal())
+    {
         return vec![Step {
             command: "whykey listen --suppress".into(),
             reason: "inspect a binding without letting its action run".into(),
@@ -921,7 +948,7 @@ pub(super) fn render_report(
     include_header: bool,
     key_symbol: Option<&str>,
 ) -> String {
-    let terminal_observed = observation.is_some_and(|value| value.source.confirms_terminal());
+    let terminal_observed = observation.is_some_and(|value| value.reached_terminal());
     let evaluated = evaluate_conclusion(layers, observation, terminal_observed);
     let verdict = verdict_for(key, layers, observation, &evaluated.conclusion);
     let unsure = verdict.mark == Mark::Unsure;
@@ -971,10 +998,14 @@ pub(super) fn render_report(
             crate::listen::CaptureDisposition::ObservedOnly => "observe-only",
             crate::listen::CaptureDisposition::NotDelivered => "key not delivered",
         };
-        let observed_line = format!(
+        let mut observed_line = format!(
             "Observed via {} ({capture_mode}).",
             observation.source.label()
         );
+        if let Some(also) = lost::also_line(observation) {
+            observed_line.push(' ');
+            observed_line.push_str(&also);
+        }
         push_prose(&mut output, &observed_line, options, "  ", "  ", |o, t| {
             o.muted(t)
         });

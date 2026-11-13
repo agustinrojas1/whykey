@@ -252,6 +252,58 @@ pub struct ObservedKey {
     pub alternate_keys: Option<Vec<String>>,
     pub alternate_key: Option<String>,
     pub source: CaptureSource,
+    /// The next capture point that was watched for this same key press, and
+    /// whether the key got there. `source` is the last point that saw the
+    /// key; a key that never reached `onward` was taken in between.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onward: Option<Onward>,
+}
+
+impl ObservedKey {
+    /// Whether the key is known to have arrived at the terminal: captured
+    /// there, or seen there after an earlier point reported it.
+    pub fn reached_terminal(&self) -> bool {
+        self.source.confirms_terminal()
+            || self
+                .onward
+                .as_ref()
+                .is_some_and(|onward| onward.reached && onward.point == WatchPoint::Terminal)
+    }
+}
+
+/// Where a bisecting capture looked for the key after it was seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchPoint {
+    Compositor,
+    ProbeWindow,
+    Terminal,
+}
+
+/// The outcome of watching the next capture point for a key that an earlier
+/// one saw. Whykey never reads another program's state for this: it only
+/// notes that the key did, or did not, arrive within `waited_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Onward {
+    pub point: WatchPoint,
+    /// What the point is called in reports: the compositor or terminal name.
+    pub name: String,
+    pub reached: bool,
+    /// How long whykey waited before concluding the key did not arrive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waited_ms: Option<u64>,
+    /// Layers the static route lists between `source` and `point`, the ones
+    /// that could have taken the key. Empty when the key arrived, or when the
+    /// route already names a consumer.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
+}
+
+impl Onward {
+    /// True when the key was seen at `source` but never arrived at `point`.
+    pub fn lost(&self) -> bool {
+        !self.reached
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -575,6 +627,7 @@ fn probe_window_display(remote: bool) -> Result<&'static str, &'static str> {
 #[cfg(not(target_os = "linux"))]
 const NATIVE_UNSUPPORTED: &str = "only supported on Linux";
 
+mod bisect;
 mod evdev;
 mod output;
 mod protocol;
@@ -1188,6 +1241,7 @@ mod tests {
                 alternate_key: None,
                 source: CaptureSource::Terminal,
                 disposition: CaptureDisposition::ObservedOnly,
+                onward: None,
             }
         }
         assert!(is_cancel_key(&observed("escape", vec![0x1b])));

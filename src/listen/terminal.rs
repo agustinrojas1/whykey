@@ -303,7 +303,7 @@ impl Drop for SignalGuard {
 
 pub(super) struct InputReader<'a> {
     tty: &'a mut File,
-    pending: VecDeque<u8>,
+    pub(super) pending: VecDeque<u8>,
 }
 
 impl<'a> InputReader<'a> {

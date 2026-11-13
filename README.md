@@ -253,6 +253,14 @@ A report opens with a one-line **diagnosis**, its **effect**, the
 `--evdev` reads the kernel's view of the keyboard, before any remapper or
 compositor. `whykey listen --dry-run` prints the chain without capturing.
 
+While one backend leads, `listen` watches a second point on the route for the
+same key press, so a key that dies is located rather than lost: with Hyprland
+it also reads the terminal, and the physical keyboard when `/dev/input` is
+readable. "Hyprland saw it and Ghostty never did" is reported as the key being
+taken between the two, with the input method and the terminal as candidates.
+`whykey KEY` offers this capture on a terminal when its static answer is
+uncertain (`--no-prompt` turns it off).
+
 On Hyprland, `--suppress` temporarily stops the shortcut from firing while
 whykey inspects it. Capture state is held by a short lease, so Hyprland
 drops it by itself even if whykey is killed.

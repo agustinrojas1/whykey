@@ -1497,6 +1497,7 @@ impl HyprlandCaptureSession {
                 backend: "Hyprland".into(),
             },
             disposition,
+            onward: None,
         }
     }
 }

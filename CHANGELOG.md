@@ -4,6 +4,24 @@
 
 ### Added
 
+- `whykey listen` answers "where did my key die?" instead of timing out. Native
+  Hyprland capture also reads the terminal's tty (and, when `/dev/input` is
+  readable, the physical keyboard): a key the compositor saw and the terminal
+  never received is reported as "taken between Hyprland and Ghostty", naming the
+  layers the route lists in between (the input method, the terminal itself, a
+  detected multiplexer) with the evidence tier `observed`; a key that arrives
+  confirms every layer it passed. A key evdev saw and the compositor did not
+  is "taken between the keyboard and Hyprland" (remapper or compositor). The
+  probe window and terminal capture read evdev too, which tells a consumed
+  key from a lone modifier tap. The JSON `observation` gains an additive
+  `onward` object (`point`, `name`, `reached`, `waited_ms`, `candidates`). The
+  verdict is only drawn when the terminal running whykey is the focused
+  window; otherwise a `note:` says nothing was blamed. See L-019.
+- `whykey KEY` offers to capture the key when the static answer is uncertain
+  and stdin and stdout are terminals ("Press Ctrl+Alt+P now to see where it
+  stops (Esc to skip)"). `--no-prompt`, `WHYKEY_NO_PROMPT=1`, `CI`, `--json`,
+  `--pid`, `--focused` and `--instance` never prompt.
+
 - swhkd is now detected while it runs, and its `swhkdrc` (with `include`,
   `ignore`, `mode`/`endmode`, `~` and `@`) is read for the queried key. swhkd
   grabs the keyboards' evdev devices, so a binding takes the key in the

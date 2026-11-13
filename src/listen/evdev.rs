@@ -299,6 +299,7 @@ impl EvdevSession {
                         physical_keycode: Some(evdev_code),
                         source: CaptureSource::Evdev { device, path },
                         disposition: CaptureDisposition::ObservedOnly,
+                        onward: None,
                     });
                     break;
                 } else {
@@ -332,6 +333,7 @@ impl EvdevSession {
                 physical_keycode: Some(evdev_code),
                 source: CaptureSource::Evdev { device, path },
                 disposition: CaptureDisposition::ObservedOnly,
+                onward: None,
             });
             break;
         }
