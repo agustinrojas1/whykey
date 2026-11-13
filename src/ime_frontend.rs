@@ -60,6 +60,33 @@ impl ImeFrontend {
 }
 
 pub fn detect(snapshot: &ProcessSnapshot, detections: &[Detection]) -> ImeFrontend {
+    let frontend = detect_daemons(snapshot, detections);
+    // Read only when it can change the answer, so a session without an
+    // input-method-v2 frontend asks nothing more of its environment.
+    if matches!(frontend, ImeFrontend::WaylandInputMethodV2 { .. }) {
+        let window_id = crate::recording::env_var("WINDOWID").ok();
+        return apply_terminal_client(frontend, window_id.as_deref());
+    }
+    frontend
+}
+
+/// `window_id` is `$WINDOWID` of the terminal whykey runs in. Terminals set it
+/// only when they are X11 clients (xterm, urxvt, st, VTE and kitty on X11,
+/// ...): on a Wayland session that is XWayland. Such a client never enables a
+/// text-input, so the input-method-v2 keyboard grab is never armed for it and
+/// it reaches the input method through XIM or a toolkit module instead.
+fn apply_terminal_client(frontend: ImeFrontend, window_id: Option<&str>) -> ImeFrontend {
+    match (&frontend, window_id.filter(|id| !id.is_empty())) {
+        (ImeFrontend::WaylandInputMethodV2 { evidence }, Some(id)) => ImeFrontend::ClientModule {
+            evidence: format!(
+                "the terminal is an X11 (XWayland) client (WINDOWID={id}), which reaches the input method through XIM or a toolkit module, not input-method-v2; the daemon serves Wayland clients: {evidence}"
+            ),
+        },
+        _ => frontend,
+    }
+}
+
+fn detect_daemons(snapshot: &ProcessSnapshot, detections: &[Detection]) -> ImeFrontend {
     if detections.is_empty() {
         return ImeFrontend::None;
     }
@@ -216,6 +243,30 @@ mod tests {
             matches!(no_addon, ImeFrontend::ClientModule { .. }),
             "{no_addon:?}"
         );
+    }
+
+    #[test]
+    fn an_x11_terminal_reaches_the_input_method_through_the_client_not_the_grab() {
+        // fcitx5 serves Wayland clients through input-method-v2, but an X11
+        // (XWayland) terminal, which exports WINDOWID, is not one of them.
+        let maps = b"7f00-7f01 r-xp 0 08:01 12 /usr/lib/fcitx5/libwaylandim.so\n";
+        let wayland = classify_fcitx5(7, maps, b"WAYLAND_DISPLAY=wayland-1\0");
+        assert_eq!(wayland.placement(), ImePlacement::BeforeTerminal);
+        for none in [None, Some("")] {
+            assert_eq!(
+                apply_terminal_client(wayland.clone(), none),
+                wayland,
+                "{none:?}"
+            );
+        }
+        let x11 = apply_terminal_client(wayland, Some("62914563"));
+        assert_eq!(x11.placement(), ImePlacement::AfterTerminal);
+        assert!(x11.detail().unwrap().contains("XWayland"), "{x11:?}");
+        // A client-module frontend is unchanged.
+        let module = ImeFrontend::ClientModule {
+            evidence: "x".into(),
+        };
+        assert_eq!(apply_terminal_client(module.clone(), Some("1")), module);
     }
 
     #[test]
