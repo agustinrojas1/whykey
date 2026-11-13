@@ -56,6 +56,10 @@
   was always true; they now check the terminal's own window.
 - With no input method detected, the Input method row of the route table says
   "none detected" instead of "not inspected": whykey did look.
+- An X11 (XWayland) terminal under a Wayland session with Fcitx5's
+  input-method-v2 frontend is no longer drawn behind the input method: such a
+  terminal (detected by its `$WINDOWID`) reaches Fcitx5 through XIM or a
+  toolkit module, so the input method follows it in the route.
 - Fcitx5's global hotkeys (trigger, group switch, `TogglePreedit` and the
   rest) are now read from `fcitx5/config`, with Fcitx5's defaults when a
   section is absent. Fcitx5 takes these even while the input method is
