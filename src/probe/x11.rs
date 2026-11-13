@@ -162,6 +162,27 @@ fn path_to_root(
     Ok(path)
 }
 
+/// The modifier states a passive grab on `modmask` is tried in: as asked, with
+/// CapsLock (Lock), with NumLock (usually Mod2), and with both. The X server
+/// matches a passive grab on the exact modifier state, so a window manager
+/// that wants its shortcut to fire with a lock on grabs each of these; a
+/// grab made with `AnyModifier` is equivalent to grabbing every combination
+/// and so conflicts with each of them. ScrollLock and other modifier bits are
+/// not tried.
+fn lock_variant_masks(modmask: u16, num_lock: Option<u16>) -> Vec<u16> {
+    let mut variants = vec![modmask, modmask | LOCK_MASK];
+    if let Some(num_lock) = num_lock {
+        variants.extend([modmask | num_lock, modmask | LOCK_MASK | num_lock]);
+    }
+    let mut unique = Vec::with_capacity(variants.len());
+    for variant in variants {
+        if !unique.contains(&variant) {
+            unique.push(variant);
+        }
+    }
+    unique
+}
+
 fn connect_error(error: ConnectError) -> io::Error {
     match error {
         ConnectError::IoError(error) => error,
@@ -407,17 +428,7 @@ impl Connection {
     fn lock_variants(&self, modmask: u16) -> io::Result<Vec<u16>> {
         let keymap = self.keyboard_mapping()?;
         let num_lock = self.modifier_mapping()?.num_lock_mask(&keymap);
-        let mut variants = vec![modmask, modmask | LOCK_MASK];
-        if let Some(num_lock) = num_lock {
-            variants.extend([modmask | num_lock, modmask | LOCK_MASK | num_lock]);
-        }
-        let mut unique = Vec::with_capacity(variants.len());
-        for variant in variants {
-            if !unique.contains(&variant) {
-                unique.push(variant);
-            }
-        }
-        Ok(unique)
+        Ok(lock_variant_masks(modmask, num_lock))
     }
 
     /// Tries to grab `keycode`+`modmask` on the root window (see
@@ -1219,6 +1230,26 @@ mod tests {
         assert_eq!(modifiers.modifier_bit(8), Some(SHIFT_MASK));
         assert_eq!(modifiers.num_lock_mask(&keymap), Some(16));
         assert_eq!(modifiers.modifier_bit(0), None);
+    }
+
+    #[test]
+    fn lock_variants_cover_caps_num_and_both() {
+        // Super (Mod4) with NumLock on Mod2: the four states a WM grabs.
+        assert_eq!(
+            lock_variant_masks(64, Some(16)),
+            vec![64, 64 | LOCK_MASK, 64 | 16, 64 | LOCK_MASK | 16]
+        );
+        // No NumLock modifier bound: only the CapsLock pair.
+        assert_eq!(lock_variant_masks(64, None), vec![64, 64 | LOCK_MASK]);
+        // A mask that already carries Lock or NumLock does not repeat itself.
+        assert_eq!(
+            lock_variant_masks(LOCK_MASK, Some(16)),
+            vec![LOCK_MASK, LOCK_MASK | 16]
+        );
+        assert_eq!(
+            lock_variant_masks(0, Some(16)),
+            vec![0, LOCK_MASK, 16, LOCK_MASK | 16]
+        );
     }
 
     #[test]
