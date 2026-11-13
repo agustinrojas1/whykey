@@ -111,7 +111,7 @@ produces the same events.
 
 The same `src/probe/x11.rs` connection provides `grab_status`, which
 `src/layers/x11_grab.rs` uses during inspection to test passive grabs on the
-root window.
+root window and the focused window's path (core and XInput2 passive grabs; active keyboard grabs and raw-event readers are not visible to it).
 
 Portals and extension capture can be added without changing report routing
 or the fallbacks.
