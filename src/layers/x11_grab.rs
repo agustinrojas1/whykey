@@ -15,8 +15,13 @@
 //! an X11 session that observation decides the compositor-tier outcome unless
 //! the adapter knows the grab's owner passes the key on (a replaying grab
 //! looks the same to the probe); the selected desktop adapter keeps its
-//! identity (binding, command, mode) when it names the grab's owner, and a
-//! configured binding without such a grab is reported as inactive.
+//! identity (binding, command, mode) when it names the grab's owner. A
+//! configured binding without an observed grab is reported as unconfirmed,
+//! not inactive: the probe sees passive key grabs only (core `GrabKey` and
+//! XInput2 `XIGrabKeycode`, in the Lock/NumLock states a window manager
+//! grabs). It cannot see an active `XGrabKeyboard`, a program that reads keys
+//! through XRecord or XInput2 raw events, a grab on a window off the path, or
+//! a ScrollLock variant, any of which can still take the key.
 //!
 //! tools/generate_support_matrix.py recognises a verdict this probe decided
 //! by the `observed:` evidence lines `evidence` writes; keep their prefixes.
@@ -36,7 +41,13 @@ use crate::probe::x11::{Connection, GrabCheck, GrabStatus};
 
 const LAYER: &str = "X11 key grab";
 const GRABBED: &str = "an X11 client holds a grab on this shortcut on the root window or on the focused window's path (WM or hotkey daemon)";
-const FREE: &str = "no grab on the root window or on the focused window's path (WMs and hotkey daemons grab there)";
+const FREE: &str = "no passive grab on the root window or on the focused window's path (WMs and hotkey daemons grab there)";
+/// The summary of a configured binding whose grab the probe did not see.
+const UNCONFIRMED: &str =
+    "configured, but no passive grab observed; the program may use XI2/active grabs";
+/// What a free passive-grab probe cannot rule out. Not an `observed:` line:
+/// the support matrix reads those as grab-decided verdicts.
+const LIMITS: &str = "coverage: only passive key grabs (core GrabKey, and XInput2 when the server has it) on the root window and the focused window's path, in the Lock/NumLock states, are checked; an active keyboard grab (XGrabKeyboard), an XRecord or XInput2 raw-event reader, a grab on a window off that path, or a ScrollLock variant is not visible here";
 
 /// Which display server the grab probe would talk to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,26 +368,38 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
                 .with_verbose_details(verbose)
                 .with_tier(EvidenceTier::LiveQuery)
         }
-        (false, claimed) => {
-            if claimed {
-                details.push(format!(
-                    "{} reported '{}', but no X client holds a grab on the root window or on the focused window's path, so that binding is not active",
+        (false, true) => {
+            // No passive grab seen does not mean the binding is inactive: the
+            // program may take the key through a grab the probe cannot see.
+            // Keep the configured binding and say the grab is unconfirmed.
+            let mut notes = details;
+            notes.push(format!(
+                "{} reported '{}', but no passive grab on the root window or on the focused window's path was observed",
+                adapter.layer, adapter.summary
+            ));
+            notes.push(LIMITS.into());
+            if adapter.outcome != Outcome::HandledAndPassed {
+                // A claim that already passes the key on keeps its outcome:
+                // the key reaches the focused client with or without the grab.
+                notes.push(format!(
+                    "{} configuration: {}",
                     adapter.layer, adapter.summary
                 ));
-                details.extend(
-                    adapter
-                        .details
-                        .iter()
-                        .map(|detail| format!("{} (inactive): {detail}", adapter.layer)),
-                );
-            } else {
-                adapter
-                    .verbose_details
-                    .push(format!("{} adapter: {}", adapter.layer, adapter.summary));
-                adapter
-                    .verbose_details
-                    .extend(std::mem::take(&mut adapter.details));
+                adapter.summary = UNCONFIRMED.into();
+                adapter.outcome = Outcome::UncertainContinues;
             }
+            notes.append(&mut adapter.details);
+            adapter.details = notes;
+            adapter
+        }
+        (false, false) => {
+            details.push(LIMITS.into());
+            adapter
+                .verbose_details
+                .push(format!("{} adapter: {}", adapter.layer, adapter.summary));
+            adapter
+                .verbose_details
+                .extend(std::mem::take(&mut adapter.details));
             LayerResult::pass(adapter.layer, LayerId::Compositor, FREE, details)
                 .with_verbose_details(adapter.verbose_details)
                 .with_tier(EvidenceTier::LiveQuery)
@@ -410,6 +433,7 @@ fn with_detail(mut adapter: LayerResult, detail: &str) -> LayerResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layers::{BindingEvidence, BindingScope};
 
     const ROOT: u32 = 0x21f;
     /// The frame muffin wraps around the focused client (a child of the root).
@@ -499,12 +523,16 @@ mod tests {
                 .contains(&"binding: touch /tmp/fired".to_owned())
         );
 
-        // Without a grab the replaying binding is not active either.
+        // Without a grab the key reaches the focused client either way: the
+        // claim keeps its outcome and binding, and the grab stays unconfirmed.
         let result = x11_result(
             replay(),
             Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
         );
-        assert_eq!(result.outcome, Outcome::Pass);
+        assert_eq!(result.outcome, Outcome::HandledAndPassed);
+        assert_eq!(result.summary, replay().summary);
+        assert_eq!(result.tier, Some(EvidenceTier::ConfigFile));
+        assert!(result.details.iter().any(|detail| detail == LIMITS));
     }
 
     #[test]
@@ -521,27 +549,80 @@ mod tests {
     }
 
     #[test]
-    fn free_grab_passes_even_when_config_claims_the_key() {
+    fn free_grab_does_not_disprove_a_configured_binding() {
+        let binding =
+            || BindingEvidence::action("exec touch /tmp/fired", BindingScope::Universal, None);
+        let configured = i3_claim()
+            .with_binding(binding())
+            .with_tier(EvidenceTier::ConfigFile);
         let result = x11_result(
-            i3_claim(),
+            configured,
             Observation::Checked(vec![check(Vec::new(), None)]),
         );
         assert_eq!(result.layer, "i3");
-        assert_eq!(result.outcome, Outcome::Pass);
-        assert_eq!(result.summary, FREE);
-        assert!(result.binding.is_none());
+        // Uncertain, never a confident "nothing takes it".
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert_eq!(result.summary, UNCONFIRMED);
+        assert_eq!(result.tier, Some(EvidenceTier::ConfigFile));
+        assert!(!result.blocks_chain());
+        // The binding evidence and the adapter's own lines survive.
+        assert_eq!(result.binding, Some(binding()));
+        assert!(
+            result
+                .details
+                .contains(&"binding: exec touch /tmp/fired".to_owned())
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail == "i3 configuration: i3 binding consumes the key")
+        );
+        // The probe says what it cannot see.
         assert!(
             result
                 .details
                 .iter()
                 .any(|detail| detail.contains("only core-protocol grabs"))
         );
-        assert!(
-            result
-                .details
-                .iter()
-                .any(|detail| detail.contains("binding is not active"))
+        let limits = result
+            .details
+            .iter()
+            .find(|detail| detail.starts_with("coverage:"))
+            .expect("coverage line");
+        for blind_spot in ["XGrabKeyboard", "XRecord", "raw-event", "off that path"] {
+            assert!(limits.contains(blind_spot), "{blind_spot}");
+        }
+    }
+
+    #[test]
+    fn a_configured_uncertain_claim_without_a_grab_stays_uncertain() {
+        let xbindkeys = LayerResult::new(
+            "X11 xbindkeys",
+            LayerId::Compositor,
+            Outcome::HandledUncertain,
+            "matching xbindkeys shortcut configured",
+            vec!["binding: touch /tmp/fired".into()],
         );
+        let result = x11_result(
+            xbindkeys,
+            Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
+        );
+        assert_eq!(result.layer, "X11 xbindkeys");
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert_eq!(result.summary, UNCONFIRMED);
+    }
+
+    #[test]
+    fn free_key_with_no_claim_still_passes_and_states_the_coverage() {
+        let result = x11_result(
+            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
+        );
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert_eq!(result.summary, FREE);
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+        assert!(result.details.iter().any(|detail| detail == LIMITS));
     }
 
     #[test]
@@ -643,15 +724,29 @@ mod tests {
     #[test]
     fn grab_state_is_a_live_query_and_failures_keep_the_adapter_tier() {
         let configured = || i3_claim().with_tier(EvidenceTier::ConfigFile);
-        for observation in [
-            Observation::Checked(vec![check(vec![64], None)]),
+        assert_eq!(
+            x11_result(
+                configured(),
+                Observation::Checked(vec![check(vec![64], None)])
+            )
+            .tier,
+            Some(EvidenceTier::LiveQuery)
+        );
+        // No grab seen leaves the configured binding unconfirmed: the live
+        // query does not raise it above the configuration that claimed it.
+        assert_eq!(
+            x11_result(
+                configured(),
+                Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))])
+            )
+            .tier,
+            Some(EvidenceTier::ConfigFile)
+        );
+        let free = x11_result(
+            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
             Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
-        ] {
-            assert_eq!(
-                x11_result(configured(), observation).tier,
-                Some(EvidenceTier::LiveQuery)
-            );
-        }
+        );
+        assert_eq!(free.tier, Some(EvidenceTier::LiveQuery));
         let unclaimed = x11_result(
             LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
             Observation::Checked(vec![check(vec![64], None)]),
@@ -666,15 +761,27 @@ mod tests {
     #[test]
     fn free_verdict_names_the_root_window_scope() {
         let result = x11_result(
-            i3_claim(),
+            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
             Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
         );
         assert!(result.summary.contains("root window"));
+        assert!(result.summary.contains("passive grab"));
         assert!(
             result
                 .details
                 .iter()
                 .any(|detail| detail.contains("off that path is not visible"))
+        );
+        // A configured binding names the same scope in its details.
+        let result = x11_result(
+            i3_claim(),
+            Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
+        );
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("no passive grab on the root window"))
         );
     }
 
@@ -729,8 +836,8 @@ mod tests {
         ];
         let result = x11_result(cinnamon, Observation::Checked(path));
         assert_eq!(result.layer, "Cinnamon");
-        assert_eq!(result.outcome, Outcome::Pass);
-        assert_eq!(result.summary, FREE);
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert_eq!(result.summary, UNCONFIRMED);
         let free_lines = result
             .details
             .iter()
