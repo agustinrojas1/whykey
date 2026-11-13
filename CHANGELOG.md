@@ -51,6 +51,10 @@
   was always true; they now check the terminal's own window.
 - With no input method detected, the Input method row of the route table says
   "none detected" instead of "not inspected": whykey did look.
+- An X11 (XWayland) terminal under a Wayland session with Fcitx5's
+  input-method-v2 frontend is no longer drawn behind the input method: such a
+  terminal (detected by its `$WINDOWID`) reaches Fcitx5 through XIM or a
+  toolkit module, so the input method follows it in the route.
 - A tmux pane in copy mode is read from tmux: keys resolve in the `copy-mode`
   or `copy-mode-vi` table (by `mode-keys`) and the evidence names it, instead
   of `q`, `Space` or `Enter` being reported as passing to the application. A
