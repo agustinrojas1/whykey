@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 236 64" width="236" height="64" role="img" aria-label="whykey">
+  <g transform="translate(8,8) scale(0.75)">
+  <rect x="8" y="6" width="19" height="9" rx="2.5" fill="#e6edf3"/>
+  <rect x="37" y="6" width="19" height="9" rx="2.5" fill="#e6edf3"/>
+  <rect x="8" y="25" width="19" height="9" rx="2.5" fill="#e6edf3"/>
+  <rect x="37" y="25" width="19" height="9" rx="2.5" fill="#e6edf3"/>
+  <path d="M32,3 V38" fill="none" stroke="#e6edf3" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M25.5,33 L32,39.5 L38.5,33" fill="none" stroke="#e6edf3" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="8" y="46" width="48" height="11" rx="3" fill="#ff7b72"/>
+  </g>
+  <g transform="translate(72,42) scale(2)" fill="none" stroke="#e6edf3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path transform="translate(0,0)" d="M0,-10 L3,0 L6,-7 L9,0 L12,-10"/>
+    <path transform="translate(16,0)" d="M0,-15 V0 M0,-5.5 C0,-9 2,-10 4.5,-10 C7,-10 9,-9 9,-5.5 V0"/>
+    <path transform="translate(29,0)" d="M0,-10 L4.5,0 M9,-10 L2.25,5"/>
+    <path transform="translate(41.5,0)" d="M0,-15 V0 M8,-10 L0,-3 M3,-5.6 L8,0"/>
+    <path transform="translate(53.5,0)" d="M0,-5 H10 A5,5 0 1 0 8.54,-1.46"/>
+    <path transform="translate(67,0)" d="M0,-10 L4.5,0 M9,-10 L2.25,5"/>
+  </g>
+</svg>

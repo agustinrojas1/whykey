@@ -1,6 +1,8 @@
 <!-- Generated from README.md by tools/generate_crates_readme.py. Do not edit it by hand; CI checks that it is current. -->
 
-<h1 align="center">whykey</h1>
+<h1 align="center">
+  <img src="docs/assets/logo/whykey-lockup.svg" alt="whykey" width="354">
+</h1>
 
 <p align="center">
   <b>Why didn't my shortcut work?</b><br>
