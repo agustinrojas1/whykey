@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- `whykey inspect --pid` and `--focused` now resolve the multiplexer row for
+  the target, not for whykey's own pane: the target's tmux server and pane
+  (from its environment, or the pane in front of a `tmux: client`), Screen and
+  Zellij. Before, a pane process read "none detected" from outside tmux and
+  was answered with whykey's own pane from inside it.
 - `inspect --pid` and `--focused` read the termios of the target's terminal
   for the TTY driver row, not whykey's own. A program in raw mode (vim, less)
   no longer reads as "IXON consumes Ctrl+S" or "ISIG sends SIGINT" because

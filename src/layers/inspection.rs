@@ -146,7 +146,10 @@ pub fn inspect_default_chain_observed_with_session(
 pub fn inspect(request: &InspectRequest<'_>) -> Vec<LayerResult> {
     // Single discovery pass per inspection: the environment snapshot runs
     // each adapter probe once and owns the selected compositor.
-    let session = crate::environment::Environment::collect();
+    let mut session = crate::environment::Environment::collect();
+    if let Some(pid) = request.application_pid {
+        super::multiplexer_target::retarget(&mut session, pid);
+    }
     inspect_with_environment(request, &session)
 }
 
@@ -167,7 +170,10 @@ pub fn inspect_sequence(
     keys: &[KeyCombo],
     target: Option<(u32, Option<&str>)>,
 ) -> Vec<Vec<LayerResult>> {
-    let session = crate::environment::Environment::collect();
+    let mut session = crate::environment::Environment::collect();
+    if let Some((pid, _)) = target {
+        super::multiplexer_target::retarget(&mut session, pid);
+    }
     let mut prefix = SequencePrefix::default();
     keys.iter()
         .enumerate()

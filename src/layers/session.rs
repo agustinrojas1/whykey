@@ -58,11 +58,22 @@ pub fn inspect_with_env(
     if env.ssh {
         details.push("SSH session detected".into());
     }
+    if let Some(note) = &env.session_target_note {
+        details.push(note.clone());
+    }
 
     match multiplexers.as_slice() {
         [] => {}
         ["tmux"] => {
-            let mut result = super::tmux::inspect_with_byte_status(preceding, key, bytes_verified);
+            let mut result = super::tmux::inspect_in(
+                &super::tmux::TmuxContext {
+                    server_args: env.tmux_server_args.clone(),
+                    pane: env.tmux_pane.clone(),
+                },
+                preceding,
+                key,
+                bytes_verified,
+            );
             result.details.splice(0..0, details);
             return result;
         }
@@ -80,7 +91,15 @@ pub fn inspect_with_env(
             let results = multiplexers
                 .iter()
                 .map(|multiplexer| match *multiplexer {
-                    "tmux" => super::tmux::inspect_with_byte_status(preceding, key, bytes_verified),
+                    "tmux" => super::tmux::inspect_in(
+                        &super::tmux::TmuxContext {
+                            server_args: env.tmux_server_args.clone(),
+                            pane: env.tmux_pane.clone(),
+                        },
+                        preceding,
+                        key,
+                        bytes_verified,
+                    ),
                     "screen" => super::screen::inspect_after(preceding, key),
                     "Zellij" => super::zellij::inspect(key),
                     _ => unreachable!(),
@@ -144,6 +163,14 @@ pub fn inspect_with_env(
         }
     }
 
+    if env.session_target_note.is_some() {
+        return LayerResult::uncertain_continues(
+            "Session context",
+            LayerId::Session,
+            "the selected process's environment is not readable; whether it runs in tmux, GNU Screen or Zellij is unknown",
+            details,
+        );
+    }
     LayerResult::new(
         "Session context",
         LayerId::Session,
