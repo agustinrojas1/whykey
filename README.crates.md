@@ -20,6 +20,7 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
+  <a href="#other-ways-to-install">Other installs</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#supported-environments">Supported environments</a> ·
@@ -52,88 +53,16 @@ and guessing which one is actually loaded.
 and it walks the chain: it says which layer handles the key, whether the key
 continues to the next one, and how sure it is.
 
-## Highlights
-
-- **One command, the whole route.** Remappers, 20 compositors, desktops, and
-  window managers, desktop shortcut daemons, terminals, input methods, the TTY,
-  multiplexers, shells, and editors in a single report.
-- **Asks the running programs, not just their files.** Answers come from
-  compositor IPC, D-Bus, the X server, tmux, and your shell's live bindings
-  whenever possible, so they reflect what is actually loaded.
-- **Watches the real key.** `whykey listen` captures the shortcut as you
-  press it, through the compositor, a probe window, the terminal, or the
-  kernel.
-- **Honest about certainty.** Every answer carries its evidence: *observed*,
-  *live query*, *config file*, or *default*. When whykey cannot know, it says
-  so instead of guessing.
-- **Safe by design.** Read-only: it never edits configuration and never runs
-  the shortcut it inspects. Temporary capture state is always restored.
-- **Verified against real programs.** A lab of 249 scenarios runs real
-  compositors, desktops, terminals, and shells, presses real keys, and checks
-  that whykey's verdict matches what actually happened.
-- **Scriptable.** Stable JSON (schema v1 and v2) and NDJSON output, shell
-  completions, snapshots, and diffs.
-
 ## Install
 
-whykey runs on Linux (x86_64 and aarch64). Pick one:
-
-**mise** (prebuilt binary)
+whykey runs on Linux (x86_64 and aarch64). With [mise](https://mise.jdx.dev):
 
 ```sh
 mise use github:agustinrojas1/whykey@2
 ```
 
-**Homebrew** (prebuilt static binary, Linux only)
-
-```sh
-brew install agustinrojas1/tap/whykey
-```
-
-**Fedora, openSUSE, Debian, Ubuntu** (openSUSE Build Service, x86_64 and aarch64)
-
-Packages for Fedora 43, 44 and Rawhide, openSUSE Tumbleweed and Leap 16.0,
-Debian 13, and Ubuntu 26.04 and 26.10. The
-[download page](https://software.opensuse.org/download.html?project=home%3Aagustinrojas&package=whykey)
-has the steps for each. On Fedora:
-
-```sh
-sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:agustinrojas/Fedora_$(rpm -E %fedora)/home:agustinrojas.repo
-sudo dnf install whykey
-```
-
-**Cargo** from [crates.io](https://crates.io/crates/whykey) (Rust 1.85 or newer)
-
-```sh
-cargo install whykey --locked
-```
-
-**Release binaries.** Each [release](https://github.com/agustinrojas1/whykey/releases/latest)
-publishes archives with a `.sha256` checksum:
-
-| Asset | Runs on |
-| --- | --- |
-| `whykey-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64 with glibc 2.28+ (Debian 10, Ubuntu 18.10, RHEL 8 and later) |
-| `whykey-<version>-x86_64-unknown-linux-musl.tar.gz` | any x86_64 Linux: fully static (Alpine, older glibc) |
-| `whykey-<version>-aarch64-unknown-linux-musl.tar.gz` | any aarch64 Linux: fully static |
-
-**Distribution packages.** Arch, Debian, RPM, and Nix recipes live in
-[`packaging/`](packaging/README.md).
-
-<details>
-<summary>Notes on mise version pinning and the editor extensions</summary>
-
-By default mise hides releases younger than 24 hours
-(`minimum_release_age`). During a release's first day, `@2` can fail; an
-exact version such as `@2.4.1` installs at once.
-
-The editor extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) are
-`python3` scripts. Distribution packages install them next to `whykey`; mise
-and `cargo install` do not put them on `PATH`. With mise they are in
-`"$(mise where github:agustinrojas1/whykey)/extensions"`; with Cargo, take
-them from the repository's `extensions/` directory.
-
-</details>
+Homebrew, Fedora/openSUSE/Debian/Ubuntu packages, Cargo and plain release
+binaries are listed under [Other ways to install](#other-ways-to-install).
 
 ## Quick start
 
@@ -166,6 +95,31 @@ shell's startup file:
 eval "$(whykey shell-init bash)"      # or: zsh
 whykey shell-init fish | source       # fish
 ```
+
+## Highlights
+
+- **One command, the whole route.** Remappers, 20 compositors, desktops, and
+  window managers, desktop shortcut daemons, terminals, input methods, the TTY,
+  multiplexers, shells, and editors in a single report.
+- **Asks the running programs, not just their files.** Answers come from
+  compositor IPC, D-Bus, the X server, tmux, and your shell's live bindings
+  whenever possible, so they reflect what is actually loaded.
+- **Watches the real key.** `whykey listen` captures the shortcut as you
+  press it, through the compositor, a probe window, the terminal, or the
+  kernel.
+- **Says how sure it is.** Every answer carries its evidence: *observed*,
+  *live query*, *config file*, or *default*. Where whykey cannot tell, it
+  reports the answer as uncertain or unknown rather than guessing. It can
+  still be wrong: it reads configuration and built-in defaults that may differ
+  from what is running, and some programs have never been run in the lab
+  ([which](#supported-environments); [known defects](DEFECT_REGISTER.md)).
+- **Safe by design.** Read-only: it never edits configuration and never runs
+  the shortcut it inspects. Temporary capture state is always restored.
+- **Verified against real programs.** A lab of 249 scenarios runs real
+  compositors, desktops, terminals, and shells, presses real keys, and checks
+  that whykey's verdict matches what actually happened.
+- **Scriptable.** Stable JSON (schema v1 and v2) and NDJSON output, shell
+  completions, snapshots, and diffs.
 
 ## Reading a report
 
@@ -319,6 +273,59 @@ scenario format and how to run it are in [`lab/README.md`](lab/README.md).
   the lab counts them separately; they never count as verification.
 - **Small and portable.** A single Rust binary, with fully static builds
   for x86_64 and aarch64; Linux only, by design.
+
+## Other ways to install
+
+**Homebrew** (prebuilt static binary, Linux only)
+
+```sh
+brew install agustinrojas1/tap/whykey
+```
+
+**Fedora, openSUSE, Debian, Ubuntu** (openSUSE Build Service, x86_64 and aarch64)
+
+Packages for Fedora 43, 44 and Rawhide, openSUSE Tumbleweed and Leap 16.0,
+Debian 13, and Ubuntu 26.04 and 26.10. The
+[download page](https://software.opensuse.org/download.html?project=home%3Aagustinrojas&package=whykey)
+has the steps for each. On Fedora:
+
+```sh
+sudo dnf config-manager addrepo --from-repofile=https://download.opensuse.org/repositories/home:agustinrojas/Fedora_$(rpm -E %fedora)/home:agustinrojas.repo
+sudo dnf install whykey
+```
+
+**Cargo** from [crates.io](https://crates.io/crates/whykey) (Rust 1.85 or newer)
+
+```sh
+cargo install whykey --locked
+```
+
+**Release binaries.** Each [release](https://github.com/agustinrojas1/whykey/releases/latest)
+publishes archives with a `.sha256` checksum:
+
+| Asset | Runs on |
+| --- | --- |
+| `whykey-<version>-x86_64-unknown-linux-gnu.tar.gz` | x86_64 with glibc 2.28+ (Debian 10, Ubuntu 18.10, RHEL 8 and later) |
+| `whykey-<version>-x86_64-unknown-linux-musl.tar.gz` | any x86_64 Linux: fully static (Alpine, older glibc) |
+| `whykey-<version>-aarch64-unknown-linux-musl.tar.gz` | any aarch64 Linux: fully static |
+
+**Distribution packages.** Arch, Debian, RPM, and Nix recipes live in
+[`packaging/`](packaging/README.md).
+
+<details>
+<summary>Notes on mise version pinning and the editor extensions</summary>
+
+By default mise hides releases younger than 24 hours
+(`minimum_release_age`). During a release's first day, `@2` can fail; an
+exact version such as `@2.4.1` installs at once.
+
+The editor extensions (`whykey-nvim`, `whykey-vscode`, `whykey-emacs`) are
+`python3` scripts. Distribution packages install them next to `whykey`; mise
+and `cargo install` do not put them on `PATH`. With mise they are in
+`"$(mise where github:agustinrojas1/whykey)/extensions"`; with Cargo, take
+them from the repository's `extensions/` directory.
+
+</details>
 
 ## Documentation
 

@@ -11,6 +11,17 @@
   `swallow`-mode case stays uncertain. It is listed as unverified: no lab
   scenario runs swhkd yet.
 
+### Changed
+
+- README: the page now goes from the problem and the demo to one install line
+  (mise) and Quick start; the other install methods (Homebrew, distribution
+  packages, Cargo, release binaries) moved to "Other ways to install" near the
+  end. The claim about uncertainty no longer promises that whykey never guesses:
+  it says where whykey reports "uncertain" or "unknown", and that it can still
+  be wrong, with pointers to the support table and the defect register.
+- `PLAN_VISUAL.md` moved to `docs/internal/`, which the published crate
+  excludes.
+
 ### Fixed
 
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
