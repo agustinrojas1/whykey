@@ -7,90 +7,253 @@ use crate::key::KeyCombo;
 use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput, format_bytes};
 use crate::util::unquote;
 
+mod defaults;
+mod kitty;
+
+/// Where a binding came from: the user's configuration (or the program's own
+/// effective listing), or the terminal's built-in defaults transcribed in
+/// [`defaults`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Config,
+    Default,
+}
+
 #[derive(Debug, Clone)]
 struct Binding {
     trigger: KeyCombo,
     action: String,
     output: Option<Vec<u8>>,
     description: String,
+    origin: Origin,
+    /// The configuration removes this key's binding (kitty `map key no_op`):
+    /// the key reaches the program.
+    unmaps: bool,
+    /// The binding acts only in some terminal state; the reason.
+    uncertain: Option<String>,
 }
 
-pub fn inspect(key: &KeyCombo) -> LayerResult {
-    let Some(kind) = terminal_kind() else {
-        return not_applicable("terminal identity is not known");
-    };
-    if kind == TerminalKind::WezTerm {
-        let (bindings, source) = match load_wezterm_bindings() {
-            Ok(value) => value,
-            Err(error) => {
-                return LayerResult::new(
-                    kind.layer_name(),
-                    LayerId::Terminal,
-                    Outcome::Unknown,
-                    "could not inspect WezTerm effective key assignments",
+impl Binding {
+    fn new(
+        trigger: KeyCombo,
+        action: impl Into<String>,
+        output: Option<Vec<u8>>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            trigger,
+            action: action.into(),
+            output,
+            description: description.into(),
+            origin: Origin::Config,
+            unmaps: false,
+            uncertain: None,
+        }
+    }
+}
+
+/// Every binding the terminal would apply (its defaults, overridden by the
+/// configuration), and where they came from.
+struct Loaded {
+    bindings: Vec<Binding>,
+    /// Evidence line naming the file or command read.
+    source: String,
+    /// Tier of an answer that comes from `bindings` that are not defaults.
+    tier: EvidenceTier,
+    /// Whether a configuration file (or the live program) was read; without
+    /// one the answer rests on the defaults alone.
+    config_read: bool,
+    /// Extra evidence lines.
+    notes: Vec<String>,
+    /// Reasons a key without a binding cannot be reported as unbound: part of
+    /// the configuration was not followed.
+    caveats: Vec<String>,
+}
+
+fn unavailable(kind: TerminalKind, summary: String, details: Vec<String>) -> Box<LayerResult> {
+    Box::new(LayerResult::new(
+        kind.layer_name(),
+        LayerId::Terminal,
+        Outcome::Unknown,
+        summary,
+        details,
+    ))
+}
+
+fn load(kind: TerminalKind) -> Result<Loaded, Box<LayerResult>> {
+    match kind {
+        TerminalKind::WezTerm => {
+            let (bindings, source) = load_wezterm_bindings().map_err(|error| {
+                unavailable(
+                    kind,
+                    "could not inspect WezTerm effective key assignments".into(),
                     vec![error],
+                )
+            })?;
+            // `wezterm show-keys` lists the defaults it applies as well.
+            Ok(Loaded {
+                bindings,
+                source,
+                tier: EvidenceTier::LiveQuery,
+                config_read: true,
+                notes: Vec::new(),
+                caveats: Vec::new(),
+            })
+        }
+        TerminalKind::Konsole => {
+            let (keytab, source) = load_konsole_bindings().map_err(|error| {
+                unavailable(
+                    kind,
+                    "could not inspect Konsole keytab bindings".into(),
+                    vec![error],
+                )
+            })?;
+            // The keytab is read last, so it wins over a default shortcut.
+            let mut bindings = defaults::konsole();
+            bindings.extend(keytab);
+            let mut caveats = Vec::new();
+            if konsole_has_custom_shortcuts() {
+                caveats.push(
+                    "Konsole's own shortcut settings (konsolerc [Shortcuts] or a kxmlgui rc file) are not read"
+                        .to_owned(),
                 );
             }
-        };
-        return inspect_bindings(kind, key, &bindings, &source, EvidenceTier::LiveQuery);
+            Ok(Loaded {
+                bindings,
+                source,
+                tier: EvidenceTier::ConfigFile,
+                config_read: true,
+                notes: Vec::new(),
+                caveats,
+            })
+        }
+        TerminalKind::Kitty | TerminalKind::Alacritty | TerminalKind::Foot => load_file(kind),
     }
-    if kind == TerminalKind::Konsole {
-        let (bindings, source) = match load_konsole_bindings() {
-            Ok(value) => value,
-            Err(error) => {
-                return LayerResult::new(
-                    kind.layer_name(),
-                    LayerId::Terminal,
-                    Outcome::Unknown,
-                    "could not inspect Konsole keytab bindings",
-                    vec![error],
-                );
-            }
-        };
-        return inspect_bindings(kind, key, &bindings, &source, EvidenceTier::ConfigFile);
-    }
+}
+
+fn load_file(kind: TerminalKind) -> Result<Loaded, Box<LayerResult>> {
     let Some(path) = config_path(kind) else {
-        return LayerResult::new(
-            kind.layer_name(),
-            LayerId::Terminal,
-            Outcome::Unknown,
-            format!("{kind} is active but no config file was found"),
-            vec!["set the terminal's config path or use its defaults".into()],
-        );
+        let version = defaults::version(kind).unwrap_or_default();
+        let bindings = match kind {
+            TerminalKind::Kitty => defaults::kitty("ctrl+shift"),
+            TerminalKind::Alacritty => defaults::alacritty(),
+            _ => defaults::foot(&[]),
+        };
+        return Ok(Loaded {
+            bindings,
+            source: format!(
+                "no {kind} configuration file found; built-in {kind} {version} defaults only"
+            ),
+            tier: EvidenceTier::Default,
+            config_read: false,
+            notes: Vec::new(),
+            caveats: Vec::new(),
+        });
     };
-    let content = match crate::recording::read_to_string(&path) {
-        Ok(content) => content,
-        Err(error) => {
-            return LayerResult::new(
-                kind.layer_name(),
-                LayerId::Terminal,
-                Outcome::Unknown,
+    let source = format!("config: {}", path.display());
+    if kind == TerminalKind::Kitty {
+        let loaded = kitty::load(&path).map_err(|error| {
+            unavailable(
+                kind,
                 format!("could not read {kind} configuration"),
-                vec![format!("config: {}: {error}", path.display())],
-            );
+                vec![error],
+            )
+        })?;
+        let mut notes = loaded.notes;
+        notes.extend(
+            loaded
+                .files
+                .iter()
+                .skip(1)
+                .map(|file| format!("included: {}", file.display())),
+        );
+        return Ok(Loaded {
+            bindings: loaded.bindings,
+            source,
+            tier: EvidenceTier::ConfigFile,
+            config_read: true,
+            notes,
+            caveats: loaded.caveats,
+        });
+    }
+    let content = crate::recording::read_to_string(&path).map_err(|error| {
+        unavailable(
+            kind,
+            format!("could not read {kind} configuration"),
+            vec![format!("config: {}: {error}", path.display())],
+        )
+    })?;
+    Ok(loaded_from_content(kind, &content, source))
+}
+
+/// Alacritty or foot: the terminal's defaults overridden by `content`.
+fn loaded_from_content(kind: TerminalKind, content: &str, source: String) -> Loaded {
+    let mut caveats = Vec::new();
+    let bindings = match kind {
+        TerminalKind::Alacritty => {
+            if alacritty_imports(content) {
+                caveats.push(
+                    "the configuration imports other files, which are not followed".to_owned(),
+                );
+            }
+            let mut bindings = defaults::alacritty();
+            bindings.extend(parse_alacritty(content));
+            bindings
+        }
+        _ => {
+            let config = parse_foot_config(content);
+            if config.includes {
+                caveats.push(
+                    "the configuration includes other files, which are not followed".to_owned(),
+                );
+            }
+            let mut bindings = defaults::foot(&config.replaced);
+            bindings.extend(config.bindings);
+            bindings
         }
     };
-    let bindings = parse_bindings(kind, &content);
-    inspect_bindings(
-        kind,
-        key,
-        &bindings,
-        &format!("config: {}", path.display()),
-        EvidenceTier::ConfigFile,
-    )
+    Loaded {
+        bindings,
+        source,
+        tier: EvidenceTier::ConfigFile,
+        config_read: true,
+        notes: Vec::new(),
+        caveats,
+    }
 }
 
-/// `tier` names where `bindings` came from: `wezterm show-keys` evaluates
-/// the active configuration (a live query), other terminals' files are read
-/// statically.
-fn inspect_bindings(
-    kind: TerminalKind,
-    key: &KeyCombo,
-    bindings: &[Binding],
-    source: &str,
-    tier: EvidenceTier,
-) -> LayerResult {
-    resolve_bindings(kind, key, bindings, source).with_tier(tier)
+/// Terminal finding for `key` from everything `loaded` holds.
+fn inspect_loaded(kind: TerminalKind, key: &KeyCombo, loaded: &Loaded) -> LayerResult {
+    let found = loaded
+        .bindings
+        .iter()
+        .rev()
+        .find(|binding| &binding.trigger == key);
+    let mut layer = resolve_bindings(kind, key, &loaded.bindings, &loaded.source);
+    layer.details.extend(loaded.notes.iter().cloned());
+    let Some(binding) = found else {
+        if let Some(version) = defaults::version(kind) {
+            layer.details.push(format!(
+                "{kind} {version} default bindings checked: none match"
+            ));
+        }
+        if layer.outcome == Outcome::Pass && !loaded.caveats.is_empty() {
+            layer.outcome = Outcome::UncertainContinues;
+            layer.summary = format!("no {kind} binding found, but {}", loaded.caveats[0]);
+            layer.details.extend(loaded.caveats.iter().skip(1).cloned());
+        }
+        let tier = if loaded.config_read {
+            loaded.tier
+        } else {
+            EvidenceTier::Default
+        };
+        return layer.with_tier(tier);
+    };
+    let tier = match binding.origin {
+        Origin::Default => EvidenceTier::Default,
+        Origin::Config => loaded.tier,
+    };
+    layer.with_tier(tier)
 }
 
 fn resolve_bindings(
@@ -114,6 +277,15 @@ fn resolve_bindings(
     };
 
     let mut details = vec![source.into(), format!("binding: {}", binding.description)];
+    if binding.unmaps {
+        return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::Pass,
+            format!("{kind} configuration unmaps the key; forwarded to the terminal input"),
+            details,
+        );
+    }
     if kind == TerminalKind::WezTerm
         && wezterm_binding_table(&binding.description)
             .is_some_and(|table| !table.eq_ignore_ascii_case("default"))
@@ -154,32 +326,114 @@ fn resolve_bindings(
             details,
         );
     }
-    if action_forwards(&binding.action) {
+    if let Some(reason) = &binding.uncertain {
+        details.push(reason.clone());
         return LayerResult::new(
+            kind.layer_name(),
+            LayerId::Terminal,
+            Outcome::HandledUncertain,
+            format!("{kind} binding found; it acts only in some terminal states"),
+            details,
+        );
+    }
+    let effect = if binding.origin == Origin::Default && kind == TerminalKind::Konsole {
+        // Every Konsole shortcut in the default table is an application action.
+        Effect::Consumes
+    } else {
+        action_effect(kind, &binding.action)
+    };
+    match effect {
+        Effect::Forwards => LayerResult::new(
             kind.layer_name(),
             LayerId::Terminal,
             Outcome::HandledAndPassed,
             format!("{kind} forwards the key to the PTY"),
             details,
-        );
-    }
-    if action_is_consuming(&binding.action) {
-        return LayerResult::new(
+        ),
+        Effect::Consumes => LayerResult::new(
             kind.layer_name(),
             LayerId::Terminal,
             Outcome::Consumed,
             format!("{kind} consumes the key"),
             details,
-        );
+        ),
+        Effect::Depends(reason) => {
+            details.push(reason.into());
+            LayerResult::new(
+                kind.layer_name(),
+                LayerId::Terminal,
+                Outcome::HandledUncertain,
+                format!("{kind} binding found; it may or may not consume the key"),
+                details,
+            )
+        }
+        Effect::Unknown => {
+            details.push("action semantics are terminal-specific".into());
+            LayerResult::new(
+                kind.layer_name(),
+                LayerId::Terminal,
+                Outcome::Unknown,
+                format!("{kind} binding found; propagation is unknown"),
+                details,
+            )
+        }
     }
-    details.push("action semantics are terminal-specific".into());
-    LayerResult::new(
-        kind.layer_name(),
-        LayerId::Terminal,
-        Outcome::Unknown,
-        format!("{kind} binding found; propagation is unknown"),
-        details,
-    )
+}
+
+/// What a bound action does with the key event.
+enum Effect {
+    Forwards,
+    Consumes,
+    Depends(&'static str),
+    Unknown,
+}
+
+/// kitty, Alacritty and foot run every action they bind except the few that
+/// hand the key on; WezTerm and Konsole name many actions, so those use the
+/// shared lists.
+fn action_effect(kind: TerminalKind, action: &str) -> Effect {
+    let lower = action.trim().to_ascii_lowercase();
+    let head = lower.split_whitespace().next().unwrap_or_default();
+    match kind {
+        TerminalKind::Kitty => match head {
+            "send_key" | "send_text" => Effect::Forwards,
+            "copy_or_interrupt" | "copy_and_clear_or_interrupt" | "copy_or_noop" => {
+                Effect::Depends(
+                    "it copies a selection if there is one and otherwise passes the key on",
+                )
+            }
+            "combine" if lower.contains("send_") => {
+                Effect::Depends("the combined actions send text to the program")
+            }
+            "" => Effect::Unknown,
+            _ => Effect::Consumes,
+        },
+        TerminalKind::Alacritty => {
+            if lower.contains("receivechar") || lower.contains("receive_char") {
+                Effect::Forwards
+            } else if lower.is_empty() {
+                Effect::Unknown
+            } else {
+                Effect::Consumes
+            }
+        }
+        TerminalKind::Foot => {
+            if lower.is_empty() {
+                Effect::Unknown
+            } else {
+                Effect::Consumes
+            }
+        }
+        TerminalKind::WezTerm | TerminalKind::Konsole => {
+            if action_forwards(action) {
+                Effect::Forwards
+            } else if action_is_consuming(action) {
+                Effect::Consumes
+            } else {
+                Effect::Unknown
+            }
+        }
+    }
 }
 
 /// Analyze once: route finding plus normal input bytes from a single config
@@ -195,11 +449,12 @@ pub fn analyze(
         return (not_applicable("terminal identity is not known"), None);
     };
     let (layer, input) = analyze_kind(kind, key);
-    if input.is_some() || layer.outcome != Outcome::Pass {
+    // A key nothing binds (or that only a caveat keeps from "unbound")
+    // continues to the PTY, where the terminal emits its normal encoding
+    // (shared with the Ghostty/generic path).
+    if input.is_some() || !matches!(layer.outcome, Outcome::Pass | Outcome::UncertainContinues) {
         return (layer, input);
     }
-    // No binding intercepts the key, so the terminal emits its normal
-    // encoding (shared with the Ghostty/generic path).
     crate::layers::ghostty::with_default_encoding(
         layer,
         crate::layers::ghostty::default_encoding_for_protocol(key, protocol_flags, layout),
@@ -209,102 +464,31 @@ pub fn analyze(
 }
 
 fn analyze_kind(kind: TerminalKind, key: &KeyCombo) -> (LayerResult, Option<TerminalInput>) {
-    if kind == TerminalKind::WezTerm {
-        let (bindings, source) = match load_wezterm_bindings() {
-            Ok(value) => value,
-            Err(error) => {
-                return (
-                    LayerResult::new(
-                        kind.layer_name(),
-                        LayerId::Terminal,
-                        Outcome::Unknown,
-                        "could not inspect WezTerm effective key assignments",
-                        vec![error],
-                    ),
-                    None,
-                );
-            }
-        };
-        let layer = inspect_bindings(kind, key, &bindings, &source, EvidenceTier::LiveQuery);
-        let input = bindings
-            .into_iter()
-            .rev()
-            .find(|binding| {
-                &binding.trigger == key
-                    && wezterm_binding_table(&binding.description)
-                        .is_none_or(|table| table.eq_ignore_ascii_case("default"))
-            })
-            .and_then(|binding| binding.output)
-            .map(|bytes| TerminalInput::configured(bytes, "explicit WezTerm SendString output"));
-        return (layer, input);
-    }
-    if kind == TerminalKind::Konsole {
-        let (bindings, source) = match load_konsole_bindings() {
-            Ok(value) => value,
-            Err(error) => {
-                return (
-                    LayerResult::new(
-                        kind.layer_name(),
-                        LayerId::Terminal,
-                        Outcome::Unknown,
-                        "could not inspect Konsole keytab bindings",
-                        vec![error],
-                    ),
-                    None,
-                );
-            }
-        };
-        let layer = inspect_bindings(kind, key, &bindings, &source, EvidenceTier::ConfigFile);
-        let input = bindings
-            .into_iter()
-            .rev()
-            .find(|binding| &binding.trigger == key)
-            .and_then(|binding| binding.output)
-            .map(|bytes| TerminalInput::configured(bytes, "explicit Konsole keytab output"));
-        return (layer, input);
-    }
-    let Some(path) = config_path(kind) else {
-        return (
-            LayerResult::new(
-                kind.layer_name(),
-                LayerId::Terminal,
-                Outcome::Unknown,
-                format!("{kind} is active but no config file was found"),
-                vec!["set the terminal's config path or use its defaults".into()],
-            ),
-            None,
-        );
+    let loaded = match load(kind) {
+        Ok(loaded) => loaded,
+        Err(layer) => return (*layer, None),
     };
-    let content = match crate::recording::read_to_string(&path) {
-        Ok(content) => content,
-        Err(error) => {
-            return (
-                LayerResult::new(
-                    kind.layer_name(),
-                    LayerId::Terminal,
-                    Outcome::Unknown,
-                    format!("could not read {kind} configuration"),
-                    vec![format!("config: {}: {error}", path.display())],
-                ),
-                None,
-            );
-        }
-    };
-    let bindings = parse_bindings(kind, &content);
-    let layer = inspect_bindings(
-        kind,
-        key,
-        &bindings,
-        &format!("config: {}", path.display()),
-        EvidenceTier::ConfigFile,
-    );
-    let input = bindings
+    let layer = inspect_loaded(kind, key, &loaded);
+    let output = loaded
+        .bindings
         .into_iter()
         .rev()
-        .find(|binding| &binding.trigger == key)
-        .and_then(|binding| binding.output)
-        .map(|bytes| TerminalInput::configured(bytes, format!("explicit {kind} terminal output")));
-    (layer, input)
+        .find(|binding| {
+            &binding.trigger == key
+                && (kind != TerminalKind::WezTerm
+                    || wezterm_binding_table(&binding.description)
+                        .is_none_or(|table| table.eq_ignore_ascii_case("default")))
+        })
+        .and_then(|binding| binding.output);
+    let description = match kind {
+        TerminalKind::WezTerm => "explicit WezTerm SendString output".to_owned(),
+        TerminalKind::Konsole => "explicit Konsole keytab output".to_owned(),
+        _ => format!("explicit {kind} terminal output"),
+    };
+    (
+        layer,
+        output.map(|bytes| TerminalInput::configured(bytes, description)),
+    )
 }
 
 pub fn applicable() -> bool {
@@ -319,7 +503,7 @@ fn not_applicable(message: &str) -> LayerResult {
     LayerResult::new(
         "Terminal adapter",
         LayerId::Terminal,
-        Outcome::Pass,
+        Outcome::UncertainContinues,
         message,
         vec![],
     )
@@ -441,16 +625,6 @@ fn config_path(kind: TerminalKind) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.recorded_is_file())
 }
 
-fn parse_bindings(kind: TerminalKind, content: &str) -> Vec<Binding> {
-    match kind {
-        TerminalKind::Kitty => parse_kitty(content),
-        TerminalKind::Alacritty => parse_alacritty(content),
-        TerminalKind::Foot => parse_foot(content),
-        TerminalKind::WezTerm => parse_wezterm(content),
-        TerminalKind::Konsole => parse_konsole(content),
-    }
-}
-
 fn load_wezterm_bindings() -> Result<(Vec<Binding>, String), String> {
     let mut command = Command::new("wezterm");
     command.arg("show-keys");
@@ -516,6 +690,35 @@ fn konsole_profile_keytab(profile_name: &str) -> Option<String> {
         .into_iter()
         .find_map(|path| crate::recording::read_to_string(path).ok())
         .and_then(|content| ini_value(&content, "KeyBindings"))
+}
+
+/// Whether the user changed Konsole's own shortcuts: a non-empty
+/// `[Shortcuts]` group in `konsolerc`, or a shortcut in a kxmlgui rc file.
+fn konsole_has_custom_shortcuts() -> bool {
+    let in_konsolerc = crate::util::config_base()
+        .and_then(|base| crate::recording::read_to_string(base.join("konsolerc")).ok())
+        .is_some_and(|content| {
+            let mut in_shortcuts = false;
+            content.lines().any(|line| {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_shortcuts = line.eq_ignore_ascii_case("[Shortcuts]");
+                    false
+                } else {
+                    in_shortcuts && line.contains('=')
+                }
+            })
+        });
+    in_konsolerc
+        || crate::util::data_base()
+            .map(|base| base.join("kxmlgui5/konsole"))
+            .and_then(|dir| crate::recording::read_dir(dir).ok())
+            .is_some_and(|entries| {
+                entries.flatten().any(|entry| {
+                    crate::recording::read_to_string(entry.path())
+                        .is_ok_and(|content| content.contains("shortcut=\""))
+                })
+            })
 }
 
 fn ini_value(content: &str, key: &str) -> Option<String> {
@@ -591,12 +794,7 @@ fn parse_wezterm(content: &str) -> Vec<Binding> {
         let action = action.trim().to_owned();
         let output = wezterm_action_output(&action);
         let description = format!("{trigger} -> {action} ({table})");
-        bindings.push(Binding {
-            trigger,
-            action: action.clone(),
-            output,
-            description,
-        });
+        bindings.push(Binding::new(trigger, action.clone(), output, description));
     }
     bindings
 }
@@ -705,12 +903,7 @@ fn parse_konsole(content: &str) -> Vec<Binding> {
                 .as_ref()
                 .map(|_| "send_sequence".to_owned())
                 .unwrap_or_else(|| raw_output.to_owned());
-            Some(Binding {
-                trigger,
-                action,
-                output: decoded,
-                description: line.to_owned(),
-            })
+            Some(Binding::new(trigger, action, decoded, line))
         })
         .collect()
 }
@@ -761,38 +954,6 @@ fn parse_konsole_modifiers(modes: &[String]) -> Option<String> {
     Some(modifiers.join("+"))
 }
 
-fn parse_kitty(content: &str) -> Vec<Binding> {
-    content
-        .lines()
-        .filter_map(|raw| {
-            let line = raw.split('#').next()?.trim();
-            let mut fields = line.split_whitespace();
-            (fields.next()? == "map").then_some(())?;
-            let mut trigger = fields.next()?;
-            while trigger.starts_with("--") {
-                if !trigger.contains('=') {
-                    fields.next()?;
-                }
-                trigger = fields.next()?;
-            }
-            let trigger = parse_key(trigger)?;
-            let action = fields.collect::<Vec<_>>().join(" ");
-            let output = action.strip_prefix("send_text ").and_then(|value| {
-                value
-                    .split_once(' ')
-                    .map(|(_, payload)| decode_escape(payload))
-            });
-            let description = format!("{trigger} {action}");
-            Some(Binding {
-                trigger,
-                action: action.clone(),
-                output,
-                description,
-            })
-        })
-        .collect()
-}
-
 fn parse_alacritty(content: &str) -> Vec<Binding> {
     if !content
         .lines()
@@ -828,12 +989,15 @@ fn parse_alacritty_yaml(content: &str) -> Vec<Binding> {
     let mut mods = None;
     let mut action = None;
     let mut chars = None;
+    let mut mode = None;
 
     let finish = |bindings: &mut Vec<Binding>,
                   key: &mut Option<String>,
                   mods: &mut Option<String>,
                   action: &mut Option<String>,
-                  chars: &mut Option<String>| {
+                  chars: &mut Option<String>,
+                  mode: &mut Option<String>| {
+        let mode_value = mode.take();
         let Some(key_value) = key.take() else {
             mods.take();
             action.take();
@@ -849,12 +1013,9 @@ fn parse_alacritty_yaml(content: &str) -> Vec<Binding> {
         let action_name = action.take().or_else(|| chars.clone()).unwrap_or_default();
         let output = chars.take().map(|value| decode_escape(&value));
         let description = format!("{trigger} = {action_name}");
-        bindings.push(Binding {
-            trigger,
-            action: action_name.clone(),
-            output,
-            description,
-        });
+        let mut binding = Binding::new(trigger, action_name, output, description);
+        binding.uncertain = alacritty_mode_note(mode_value.as_deref());
+        bindings.push(binding);
     };
 
     for raw in content.lines() {
@@ -872,27 +1033,72 @@ fn parse_alacritty_yaml(content: &str) -> Vec<Binding> {
         }
         let indentation = without_comment.len() - without_comment.trim_start().len();
         if indentation == 0 {
-            finish(&mut bindings, &mut key, &mut mods, &mut action, &mut chars);
+            finish(
+                &mut bindings,
+                &mut key,
+                &mut mods,
+                &mut action,
+                &mut chars,
+                &mut mode,
+            );
             in_key_bindings = false;
             continue;
         }
         if let Some(item) = trimmed.strip_prefix('-') {
-            finish(&mut bindings, &mut key, &mut mods, &mut action, &mut chars);
+            finish(
+                &mut bindings,
+                &mut key,
+                &mut mods,
+                &mut action,
+                &mut chars,
+                &mut mode,
+            );
             let item = item.trim();
             if item.starts_with('{') && item.ends_with('}') {
                 for (name, value) in yaml_inline_fields(&item[1..item.len() - 1]) {
-                    yaml_field(&name, &value, &mut key, &mut mods, &mut action, &mut chars);
+                    yaml_field(
+                        &name,
+                        &value,
+                        &mut key,
+                        &mut mods,
+                        &mut action,
+                        &mut chars,
+                        &mut mode,
+                    );
                 }
             } else if let Some((name, value)) = item.split_once(':') {
-                yaml_field(name, value, &mut key, &mut mods, &mut action, &mut chars);
+                yaml_field(
+                    name,
+                    value,
+                    &mut key,
+                    &mut mods,
+                    &mut action,
+                    &mut chars,
+                    &mut mode,
+                );
             }
             continue;
         }
         if let Some((name, value)) = trimmed.split_once(':') {
-            yaml_field(name, value, &mut key, &mut mods, &mut action, &mut chars);
+            yaml_field(
+                name,
+                value,
+                &mut key,
+                &mut mods,
+                &mut action,
+                &mut chars,
+                &mut mode,
+            );
         }
     }
-    finish(&mut bindings, &mut key, &mut mods, &mut action, &mut chars);
+    finish(
+        &mut bindings,
+        &mut key,
+        &mut mods,
+        &mut action,
+        &mut chars,
+        &mut mode,
+    );
     bindings
 }
 
@@ -934,6 +1140,7 @@ fn yaml_field(
     mods: &mut Option<String>,
     action: &mut Option<String>,
     chars: &mut Option<String>,
+    mode: &mut Option<String>,
 ) {
     let value = unquote(value.trim()).to_owned();
     match name.trim() {
@@ -941,6 +1148,7 @@ fn yaml_field(
         "mods" => *mods = Some(value),
         "action" => *action = Some(value),
         "chars" => *chars = Some(value),
+        "mode" => *mode = Some(value),
         "command" => {
             action.get_or_insert_with(|| "command".to_owned());
         }
@@ -958,11 +1166,25 @@ fn alacritty_block(lines: &[&str]) -> Option<Binding> {
         .unwrap_or_default();
     let output = field_value(lines, "chars").map(|value| decode_escape(&value));
     let description = format!("{trigger} = {action}");
-    Some(Binding {
-        trigger,
-        action: action.clone(),
-        output,
-        description,
+    let mut binding = Binding::new(trigger, action, output, description);
+    binding.uncertain = alacritty_mode_note(field_value(lines, "mode").as_deref());
+    Some(binding)
+}
+
+/// An Alacritty binding with a `mode` condition applies only while the
+/// terminal is in that state (alternate screen, Vi mode, ...).
+fn alacritty_mode_note(mode: Option<&str>) -> Option<String> {
+    let mode = mode?.trim();
+    (!mode.is_empty()).then(|| format!("the binding applies only in mode \"{mode}\""))
+}
+
+/// Whether an Alacritty configuration pulls in other files (`import` in TOML
+/// under `[general]`, or at the top level of the older YAML format).
+fn alacritty_imports(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        line.strip_prefix("import")
+            .is_some_and(|rest| rest.trim_start().starts_with(['=', ':']))
     })
 }
 
@@ -991,44 +1213,80 @@ fn parse_alacritty_key(key: &str, mods: &str) -> Option<KeyCombo> {
     parts.join("+").parse().ok()
 }
 
+/// What foot's configuration contributes: the bindings it adds, the actions
+/// it mentions in `[key-bindings]` (each loses its default keys, even when
+/// set to `none`), and whether it includes other files.
+#[derive(Default)]
+struct FootConfig {
+    bindings: Vec<Binding>,
+    replaced: Vec<String>,
+    includes: bool,
+}
+
+#[cfg(test)]
 fn parse_foot(content: &str) -> Vec<Binding> {
-    let mut in_bindings = false;
-    content
-        .lines()
-        .flat_map(|raw| {
-            let line = raw.split('#').next().unwrap_or_default().trim();
-            if line.starts_with('[') {
-                in_bindings = line.eq_ignore_ascii_case("[key-bindings]");
-                return Vec::new();
+    parse_foot_config(content).bindings
+}
+
+fn parse_foot_config(content: &str) -> FootConfig {
+    let mut config = FootConfig::default();
+    let mut section = String::new();
+    for raw in content.lines() {
+        let line = raw.split('#').next().unwrap_or_default().trim();
+        if line.starts_with('[') {
+            section = line.trim_matches(['[', ']']).to_ascii_lowercase();
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if section.is_empty() || section == "main" {
+            // Includes may sit anywhere before the first section header.
+            config.includes |= name == "include";
+        }
+        match section.as_str() {
+            "key-bindings" => {
+                config.replaced.push(name.to_owned());
+                // foot binds `action=keys`; pipe actions take `action=[command] keys`.
+                let keys = if value.starts_with('[') {
+                    value.split_once(']').map_or("", |(_, rest)| rest)
+                } else {
+                    value
+                };
+                // foot writes `none` for an unbound action; it is not a key.
+                for key in keys
+                    .split_whitespace()
+                    .filter(|key| !key.eq_ignore_ascii_case("none"))
+                {
+                    if let Some(trigger) = parse_key(key) {
+                        config
+                            .bindings
+                            .push(Binding::new(trigger, name, None, line));
+                    }
+                }
             }
-            if !in_bindings || line.is_empty() {
-                return Vec::new();
+            // `[text-bindings]` is `bytes=keys`: the key sends the bytes.
+            "text-bindings" => {
+                let bytes = decode_escape(name);
+                for key in value
+                    .split_whitespace()
+                    .filter(|key| !key.eq_ignore_ascii_case("none"))
+                {
+                    if let Some(trigger) = parse_key(key) {
+                        config.bindings.push(Binding::new(
+                            trigger,
+                            "text-binding",
+                            Some(bytes.clone()),
+                            line,
+                        ));
+                    }
+                }
             }
-            // foot binds `action=keys`; pipe actions take `action=[command] keys`.
-            let Some((action, keys)) = line.split_once('=') else {
-                return Vec::new();
-            };
-            let action = action.trim();
-            let keys = keys.trim();
-            let keys = if keys.starts_with('[') {
-                keys.split_once(']').map_or("", |(_, rest)| rest)
-            } else {
-                keys
-            };
-            // foot writes `none` for an unbound action; it is not a key.
-            keys.split_whitespace()
-                .filter(|key| !key.eq_ignore_ascii_case("none"))
-                .filter_map(|key| {
-                    parse_key(key).map(|trigger| Binding {
-                        trigger,
-                        action: action.to_owned(),
-                        output: None,
-                        description: line.to_owned(),
-                    })
-                })
-                .collect()
-        })
-        .collect()
+            _ => {}
+        }
+    }
+    config
 }
 
 fn parse_key(raw: &str) -> Option<KeyCombo> {
@@ -1217,9 +1475,13 @@ mod tests {
 
     #[test]
     fn parses_kitty_send_text_binding() {
-        let bindings = parse_kitty("map ctrl+left send_text all \\e[1;5D\n");
-        assert_eq!(bindings[0].trigger.to_string(), "CTRL + LEFT");
-        assert_eq!(bindings[0].output.as_deref(), Some(b"\x1b[1;5D".as_slice()));
+        let loaded = kitty::parse_str(
+            "map ctrl+left send_text all \\e[1;5D\n",
+            std::path::Path::new("/nowhere"),
+        );
+        let binding = loaded.bindings.last().unwrap();
+        assert_eq!(binding.trigger.to_string(), "CTRL + LEFT");
+        assert_eq!(binding.output.as_deref(), Some(b"\x1b[1;5D".as_slice()));
     }
 
     #[test]
@@ -1335,13 +1597,15 @@ key_bindings:
             wezterm_binding_table(&bindings[0].description),
             Some("copy_mode")
         );
-        let result = inspect_bindings(
-            TerminalKind::WezTerm,
-            &"ctrl+f".parse().unwrap(),
-            &bindings,
-            "source: test",
-            EvidenceTier::LiveQuery,
-        );
+        let loaded = Loaded {
+            bindings,
+            source: "source: test".into(),
+            tier: EvidenceTier::LiveQuery,
+            config_read: true,
+            notes: Vec::new(),
+            caveats: Vec::new(),
+        };
+        let result = inspect_loaded(TerminalKind::WezTerm, &"ctrl+f".parse().unwrap(), &loaded);
         assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
         assert_eq!(result.status(), LayerStatus::Indeterminate);
         assert!(result.summary.contains("conditional key table"));
@@ -1392,13 +1656,428 @@ key_bindings:
 
     #[test]
     fn later_terminal_binding_overrides_earlier_one() {
-        let bindings =
-            parse_kitty("map ctrl+f send_text all first\nmap ctrl+f send_text all second\n");
-        let binding = bindings
+        let loaded = kitty::parse_str(
+            "map ctrl+f send_text all first\nmap ctrl+f send_text all second\n",
+            std::path::Path::new("/nowhere"),
+        );
+        let binding = loaded
+            .bindings
             .iter()
             .rev()
-            .find(|binding| binding.trigger.key() == "F")
+            .find(|binding| binding.trigger.to_string() == "CTRL + F")
             .unwrap();
         assert_eq!(binding.action, "send_text all second");
+    }
+
+    // ---- Built-in default bindings (D-186): a stock configuration is not "unbound".
+
+    fn key(text: &str) -> KeyCombo {
+        text.parse().unwrap()
+    }
+
+    fn stock(kind: TerminalKind) -> Loaded {
+        let bindings = match kind {
+            TerminalKind::Kitty => defaults::kitty("ctrl+shift"),
+            TerminalKind::Alacritty => defaults::alacritty(),
+            TerminalKind::Foot => defaults::foot(&[]),
+            _ => defaults::konsole(),
+        };
+        Loaded {
+            bindings,
+            source: "no configuration file".into(),
+            tier: EvidenceTier::Default,
+            config_read: false,
+            notes: Vec::new(),
+            caveats: Vec::new(),
+        }
+    }
+
+    fn configured(kind: TerminalKind, content: &str) -> Loaded {
+        match kind {
+            TerminalKind::Kitty => {
+                let loaded = kitty::parse_str(content, std::path::Path::new("/nowhere"));
+                Loaded {
+                    bindings: loaded.bindings,
+                    source: "config: kitty.conf".into(),
+                    tier: EvidenceTier::ConfigFile,
+                    config_read: true,
+                    notes: loaded.notes,
+                    caveats: loaded.caveats,
+                }
+            }
+            _ => loaded_from_content(kind, content, "config: test".into()),
+        }
+    }
+
+    fn verdict(kind: TerminalKind, loaded: &Loaded, text: &str) -> (Outcome, Option<EvidenceTier>) {
+        let layer = inspect_loaded(kind, &key(text), loaded);
+        (layer.outcome, layer.tier)
+    }
+
+    #[test]
+    fn stock_kitty_consumes_its_default_shortcuts() {
+        let loaded = stock(TerminalKind::Kitty);
+        for text in [
+            "ctrl+shift+c",
+            "ctrl+shift+v",
+            "ctrl+shift+t",
+            "ctrl+shift+w",
+            "ctrl+shift+enter",
+            "ctrl+shift+f11",
+            "ctrl+tab",
+            "shift+insert",
+            "ctrl+shift+equal",
+        ] {
+            assert_eq!(
+                verdict(TerminalKind::Kitty, &loaded, text),
+                (Outcome::Consumed, Some(EvidenceTier::Default)),
+                "{text}"
+            );
+        }
+        let layer = inspect_loaded(TerminalKind::Kitty, &key("ctrl+shift+c"), &loaded);
+        assert!(
+            layer
+                .details
+                .iter()
+                .any(|detail| detail.contains("Kitty 0.50.0 default"))
+        );
+        // A key kitty does not bind still passes.
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "alt+x"),
+            (Outcome::Pass, Some(EvidenceTier::Default))
+        );
+        // The first key of a multi-key default starts a sequence.
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+p").0,
+            Outcome::Consumed
+        );
+    }
+
+    #[test]
+    fn kitty_config_overrides_and_unbinds_its_defaults() {
+        // A mapping replaces the default; the tier says the config decided it.
+        let loaded = configured(TerminalKind::Kitty, "map kitty_mod+c send_text all copy\n");
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+c"),
+            (Outcome::HandledAndPassed, Some(EvidenceTier::ConfigFile))
+        );
+        // An empty `map` / `no_op` hands the key to the program.
+        for line in ["map kitty_mod+c", "map ctrl+shift+c no_op"] {
+            let loaded = configured(TerminalKind::Kitty, line);
+            assert_eq!(
+                verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+c"),
+                (Outcome::Pass, Some(EvidenceTier::ConfigFile)),
+                "{line}"
+            );
+        }
+        // discard_event swallows it.
+        let loaded = configured(TerminalKind::Kitty, "map kitty_mod+c discard_event\n");
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+c").0,
+            Outcome::Consumed
+        );
+        // clear_all_shortcuts frees every default.
+        let loaded = configured(
+            TerminalKind::Kitty,
+            "clear_all_shortcuts yes\nmap kitty_mod+f12 launch ls\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+c").0,
+            Outcome::Pass
+        );
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+f12"),
+            (Outcome::Consumed, Some(EvidenceTier::ConfigFile))
+        );
+    }
+
+    #[test]
+    fn kitty_mod_moves_the_default_shortcuts() {
+        let loaded = configured(TerminalKind::Kitty, "kitty_mod ctrl+alt\n");
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+c").0,
+            Outcome::Pass
+        );
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+alt+c"),
+            (Outcome::Consumed, Some(EvidenceTier::Default))
+        );
+    }
+
+    #[test]
+    fn kitty_map_lines_with_kitty_mod_are_not_dropped() {
+        let loaded = configured(
+            TerminalKind::Kitty,
+            "map kitty_mod+f12 launch ls\nmap kitty_mod+l send_text all \\e[1;5D\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Kitty, &loaded, "ctrl+shift+f12"),
+            (Outcome::Consumed, Some(EvidenceTier::ConfigFile))
+        );
+        let layer = inspect_loaded(TerminalKind::Kitty, &key("ctrl+shift+l"), &loaded);
+        assert_eq!(layer.outcome, Outcome::HandledAndPassed);
+    }
+
+    #[test]
+    fn kitty_follows_include_and_globinclude_relative_to_the_config_dir() {
+        let directory =
+            std::env::temp_dir().join(format!("whykey-kitty-include-{}", std::process::id()));
+        std::fs::create_dir_all(directory.join("conf.d")).unwrap();
+        let main = directory.join("kitty.conf");
+        std::fs::write(
+            &main,
+            "include keys.conf\nglobinclude conf.d/*.conf\nmap ctrl+f3 launch last\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("keys.conf"),
+            "kitty_mod ctrl+alt\nmap kitty_mod+f1 launch a\ninclude nested.conf\n",
+        )
+        .unwrap();
+        std::fs::write(directory.join("nested.conf"), "map ctrl+f2 launch nested\n").unwrap();
+        std::fs::write(
+            directory.join("conf.d/one.conf"),
+            "map ctrl+f4 launch glob\n",
+        )
+        .unwrap();
+
+        let loaded = kitty::load(&main).unwrap();
+        let find = |text: &str| {
+            let combo = key(text);
+            loaded
+                .bindings
+                .iter()
+                .rev()
+                .find(|binding| binding.trigger == combo)
+                .map(|binding| binding.action.clone())
+        };
+        assert_eq!(find("ctrl+alt+f1").as_deref(), Some("launch a"));
+        assert_eq!(find("ctrl+f2").as_deref(), Some("launch nested"));
+        assert_eq!(find("ctrl+f4").as_deref(), Some("launch glob"));
+        assert_eq!(find("ctrl+f3").as_deref(), Some("launch last"));
+        assert_eq!(loaded.files.len(), 4);
+        assert!(loaded.caveats.is_empty());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn kitty_unfollowed_includes_make_a_missing_binding_uncertain() {
+        let loaded = configured(TerminalKind::Kitty, "geninclude gen.py\n");
+        let layer = inspect_loaded(TerminalKind::Kitty, &key("alt+x"), &loaded);
+        assert_eq!(layer.outcome, Outcome::UncertainContinues);
+        assert!(layer.summary.contains("geninclude"));
+    }
+
+    #[test]
+    fn stock_foot_consumes_its_default_shortcuts() {
+        let loaded = stock(TerminalKind::Foot);
+        for text in [
+            "ctrl+shift+c",
+            "ctrl+shift+v",
+            "ctrl+shift+n",
+            "ctrl+shift+r",
+            "ctrl+shift+o",
+            "ctrl+minus",
+            "ctrl+0",
+            "shift+insert",
+            "shift+page_up",
+        ] {
+            assert_eq!(
+                verdict(TerminalKind::Foot, &loaded, text),
+                (Outcome::Consumed, Some(EvidenceTier::Default)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "alt+x"),
+            (Outcome::Pass, Some(EvidenceTier::Default))
+        );
+    }
+
+    #[test]
+    fn foot_config_replaces_the_keys_of_an_action_it_mentions() {
+        // `none` unbinds the action's default keys.
+        let loaded = configured(TerminalKind::Foot, "[key-bindings]\nclipboard-copy=none\n");
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "ctrl+shift+c"),
+            (Outcome::Pass, Some(EvidenceTier::ConfigFile))
+        );
+        // Other defaults stay.
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "ctrl+shift+v").0,
+            Outcome::Consumed
+        );
+        // Rebinding the action moves it.
+        let loaded = configured(
+            TerminalKind::Foot,
+            "[key-bindings]\nclipboard-copy=Control+Shift+y\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "ctrl+shift+c").0,
+            Outcome::Pass
+        );
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "ctrl+shift+y"),
+            (Outcome::Consumed, Some(EvidenceTier::ConfigFile))
+        );
+    }
+
+    #[test]
+    fn foot_text_bindings_rewrite_the_key() {
+        let loaded = configured(
+            TerminalKind::Foot,
+            "[text-bindings]\n\\x03=Control+Mod1+c\n",
+        );
+        let layer = inspect_loaded(TerminalKind::Foot, &key("ctrl+alt+c"), &loaded);
+        assert_eq!(layer.outcome, Outcome::HandledAndPassed);
+    }
+
+    #[test]
+    fn foot_include_makes_a_missing_binding_uncertain() {
+        let loaded = configured(
+            TerminalKind::Foot,
+            "include=/etc/foot/extra.ini\n[main]\nterm=foot\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "alt+x").0,
+            Outcome::UncertainContinues
+        );
+        // A key that does match is still answered.
+        assert_eq!(
+            verdict(TerminalKind::Foot, &loaded, "ctrl+shift+c").0,
+            Outcome::Consumed
+        );
+    }
+
+    #[test]
+    fn stock_alacritty_consumes_its_default_shortcuts() {
+        let loaded = stock(TerminalKind::Alacritty);
+        for text in [
+            "ctrl+shift+c",
+            "ctrl+shift+v",
+            "ctrl+shift+f",
+            "ctrl+shift+space",
+            "shift+insert",
+            "ctrl+0",
+            "ctrl+minus",
+            "ctrl+equal",
+        ] {
+            assert_eq!(
+                verdict(TerminalKind::Alacritty, &loaded, text),
+                (Outcome::Consumed, Some(EvidenceTier::Default)),
+                "{text}"
+            );
+        }
+        // Ctrl+L clears a log notice and still reaches the program.
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "ctrl+l"),
+            (Outcome::HandledAndPassed, Some(EvidenceTier::Default))
+        );
+        // Scrolling is off in the alternate screen.
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "shift+page_up"),
+            (Outcome::HandledUncertain, Some(EvidenceTier::Default))
+        );
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "alt+x"),
+            (Outcome::Pass, Some(EvidenceTier::Default))
+        );
+    }
+
+    #[test]
+    fn alacritty_config_overrides_its_defaults() {
+        let loaded = configured(
+            TerminalKind::Alacritty,
+            "[[keyboard.bindings]]\nkey = \"C\"\nmods = \"Control|Shift\"\naction = \"ReceiveChar\"\n\n[[keyboard.bindings]]\nkey = \"V\"\nmods = \"Control|Shift\"\naction = \"None\"\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "ctrl+shift+c"),
+            (Outcome::HandledAndPassed, Some(EvidenceTier::ConfigFile))
+        );
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "ctrl+shift+v"),
+            (Outcome::Consumed, Some(EvidenceTier::ConfigFile))
+        );
+    }
+
+    #[test]
+    fn alacritty_import_and_mode_conditions_are_uncertain() {
+        let loaded = configured(
+            TerminalKind::Alacritty,
+            "[general]\nimport = [\"/etc/alacritty/extra.toml\"]\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "alt+x").0,
+            Outcome::UncertainContinues
+        );
+        let loaded = configured(
+            TerminalKind::Alacritty,
+            "[[keyboard.bindings]]\nkey = \"K\"\nmods = \"Control\"\nmode = \"~Alt\"\naction = \"ScrollPageUp\"\n",
+        );
+        assert_eq!(
+            verdict(TerminalKind::Alacritty, &loaded, "ctrl+k").0,
+            Outcome::HandledUncertain
+        );
+    }
+
+    #[test]
+    fn konsole_default_shortcuts_are_consumed_and_the_keytab_still_wins() {
+        let mut loaded = stock(TerminalKind::Konsole);
+        loaded.config_read = true;
+        loaded.tier = EvidenceTier::ConfigFile;
+        for text in [
+            "ctrl+shift+t",
+            "ctrl+shift+c",
+            "ctrl+shift+v",
+            "f11",
+            "ctrl+minus",
+        ] {
+            assert_eq!(
+                verdict(TerminalKind::Konsole, &loaded, text),
+                (Outcome::Consumed, Some(EvidenceTier::Default)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            verdict(TerminalKind::Konsole, &loaded, "alt+x").0,
+            Outcome::Pass
+        );
+        loaded
+            .bindings
+            .extend(parse_konsole("key F11 +Ctrl : \"\\E[23;5~\"\n"));
+        // The keytab entry is later than the default and is the answer.
+        let layer = inspect_loaded(TerminalKind::Konsole, &key("ctrl+f11"), &loaded);
+        assert_eq!(layer.outcome, Outcome::Pass);
+        assert_eq!(layer.tier, Some(EvidenceTier::ConfigFile));
+    }
+
+    #[test]
+    fn konsole_custom_shortcuts_make_a_missing_binding_uncertain() {
+        let mut loaded = stock(TerminalKind::Konsole);
+        loaded
+            .caveats
+            .push("Konsole's own shortcut settings are not read".into());
+        let layer = inspect_loaded(TerminalKind::Konsole, &key("alt+x"), &loaded);
+        assert_eq!(layer.outcome, Outcome::UncertainContinues);
+        // A default shortcut is still reported (and its tier says "default").
+        assert_eq!(
+            verdict(TerminalKind::Konsole, &loaded, "ctrl+shift+t"),
+            (Outcome::Consumed, Some(EvidenceTier::Default))
+        );
+    }
+
+    #[test]
+    fn a_terminal_with_an_unfollowed_config_part_still_forwards_the_encoding() {
+        // `analyze` keeps the encoding analysis for an UncertainContinues layer.
+        let loaded = configured(TerminalKind::Kitty, "geninclude gen.py\n");
+        let layer = inspect_loaded(TerminalKind::Kitty, &key("alt+x"), &loaded);
+        let (layer, input) = crate::layers::ghostty::with_default_encoding(
+            layer,
+            crate::layers::ghostty::default_encoding_for_protocol(&key("alt+x"), None, None),
+            "kitty default encoding",
+            true,
+        );
+        assert_eq!(layer.outcome, Outcome::UncertainContinues);
+        assert_eq!(input.expect("alt+x bytes").bytes, b"\x1bx");
     }
 }

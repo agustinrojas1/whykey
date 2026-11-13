@@ -505,8 +505,6 @@ fn layer_row(
         && layer.layer == "Session context"
     {
         "Multiplexer".to_owned()
-    } else if layer.id == LayerId::Terminal && layer.summary.starts_with("not applicable") {
-        "Terminal".to_owned()
     } else {
         short_name(layer.layer)
     };

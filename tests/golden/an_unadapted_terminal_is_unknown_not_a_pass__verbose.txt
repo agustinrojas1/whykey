@@ -1,0 +1,32 @@
+Ctrl+Shift+C
+
+? Nothing claims Ctrl+Shift+C before Unknown terminal and Shell input, which
+  whykey could not verify.
+  What those layers do with it is unknown.
+
+Route
+  1  Remapper          v  none detected
+  2  Hyprland          v  no binding
+  3  Unknown terminal  ?  terminal key bindings are unknown; the key most likely
+                          continues
+  4  TTY driver        -  not inspected
+  5  Input method      -  not inspected
+  6  Multiplexer       -  not inspected
+  7  Shell input       ?  terminal byte encoding is unknown; shell line editing
+                          unevaluated
+
+Technical evidence
+  requested key: Ctrl+Shift+C
+  configuration route (predicted):
+    1. Hyprland [NotHandled; Continues]
+       summary: no binding
+    2. Unknown terminal [Indeterminate; Continues]
+       summary: terminal key bindings are unknown; the key most likely continues
+       policy notes
+         the terminal (gnome-terminal) has no whykey adapter
+         whykey reads key bindings for Ghostty, kitty, Alacritty, foot, WezTerm
+         and Konsole only
+    3. Shell input [Indeterminate; Indeterminate]
+       summary: terminal byte encoding is unknown; shell line editing
+       unevaluated
+

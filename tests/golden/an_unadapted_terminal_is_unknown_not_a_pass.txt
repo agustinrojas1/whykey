@@ -1,0 +1,17 @@
+Ctrl+Shift+C
+
+? Nothing claims Ctrl+Shift+C before Unknown terminal and Shell input, which whykey could not verify.
+  What those layers do with it is unknown.
+
+Route
+  1  Remapper          v  none detected
+  2  Hyprland          v  no binding
+  3  Unknown terminal  ?  terminal key bindings are unknown; the key most likely
+                          continues
+  4  TTY driver        -  not inspected
+  5  Input method      -  not inspected
+  6  Multiplexer       -  not inspected
+  7  Shell input       ?  terminal byte encoding is unknown; shell line editing
+                          unevaluated
+
+More  whykey ctrl+shift+c -v  -  whykey listen

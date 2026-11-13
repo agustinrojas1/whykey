@@ -1,5 +1,47 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixes
+
+- A terminal whykey has no adapter for (GNOME Terminal, Ptyxis, xterm, st,
+  urxvt, any terminal under `TERM=tmux-*`, and an unidentified terminal) is
+  now reported as `Unknown terminal` with an uncertain-continues verdict. It
+  used to pass the key with "not applicable to the current terminal", which
+  claimed more than whykey knew. The encoding analysis is unchanged.
+- kitty, Alacritty and foot answers now include the terminal's built-in
+  shortcuts. A stock `kitty.conf`, `foot.ini` or `alacritty.toml` no longer
+  makes Ctrl+Shift+C, Ctrl+Shift+V, Ctrl+Shift+N, Ctrl+minus and the rest
+  look unbound: they report that the terminal consumes the key, with the
+  `default` evidence tier and the version the table was taken from (kitty
+  0.50.0, Alacritty 0.17.0, foot 1.28.0). Konsole's default application
+  shortcuts (Ctrl+Shift+T, F11, ...) are read the same way (Konsole 26.08.3).
+  The configuration overrides them as the terminal does: kitty `map key` and
+  `no_op`, `clear_all_shortcuts`, Alacritty `ReceiveChar` and `None`, foot
+  `action=none` (which drops all of the action's default keys).
+- kitty: `kitty_mod` is resolved (default `ctrl+shift`, set by the
+  configuration), so `map kitty_mod+...` lines are no longer dropped, and
+  `include` and `globinclude` are followed relative to the including file. A
+  multi-key map (`map ctrl+a>c ...`) is reported as consuming its first key,
+  `map --mode` entries no longer count as active, and `#` only starts a
+  comment at the beginning of a line, as in kitty.
+- When a part of a configuration is not followed (kitty `envinclude` and
+  `geninclude`, Alacritty `import`, foot `include`, customized Konsole
+  shortcuts) a key with no binding is now uncertain-continues instead of a
+  pass. A binding with a `mode` condition (Alacritty) is handled-uncertain.
+- foot `[text-bindings]` are read: such a key is rewritten to the bytes.
+- Without a kitty, foot or Alacritty configuration file the answer now comes
+  from the built-in shortcuts (default tier) instead of "no config file was
+  found" with no answer.
+
+### Added
+
+- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
+  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
+  `foot-default-font-increase`, `alacritty-default-font-decrease` and
+  `konsole-default-fullscreen`. The `terminals` lab environment gains a
+  `term_sh` action that runs a command on the terminal's tty.
+
 ## [2.4.1] - 2026-10-16
 
 A packaging release: whykey's behavior and output are unchanged. whykey is
