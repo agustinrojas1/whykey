@@ -18,6 +18,7 @@ Bound in
 Confidence  live query: Sway answered from the running program. Not observed: run `whykey listen` to watch it.
 
 Next
-  eval "$(whykey shell-init bash)"  then run whykey super+t again
+  eval "$(whykey shell-init bash)"  load the live shell bindings
+  whykey super+t                    then run this again
 
 More  whykey super+t -v

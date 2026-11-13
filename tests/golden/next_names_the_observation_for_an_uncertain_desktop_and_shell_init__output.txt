@@ -20,6 +20,7 @@ Confidence  default: bash's built-in default; your configuration may override it
 
 To confirm
   whykey listen --window  press the shortcut in the probe window to see if it arrives
-  eval "$(whykey shell-init bash)"  then run whykey ctrl+t again
+  eval "$(whykey shell-init bash)"  load the live shell bindings
+  whykey ctrl+t                     then run this again
 
 More  whykey ctrl+t -v
