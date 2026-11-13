@@ -46,6 +46,22 @@ mode, and one route order with the input method where the key meets it.
   `konsole-default-fullscreen`. The `terminals` lab environment gains a
   `term_sh` action that runs a command on the terminal's tty.
 
+### Changed
+
+- The "Supported environments" table in the README is generated from
+  `support-matrix.json` (`programs`), so it cannot claim more than the lab has
+  shown. ✅ means a lab scenario for that program matched exactly and nothing
+  weakens it; 🟡 that some scenarios pass only as honest uncertainty (PASS~,
+  now recorded per entry as `lab_tolerated`), only the X11 grab probe or a hand
+  check backs it, or a documented limit applies (a `partial` note citing
+  L-011/L-017); ⚪ that nothing does. Vim, Helix, Kakoune and Micro now have
+  their own matrix entry (`editor.terminal-apps`) and Neovim and Emacs are
+  credited through `cli.extensions`, so their lab scenarios count. Programs
+  moved from ✅ to 🟡: Cinnamon, Xfce, MATE, Openbox, AwesomeWM, Qtile,
+  XMonad, xbindkeys (grab-probe verdicts), GNOME, KDE Plasma, Wayfire, Fcitx5
+  and IBus (limits in L-011), Ghostty, Zellij, Niri, kmonad, input-remapper.
+  SUPPORT_MATRIX.md lists the same programs with their scenario counts.
+
 ### Fixed
 
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
