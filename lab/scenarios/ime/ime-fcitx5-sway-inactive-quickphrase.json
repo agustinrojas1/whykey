@@ -1,0 +1,49 @@
+{
+  "id": "ime-fcitx5-sway-inactive-quickphrase",
+  "description": "An inactive Fcitx5 (pinyin deactivated, state 1) still takes the QuickPhrase trigger set in conf/quickphrase.conf: Control+Alt+semicolon opens quick phrase input, the typed zzq and 1 select the phrase from a quickphrase.d file (spell suggestions off, so it is the first candidate), and none of those keys reaches the foot probe; only the committed phrase arrives. whykey reads the addon file and names Fcitx5 QuickPhrase. accept handled-uncertain: the daemon's state is that of the most recently focused input context, so whykey cannot tell that the focused terminal is attached to it; the lab shows it was.",
+  "tier": "observed",
+  "environment": "ime",
+  "ime": {
+    "daemon": "fcitx5",
+    "session": "sway",
+    "env": {
+      "GTK_IM_MODULE": "fcitx",
+      "QT_IM_MODULE": "fcitx",
+      "XMODIFIERS": "@im=fcitx"
+    }
+  },
+  "files": {
+    "/root/.config/sway/config": ["output * resolution 1024x768"],
+    "/root/.config/fcitx5/conf/quickphrase.conf": ["Spell=False", "", "[TriggerKey]", "0=Control+Alt+semicolon"],
+    "/root/.local/share/fcitx5/data/quickphrase.d/whykey.mb": ["zzq whykeyphrase"]
+  },
+  "probe": "wayland",
+  "actions": [
+    {
+      "fcitx5": {
+        "engine": "pinyin",
+        "state": "inactive"
+      }
+    },
+    {
+      "vkbd": ["ctrl+alt+semicolon", "z", "z", "q", "1"]
+    }
+  ],
+  "ground_truth": {
+    "fired": {
+      "committed": "whykeyphrase"
+    },
+    "delivered": "probe"
+  },
+  "whykey": {
+    "args": ["ctrl+alt+semicolon"],
+    "layer": "Fcitx5",
+    "summary": "Fcitx5 QuickPhrase TriggerKey opens quick phrase input",
+    "detail": "conf/quickphrase.conf:4",
+    "accept": ["handled-uncertain"],
+    "env": {
+      "XDG_CURRENT_DESKTOP": "sway",
+      "XDG_SESSION_TYPE": "wayland"
+    }
+  }
+}
