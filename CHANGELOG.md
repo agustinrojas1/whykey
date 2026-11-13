@@ -40,6 +40,12 @@
   others in the details, and downgrades a no-match to uncertain when another
   adapter could not be checked.
 
+- A Konsole keytab entry that names an application action
+  (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
+  consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
+  commands, so such an entry is an unknown outcome. The lab scenarios that
+  claimed otherwise took "a window went fullscreen" from a Sway tree check that
+  was always true; they now check the terminal's own window.
 - A tmux pane in copy mode is read from tmux: keys resolve in the `copy-mode`
   or `copy-mode-vi` table (by `mode-keys`) and the evidence names it, instead
   of `q`, `Space` or `Enter` being reported as passing to the application. A
