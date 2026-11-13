@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- `inspect --pid` and `--focused` read the termios of the target's terminal
+  for the TTY driver row, not whykey's own. A program in raw mode (vim, less)
+  no longer reads as "IXON consumes Ctrl+S" or "ISIG sends SIGINT" because
+  whykey's shell is cooked. The terminal is read-only (`tcgetattr`), the
+  evidence names the device and the foreground process group, and a terminal
+  that cannot be read answers unknown instead of reusing whykey's own.
 - GNOME keys bound by Shell extensions (Dash to Dock's Super+1..9, Pop
   Shell, Tiling Assistant, Forge and the rest) are now read from the
   enabled extensions' settings. A match is reported as handled by "GNOME

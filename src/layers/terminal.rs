@@ -28,6 +28,52 @@ impl Terminal {
         self.inspect_byte(*byte, input, &state)
     }
 
+    /// Inspect input against the terminal of another process (`inspect
+    /// --pid`, `--focused`). That terminal's settings, not whykey's own, say
+    /// what the TTY driver does with the byte. When they cannot be read the
+    /// answer is unknown; whykey's own terminal is never substituted.
+    pub fn inspect_input_for_target(&self, input: &TerminalInput, target_pid: u32) -> LayerResult {
+        if input.bytes.len() != 1 {
+            // No single byte for the driver to act on: nothing to read.
+            return LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Pass,
+                "does not consume this byte sequence",
+                vec![format_input(input)],
+            );
+        }
+        self.inspect_input_for_target_termios(input, crate::layers::tty_target::read(target_pid))
+    }
+
+    fn inspect_input_for_target_termios(
+        &self,
+        input: &TerminalInput,
+        settings: Result<crate::layers::tty_target::TargetTermios, String>,
+    ) -> LayerResult {
+        match settings {
+            Ok(target) => {
+                let state = tty_state_from_termios(&target.termios);
+                let mut result = self.inspect_input_with_state(input, &state);
+                result.details.extend(target.details);
+                result
+            }
+            Err(message) => LayerResult::new(
+                "TTY driver",
+                LayerId::Tty,
+                Outcome::Unknown,
+                "could not read the target's terminal settings; TTY checks unevaluated",
+                vec![
+                    message,
+                    "whykey's own terminal is not substituted: the target may use different \
+                     settings"
+                        .into(),
+                    format_input(input),
+                ],
+            ),
+        }
+    }
+
     /// Inspect input with a caller-provided termios snapshot. Capture mode
     /// uses this because the live terminal is deliberately in raw mode while
     /// reports are rendered.
@@ -477,5 +523,73 @@ mod tests {
                 result.details
             );
         }
+    }
+
+    fn target_termios(
+        lflag: libc::tcflag_t,
+        iflag: libc::tcflag_t,
+    ) -> crate::layers::tty_target::TargetTermios {
+        crate::layers::tty_target::TargetTermios {
+            termios: termios_with(lflag, iflag),
+            details: vec!["termios read from /dev/pts/9, the controlling terminal of pid 7".into()],
+        }
+    }
+
+    #[test]
+    fn a_raw_mode_target_forwards_the_bytes_a_cooked_terminal_would_consume() {
+        let input = TerminalInput::predicted(vec![0x13], "legacy control byte");
+        let cooked = termios_with(libc::ISIG | libc::ICANON, libc::IXON);
+        assert_eq!(
+            Terminal.inspect_input_with_termios(&input, &cooked).outcome,
+            Outcome::Consumed
+        );
+        // vim and less clear ISIG, ICANON and IXON on their terminal.
+        let result = Terminal.inspect_input_for_target_termios(&input, Ok(target_termios(0, 0)));
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert_eq!(result.tier, Some(EvidenceTier::LiveQuery));
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("/dev/pts/9")),
+            "{:?}",
+            result.details
+        );
+        let interrupt = TerminalInput::predicted(vec![0x03], "legacy control byte");
+        let result =
+            Terminal.inspect_input_for_target_termios(&interrupt, Ok(target_termios(0, 0)));
+        assert_eq!(result.outcome, Outcome::Pass);
+        let result = Terminal
+            .inspect_input_for_target_termios(&interrupt, Ok(target_termios(libc::ISIG, 0)));
+        assert_eq!(result.outcome, Outcome::Consumed);
+    }
+
+    #[test]
+    fn an_unreadable_target_terminal_is_unknown_not_whykeys_own() {
+        let input = TerminalInput::predicted(vec![0x13], "legacy control byte");
+        let result = Terminal.inspect_input_for_target_termios(
+            &input,
+            Err("failed to open /dev/pts/9: Permission denied (os error 13)".into()),
+        );
+        assert_eq!(result.outcome, Outcome::Unknown);
+        assert_ne!(result.tier, Some(EvidenceTier::LiveQuery));
+        assert!(
+            result.summary.contains("could not read"),
+            "{}",
+            result.summary
+        );
+        assert!(
+            result.details[0].contains("Permission denied"),
+            "{:?}",
+            result.details
+        );
+    }
+
+    #[test]
+    fn a_multibyte_target_input_needs_no_terminal_read() {
+        let input = TerminalInput::predicted(b"\x1b[A".to_vec(), "cursor key");
+        // No process has this id, so a read would fail; none is attempted.
+        let result = Terminal.inspect_input_for_target(&input, u32::MAX);
+        assert_eq!(result.outcome, Outcome::Pass);
     }
 }
