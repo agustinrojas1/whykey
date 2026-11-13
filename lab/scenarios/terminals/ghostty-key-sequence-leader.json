@@ -1,0 +1,23 @@
+{
+  "id": "ghostty-key-sequence-leader",
+  "description": "the first key of a ghostty key sequence (ctrl+a>f=toggle_fullscreen) is held, not delivered: pressing ctrl+a then f toggles fullscreen and the program receives nothing",
+  "tier": "observed",
+  "environment": "terminals",
+  "terminal": "ghostty",
+  "files": {
+    "/root/.config/ghostty/config": ["keybind = ctrl+a>f=toggle_fullscreen"]
+  },
+  "actions": [
+    {"tty_log": "start"},
+    {"vkbd": ["ctrl+a"]},
+    {"sleep": 1},
+    {"vkbd": ["f"]},
+    {"sleep": 1},
+    {"tty_log": "stop"}
+  ],
+  "ground_truth": {
+    "fired": {"sh": "swaymsg -t get_tree | python3 -c \"import json,sys; t=json.load(sys.stdin); f=lambda n: (n.get('app_id')=='com.mitchellh.ghostty' and n.get('fullscreen_mode')==1) or any(f(c) for c in n.get('nodes',[])+n.get('floating_nodes',[])); sys.exit(0 if f(t) else 1)\""},
+    "delivered": {"tty_input": {"any": true}}
+  },
+  "whykey": {"args": ["ctrl+a"], "layer": "Ghostty", "accept": ["handled-uncertain"]}
+}
