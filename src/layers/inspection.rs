@@ -563,17 +563,103 @@ fn inspect_compositor(
             }
         }),
         Some(id) => {
-            let entry = crate::registry::DESKTOPS
-                .iter()
-                .find(|entry| entry.id == id)
-                .unwrap_or_else(|| panic!("selected compositor '{id}' has no adapter descriptor"));
-            if let Some(inspect) = entry.inspect_with_context {
-                inspect(key, physical_input, session)
-            } else {
-                (entry.inspect)(key, physical_input)
-            }
+            let others = other_grabbers(&session.compositor_candidates, id);
+            with_other_candidates(
+                inspect_adapter(id, key, physical_input, session),
+                &others,
+                |other| inspect_adapter(other, key, physical_input, session),
+            )
         }
     }
+}
+
+fn inspect_adapter(
+    id: &str,
+    key: &KeyCombo,
+    physical_input: Option<&PhysicalInput>,
+    session: &crate::environment::Environment,
+) -> LayerResult {
+    let entry = crate::registry::DESKTOPS
+        .iter()
+        .find(|entry| entry.id == id)
+        .unwrap_or_else(|| panic!("selected compositor '{id}' has no adapter descriptor"));
+    if let Some(inspect) = entry.inspect_with_context {
+        inspect(key, physical_input, session)
+    } else {
+        (entry.inspect)(key, physical_input)
+    }
+}
+
+/// The other candidates that may grab the key besides `selected`. A
+/// candidate is only applicable by session type (xbindkeys on any X11
+/// session) until something shows it is present: its IPC or configuration
+/// answers, or the environment names it. Without that it is no grabber, and
+/// counting it would make every unbound key uncertain.
+fn other_grabbers<'a>(
+    candidates: &'a [crate::environment::CompositorCandidate],
+    selected: &str,
+) -> Vec<&'a str> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.ipc || candidate.score > 0)
+        .map(|candidate| candidate.id)
+        .filter(|other| *other != selected && *other != "compositor")
+        .collect()
+}
+
+/// Only the best-scored candidate answers for the compositor stage, but
+/// every other applicable desktop or hotkey adapter may grab the key as
+/// well, in an order whykey cannot see. Each one is inspected too: a
+/// binding it holds is reported when the selected adapter has none, and a
+/// key nothing was checked for is not a confident pass.
+fn with_other_candidates(
+    selected: LayerResult,
+    others: &[&str],
+    inspect: impl Fn(&str) -> LayerResult,
+) -> LayerResult {
+    let claims = |result: &LayerResult| {
+        matches!(
+            result.outcome,
+            Outcome::Consumed | Outcome::HandledAndPassed | Outcome::HandledUncertain
+        )
+    };
+    let mut result = selected;
+    let mut notes = Vec::new();
+    let mut unchecked = false;
+    for id in others {
+        let other = inspect(id);
+        if other.outcome == Outcome::Pass {
+            notes.push(format!(
+                "also inspected {}: no matching binding",
+                other.layer
+            ));
+        } else if claims(&other) {
+            notes.push(format!(
+                "also {}: {}; whykey cannot tell which grabber sees the key first",
+                other.layer, other.summary
+            ));
+            if !claims(&result) {
+                let skipped = format!("{}: {}", result.layer, result.summary);
+                notes.push(format!("{skipped} (selected first, nothing bound)"));
+                result = other;
+            }
+        } else {
+            notes.push(format!(
+                "also applicable but not fully checked: {} ({})",
+                other.layer, other.summary
+            ));
+            unchecked = true;
+        }
+    }
+    if unchecked && result.outcome == Outcome::Pass {
+        result.outcome = Outcome::UncertainContinues;
+        result.summary = format!(
+            "{}; another key grabber was not fully checked",
+            result.summary
+        );
+    }
+    result.details.extend(notes);
+    result
 }
 
 fn inspect_default_chain_inner_without_remapper(
@@ -851,6 +937,82 @@ mod tests {
 
     fn dummy_result(outcome: Outcome) -> LayerResult {
         LayerResult::new("Test", LayerId::Unknown, outcome, "test", Vec::new())
+    }
+
+    fn adapter_result(layer: &'static str, outcome: Outcome) -> LayerResult {
+        LayerResult::new(layer, LayerId::Compositor, outcome, "summary", Vec::new())
+    }
+
+    #[test]
+    fn a_candidate_applicable_only_by_session_type_is_not_another_grabber() {
+        use crate::environment::CompositorCandidate;
+        let candidate = |id, ipc, score| CompositorCandidate {
+            id,
+            applicable: true,
+            ipc,
+            score,
+        };
+        let candidates = [
+            candidate("i3", true, 5),
+            // xbindkeys: an X11 session, but no readable .xbindkeysrc.
+            candidate("x11", false, 0),
+            candidate("sxhkd", true, 3),
+            candidate("compositor", false, 1),
+        ];
+        assert_eq!(other_grabbers(&candidates, "i3"), ["sxhkd"]);
+    }
+
+    #[test]
+    fn a_pass_stays_a_pass_when_every_other_candidate_is_checked() {
+        let result =
+            with_other_candidates(adapter_result("Sway", Outcome::Pass), &["sxhkd"], |_| {
+                adapter_result("Sxhkd", Outcome::Pass)
+            });
+        assert_eq!(result.outcome, Outcome::Pass);
+        assert!(result.details.iter().any(|detail| detail.contains("Sxhkd")));
+    }
+
+    #[test]
+    fn a_pass_with_an_unchecked_candidate_is_uncertain() {
+        let result =
+            with_other_candidates(adapter_result("Sway", Outcome::Pass), &["gnome"], |_| {
+                adapter_result("GNOME", Outcome::Unavailable)
+            });
+        assert_eq!(result.outcome, Outcome::UncertainContinues);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("not fully checked: GNOME"))
+        );
+    }
+
+    #[test]
+    fn a_binding_in_another_candidate_is_reported_when_the_selected_has_none() {
+        let result =
+            with_other_candidates(adapter_result("Sway", Outcome::Pass), &["sxhkd"], |_| {
+                adapter_result("Sxhkd", Outcome::HandledUncertain)
+            });
+        assert_eq!(result.layer, "Sxhkd");
+        assert_eq!(result.outcome, Outcome::HandledUncertain);
+        assert!(result.details.iter().any(|detail| detail.contains("Sway")));
+    }
+
+    #[test]
+    fn the_selected_binding_stays_and_names_the_other_grabber() {
+        let result = with_other_candidates(
+            adapter_result("Sway", Outcome::Consumed),
+            &["sxhkd"],
+            |_| adapter_result("Sxhkd", Outcome::Consumed),
+        );
+        assert_eq!(result.layer, "Sway");
+        assert_eq!(result.outcome, Outcome::Consumed);
+        assert!(
+            result
+                .details
+                .iter()
+                .any(|detail| detail.contains("which grabber sees the key first"))
+        );
     }
 
     #[test]
