@@ -1563,6 +1563,55 @@ fn doctor_reports_nested_multiplexers() {
     assert_eq!(value["multiplexer"], "tmux + screen");
 }
 
+#[cfg(unix)]
+#[test]
+fn bindings_with_a_key_lists_the_terminal_bindings_the_key_report_finds() {
+    let base = temp_dir("bindings-terminal");
+    let bin = write_mock_bin(
+        &base,
+        "ghostty",
+        "#!/bin/sh\nprintf '%s\\n' 'keybind = ctrl+shift+c=copy_to_clipboard:mixed' 'keybind = ctrl+shift+t=new_tab'\n",
+    );
+    let run = |args: &[&str]| {
+        let output = binary()
+            .args(args)
+            .env("PATH", bin.to_string_lossy().into_owned())
+            .env("TERM_PROGRAM", "ghostty")
+            .env("HOME", &base)
+            .env("XDG_SESSION_TYPE", "wayland")
+            .env_remove("HYPRLAND_INSTANCE_SIGNATURE")
+            .env_remove("SWAYSOCK")
+            .env_remove("I3SOCK")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_TTY")
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+
+    let with_key = run(&["bindings", "--json", "--key", "ctrl+shift+c"]);
+    let records = with_key["bindings"].as_array().unwrap();
+    assert_eq!(records.len(), 1, "{with_key}");
+    assert_eq!(records[0]["source"], "Ghostty");
+    assert!(
+        records[0]["action"]
+            .as_str()
+            .is_some_and(|action| action.starts_with("copy_to_clipboard"))
+    );
+
+    // Without a key the listing stays the desktop's: a terminal's defaults
+    // would bury it.
+    let without_key = run(&["bindings", "--json"]);
+    assert!(
+        without_key["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|record| record["source"] != "Ghostty")
+    );
+    let _ = fs::remove_dir_all(base);
+}
+
 #[test]
 fn remote_ssh_sessions_skip_local_hyprland_inspection() {
     let base = temp_dir("remote-ssh");

@@ -1,7 +1,7 @@
 Ctrl+F
 
-? Nothing claims Ctrl+F before Hyprland, which whykey could not verify.
-  What those layers do with it is unknown.
+? Whykey found nothing that takes Ctrl+F, but could not check everything - press
+  it: `whykey listen --window`
 
 Route
   1  Remapper      v  none detected
@@ -14,9 +14,5 @@ Route
 
 Confidence  incomplete: Hyprland could not be inspected, and no other layer
             reported a binding.
-
-To confirm
-  whykey listen --window
-    press the shortcut in the probe window to see if it arrives
 
 More  whykey ctrl+f -v

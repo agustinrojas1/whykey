@@ -14,6 +14,4 @@ Route
   7  Readline      v  not bound in the current Readline keymap; Readline rings
                       the bell and inserts "A"                        live query
 
-Confidence  live query: no layer reported a binding.
-
 More  whykey ctrl+a -v

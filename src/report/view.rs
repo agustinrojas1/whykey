@@ -329,6 +329,19 @@ fn verdict_for(
     conclusion: &Conclusion,
 ) -> Verdict {
     let mut verdict = static_verdict(key, layers, conclusion);
+    if observation.is_none() {
+        if let Some(step) = all_uncertain_action(key, layers, observation, conclusion) {
+            // Nothing was found and nothing could be fully checked: one
+            // sentence and the one action that settles it. The route table
+            // holds the per-layer detail.
+            let key_text = style::human_key(key);
+            verdict.headline = format!(
+                "Whykey found nothing that takes {key_text}, but could not check everything \u{2014} {}",
+                action_phrase(&step)
+            );
+            verdict.lines.clear();
+        }
+    }
     if observation.is_some() {
         // A capture changes what is known; its own wording leads the report.
         verdict.headline = diagnosis_text(key, layers, observation, conclusion);
@@ -743,23 +756,10 @@ fn confidence_text(
                 names(&unavailable)
             ));
         }
-        let weakest = layers
-            .iter()
-            .filter_map(|layer| evidence_tier(layer, observation))
-            .max_by_key(|tier| match tier {
-                EvidenceTier::Observed => 0,
-                EvidenceTier::LiveQuery => 1,
-                EvidenceTier::ConfigFile => 2,
-                EvidenceTier::Default => 3,
-            })?;
-        let caveat = match weakest {
-            EvidenceTier::Default | EvidenceTier::ConfigFile => " Your configuration may differ.",
-            _ => "",
-        };
-        return Some(format!(
-            "{}: no layer reported a binding.{caveat}",
-            tier_word(weakest)
-        ));
+        // With no layer holding a binding the paragraph would only restate
+        // the tier column ("live query: no layer reported a binding"), so
+        // there is nothing to add.
+        return None;
     };
     let who = short_name(layer.layer);
     let unverified_default = layer
@@ -822,6 +822,112 @@ struct Step {
     then: Option<(String, String)>,
 }
 
+/// The action an all-uncertain report puts in its headline: its first next
+/// step, or a capture when nothing more specific applies. `None` when the
+/// route is not all-uncertain.
+fn all_uncertain_action(
+    key: &KeyCombo,
+    layers: &[LayerResult],
+    observation: Option<&ObservedKey>,
+    conclusion: &Conclusion,
+) -> Option<Step> {
+    // A layer that holds a candidate binding makes "found nothing" untrue.
+    if !matches!(conclusion, Conclusion::NoBindingReported { .. })
+        || layers.iter().any(|layer| layer.binding.is_some())
+    {
+        return None;
+    }
+    Some(
+        next_steps_for(key, layers, observation, conclusion)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Step {
+                command: "whykey listen".into(),
+                reason: "press the key and see whether it arrives".into(),
+                then: None,
+            }),
+    )
+}
+
+/// The step as the tail of a sentence.
+fn action_phrase(step: &Step) -> String {
+    if step.command.starts_with("whykey listen") {
+        format!("press it: `{}`", step.command)
+    } else if step.command == "whykey doctor" {
+        format!("run `{}`", step.command)
+    } else {
+        format!("{}: `{}`", step.reason, step.command)
+    }
+}
+
+/// The layers a verdict's open question is about: the ones the next step has
+/// to settle. A step for any other layer would not answer it (loading the
+/// shell's live bindings says nothing about an input method's hotkey).
+fn focus_layers<'a>(layers: &'a [LayerResult], conclusion: &Conclusion) -> Vec<&'a LayerResult> {
+    let named = |names: &[&str]| -> Vec<&'a LayerResult> {
+        names
+            .iter()
+            .filter_map(|name| find_layer(layers, name))
+            .collect()
+    };
+    match conclusion {
+        Conclusion::ConfiguredConsumer { layer, .. }
+        | Conclusion::DeadKeyComposition { layer, .. }
+        | Conclusion::ConfiguredRedirect { layer, .. }
+        | Conclusion::SelectedApplication { layer, .. }
+        | Conclusion::UnverifiedSession { layer }
+        | Conclusion::UnverifiedDefault { layer, .. }
+        | Conclusion::PossibleUnresolvedMatch { layer, .. }
+        | Conclusion::CouldNotInspect { layer }
+        | Conclusion::ModifierAmbiguity { layer }
+        | Conclusion::IndeterminateForwarding { layer }
+        | Conclusion::EndpointUnbound { layer, .. } => named(&[layer]),
+        Conclusion::HandledAndForwarded {
+            layers: handled,
+            uncertain,
+            forwarding_unknown,
+            ..
+        } => {
+            let mut focus = named(handled);
+            // The question is the handler's own when it cannot tell whether
+            // it forwards; otherwise it lies in the layers below.
+            if *uncertain && !*forwarding_unknown {
+                let open: Vec<&LayerResult> = layers
+                    .iter()
+                    .filter(|layer| {
+                        matches!(
+                            layer.outcome,
+                            Outcome::Unknown
+                                | Outcome::UncertainContinues
+                                | Outcome::HandledUncertain
+                        ) && !focus_contains(&focus, layer)
+                    })
+                    .collect();
+                focus.extend(open);
+            }
+            focus
+        }
+        Conclusion::NoBindingReported { unknown } => named(unknown),
+        Conclusion::Remapped {
+            then: Some(then), ..
+        } => focus_layers(layers, then),
+        _ => Vec::new(),
+    }
+}
+
+fn focus_contains(focus: &[&LayerResult], layer: &LayerResult) -> bool {
+    focus.iter().any(|found| std::ptr::eq(*found, layer))
+}
+
+/// Why pressing the key answers the question about `layer`.
+fn listen_reason(layer: &LayerResult) -> &'static str {
+    match layer.id {
+        LayerId::Ime => "press it to see whether the input method takes it",
+        LayerId::Terminal => "press it to see whether the terminal takes it",
+        _ => "press the key and see whether it arrives",
+    }
+}
+
 fn next_steps_for(
     key: &KeyCombo,
     layers: &[LayerResult],
@@ -850,7 +956,28 @@ fn next_steps_for(
             then: None,
         });
     }
-    if let Some(command) = layers
+    let focus = focus_layers(layers, conclusion);
+    // An input method, the terminal or the TTY answers for itself only when
+    // the key is pressed: a capture shows whether it arrives.
+    let open_elsewhere = focus.iter().copied().find(|layer| {
+        matches!(layer.id, LayerId::Ime | LayerId::Terminal | LayerId::Tty)
+            && matches!(
+                layer.outcome,
+                Outcome::Unknown
+                    | Outcome::UncertainContinues
+                    | Outcome::HandledUncertain
+                    | Outcome::UnadaptedTarget
+            )
+    });
+    if let (false, Some(layer)) = (observe_desktop, open_elsewhere) {
+        steps.push(Step {
+            command: "whykey listen".into(),
+            reason: listen_reason(layer).into(),
+            then: None,
+        });
+    }
+    // The live shell bindings settle a question about the shell only.
+    if let Some(command) = focus
         .iter()
         .filter(|layer| {
             layer.id == LayerId::Shell
@@ -871,6 +998,7 @@ fn next_steps_for(
         });
     }
     if !observe_desktop
+        && open_elsewhere.is_none()
         && matches!(
             conclusion,
             Conclusion::ConfiguredConsumer {
@@ -1037,7 +1165,16 @@ pub(super) fn render_report(
         output.push('\n');
     }
 
-    let steps = next_steps_for(key, layers, observation, &evaluated.conclusion);
+    let mut steps = next_steps_for(key, layers, observation, &evaluated.conclusion);
+    let mut headline_action = false;
+    if observation.is_none() {
+        // An all-uncertain headline already carries its action.
+        if let Some(action) = all_uncertain_action(key, layers, observation, &evaluated.conclusion)
+        {
+            steps.retain(|step| step.command != action.command);
+            headline_action = action.command.starts_with("whykey listen");
+        }
+    }
     if !steps.is_empty() {
         output.push_str(&options.accent(if unsure { "To confirm" } else { "Next" }));
         output.push('\n');
@@ -1084,6 +1221,7 @@ pub(super) fn render_report(
         let more = if observation.is_some() {
             "whykey listen -v".to_owned()
         } else if unsure
+            && !headline_action
             && !steps
                 .iter()
                 .any(|step| step.command.starts_with("whykey listen"))
