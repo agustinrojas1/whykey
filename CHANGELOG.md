@@ -1,14 +1,16 @@
 # Changelog
 
-## [2.5.0] - 2026-11-13
+## [Unreleased]
 
-whykey no longer reports a key as passing through a layer it did not fully
-check. A user's Ctrl+Alt+P was taken by Fcitx5's `TogglePreedit` hotkey while
-whykey blamed bash; an audit then found the same mistake in the input method,
-terminal, GNOME, X11, tmux, TTY and compositor layers. Each now reads the
-missing source or says it is uncertain. New: Fcitx5 addon and IBus hotkeys,
-terminal built-in shortcuts, GNOME Shell extension shortcuts, swhkd, tmux copy
-mode, and one route order with the input method where the key meets it.
+## [2.6.0] - 2026-11-14
+
+Acts on an independent review of 2.5.0. A layer can no longer report a key as
+passing through without naming the evidence and the sources it checked, so an
+unmodelled source makes the answer uncertain instead of a confident pass.
+`whykey listen` says where a key died by watching a second capture point, and
+an uncertain `whykey KEY` offers to capture the key. The report points at the
+uncertain layer, the embedded default tables are checked against the real
+programs, and the support table and README say only what the lab verified.
 
 ### Added
 
@@ -29,22 +31,6 @@ mode, and one route order with the input method where the key meets it.
   and stdin and stdout are terminals ("Press Ctrl+Alt+P now to see where it
   stops (Esc to skip)"). `--no-prompt`, `WHYKEY_NO_PROMPT=1`, `CI`, `--json`,
   `--pid`, `--focused` and `--instance` never prompt.
-
-- swhkd is now detected while it runs, and its `swhkdrc` (with `include`,
-  `ignore`, `mode`/`endmode`, `~` and `@`) is read for the queried key. swhkd
-  grabs the keyboards' evdev devices, so a binding takes the key in the
-  remapper row, before the compositor. A `~`, mode, `ignore`d or
-  `swallow`-mode case stays uncertain. It is listed as unverified: no lab
-  scenario runs swhkd yet.
-- A logo (`docs/assets/logo/`), shown at the top of the README. On
-  crates.io the README's diagrams and logo follow the viewer's light or dark
-  theme, and the two mermaid diagrams are drawn as SVGs (crates.io drew them
-  unreadable in dark mode).
-- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
-  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
-  `foot-default-font-increase`, `alacritty-default-font-decrease` and
-  `konsole-default-fullscreen`. The `terminals` lab environment gains a
-  `term_sh` action that runs a command on the terminal's tty.
 
 ### Changed
 
@@ -104,6 +90,37 @@ mode, and one route order with the input method where the key meets it.
   and an extension that reports no match without an evidence tier. The TTY
   driver row now looks at every byte of a key sequence (Ctrl+Alt+C is ESC and
   the interrupt byte).
+
+## [2.5.0] - 2026-11-13
+
+whykey no longer reports a key as passing through a layer it did not fully
+check. A user's Ctrl+Alt+P was taken by Fcitx5's `TogglePreedit` hotkey while
+whykey blamed bash; an audit then found the same mistake in the input method,
+terminal, GNOME, X11, tmux, TTY and compositor layers. Each now reads the
+missing source or says it is uncertain. New: Fcitx5 addon and IBus hotkeys,
+terminal built-in shortcuts, GNOME Shell extension shortcuts, swhkd, tmux copy
+mode, and one route order with the input method where the key meets it.
+
+### Added
+
+- swhkd is now detected while it runs, and its `swhkdrc` (with `include`,
+  `ignore`, `mode`/`endmode`, `~` and `@`) is read for the queried key. swhkd
+  grabs the keyboards' evdev devices, so a binding takes the key in the
+  remapper row, before the compositor. A `~`, mode, `ignore`d or
+  `swallow`-mode case stays uncertain. It is listed as unverified: no lab
+  scenario runs swhkd yet.
+- A logo (`docs/assets/logo/`), shown at the top of the README. On
+  crates.io the README's diagrams and logo follow the viewer's light or dark
+  theme, and the two mermaid diagrams are drawn as SVGs (crates.io drew them
+  unreadable in dark mode).
+- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
+  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
+  `foot-default-font-increase`, `alacritty-default-font-decrease` and
+  `konsole-default-fullscreen`. The `terminals` lab environment gains a
+  `term_sh` action that runs a command on the terminal's tty.
+
+### Fixed
+
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
   reported as held by Ghostty (handled, uncertain) instead of "no binding,
   forwarded to the terminal". Ghostty consumes it until the next key arrives.

@@ -1,3 +1,13 @@
+whykey (2.6.0) unstable; urgency=medium
+
+  * A pass names its evidence and the sources checked; an unmodelled source
+    makes the answer uncertain.
+  * whykey listen says where a key died; an uncertain query offers a capture.
+  * Report points at the uncertain layer; default tables checked against the
+    real programs; support table generated from the lab results.
+
+ -- Agustín Rojas <agustinrojas1@users.noreply.github.com>  Sat, 14 Nov 2026 18:00:00 -0300
+
 whykey (2.5.0) unstable; urgency=medium
 
   * A layer no longer reports a key as passing through when it did not check
