@@ -252,7 +252,7 @@ Input sources and what they can prove:
   that is not a window, so the compositor never focuses "this terminal" and a
   key whykey sees but its pty never receives is not blamed on a layer: a
   `note:` line on stderr says so. The "taken between Hyprland and Ghostty"
-  verdict (D-208) needs a focused terminal window and a real input method; it
+  verdict (D-211) needs a focused terminal window and a real input method; it
   was checked by hand on a Hyprland + Ghostty + Fcitx5 desktop, not in the lab.
 - `xdotool` sends XTEST input on X11. `lab/xgrab.py` confirms over the raw X11
   socket that a daemon holds its grab before input is sent. Two traps:
@@ -416,6 +416,27 @@ docker exec -it whykey-lab-<pid>-sway-plain-bind bash
 Logs of the started programs are in `/tmp/lab-logs` inside the container.
 The kept container's name is printed at the end of the run. Remove it with
 `docker rm -f` when you are done.
+
+## Default-binding fixtures
+
+whykey embeds tables of upstream default bindings (bash Readline, kitty, foot,
+Ghostty's performable list, Fcitx5's hotkeys). `lab/defaults/<program>-<version>.txt`
+holds what the real binary reports for the same data, and a unit test compares
+each table with its fixture (`cargo test`, no Docker). Refresh after a lab image
+or an upstream update:
+
+```sh
+python3 tools/dump_defaults.py list
+python3 tools/dump_defaults.py dump              # every program, in its lab image
+python3 tools/dump_defaults.py dump --check      # exit 1 on drift, write nothing
+python3 tools/dump_defaults.py dump --source host foot
+```
+
+The header of a fixture records the program, the version the binary reported
+and the command. `--source host` runs the command on the host, for a program
+whose lab image carries another version than the table was written for (foot
+1.28.0 is on the host, the image has 1.27.0). Alacritty and Konsole cannot list
+their defaults, so their tables are not checked; their doc comments say so.
 
 ## Mutation check
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::key::KeyCombo;
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, format_bytes};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome, format_bytes};
 
 /// Inspect the GNU Screen layer without sending commands to the running
 /// session. Screen has no portable IPC endpoint that lists its effective
@@ -42,6 +42,13 @@ fn resolve_with_config(
 ) -> LayerResult {
     let mut details = Vec::new();
     details.push(format!("command prefix: {}", display_bytes(prefix)));
+    let screen_checked = match &config_source {
+        Some(source) => Checked::new(
+            EvidenceTier::ConfigFile,
+            [format!("screenrc {}", source.display())],
+        ),
+        None => Checked::new(EvidenceTier::Default, ["GNU Screen built-in defaults"]),
+    };
     if let Some(source) = config_source {
         details.push(format!("config: {}", source.display()));
     } else {
@@ -148,12 +155,12 @@ fn resolve_with_config(
         );
     }
 
-    LayerResult::new(
+    LayerResult::pass(
         "GNU Screen",
         LayerId::Multiplexer,
-        Outcome::Pass,
         "no Screen binding; forwarded to the window's PTY",
         details,
+        screen_checked,
     )
 }
 

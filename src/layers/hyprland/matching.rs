@@ -3,6 +3,7 @@ use super::config::{
     lua_ignore_mods_for_binding,
 };
 use super::*;
+use crate::layers::Checked;
 
 pub(crate) fn analyze(
     key: &KeyCombo,
@@ -132,15 +133,15 @@ pub(crate) fn inspect_json_with_keycode(
             )
             .with_verbose_details(inactive_submap_details(&inactive_bindings)));
         }
-        return Ok(LayerResult::new(
+        return Ok(LayerResult::pass(
             "Hyprland",
             LayerId::Compositor,
-            Outcome::Pass,
             "no active binding found",
             details_with_physical_input(
                 vec![format!("active submap: {active_submap}")],
                 physical_input,
             ),
+            hyprland_checked(),
         )
         .with_verbose_details(inactive_submap_details(&inactive_bindings)));
     }
@@ -459,6 +460,15 @@ pub(crate) fn inspect_json_with_keycode(
 /// modifier itself: `bindr = SUPER, Super_L, exec, ...` runs on release, a
 /// plain `bind` on the modifier's own press. The modifier bits of such a
 /// bind are empty or the key's own bit.
+/// What a Hyprland pass rests on: the effective bindings of the running
+/// compositor, all submaps.
+fn hyprland_checked() -> Checked {
+    Checked::new(
+        EvidenceTier::LiveQuery,
+        ["hyprctl binds (the running compositor's effective bindings)"],
+    )
+}
+
 fn inspect_alone(
     key: &KeyCombo,
     bindings: &[Binding],
@@ -502,7 +512,14 @@ fn inspect_alone(
         } else {
             (Outcome::Pass, format!("no binding on {shown}"))
         };
-        return LayerResult::new("Hyprland", LayerId::Compositor, outcome, summary, details);
+        return LayerResult::decided(
+            "Hyprland",
+            LayerId::Compositor,
+            outcome,
+            hyprland_checked(),
+            summary,
+            details,
+        );
     }
     for matched in &matches {
         details.push(format!(

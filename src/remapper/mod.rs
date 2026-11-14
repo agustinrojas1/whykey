@@ -23,8 +23,8 @@ use serde::Serialize;
 
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, PhysicalInput,
-    SourceLocation,
+    BindingEvidence, BindingScope, Checked, EvidenceTier, LayerId, LayerResult, Outcome,
+    PhysicalInput, SourceLocation,
 };
 use keys::{Press, QueryPresses};
 
@@ -378,6 +378,33 @@ fn inspect_detections(
     resolve_detections(key, physical_input, detections, layout_us).with_optional_tier(tier)
 }
 
+/// What a "no rule changes the key" pass read: each detected remapper's
+/// configuration files, or its process when it has none to read (the rules
+/// of a running remapper without a readable configuration are never an
+/// answer; `analyze` reports that as uncertain before this point).
+fn rules_checked(detections: &[Detection]) -> Checked {
+    let configured = detections
+        .iter()
+        .any(|detection| !detection.configurations.is_empty());
+    let tier = if configured {
+        EvidenceTier::ConfigFile
+    } else {
+        EvidenceTier::LiveQuery
+    };
+    let sources = detections.iter().flat_map(|detection| {
+        if detection.configurations.is_empty() {
+            vec![format!("{} (process)", detection.name)]
+        } else {
+            detection
+                .configurations
+                .iter()
+                .map(|path| format!("{}: {path}", detection.name))
+                .collect()
+        }
+    });
+    Checked::new(tier, sources)
+}
+
 fn resolve_detections(
     key: &KeyCombo,
     physical_input: Option<&PhysicalInput>,
@@ -390,6 +417,12 @@ fn resolve_detections(
             LayerId::Remapper,
             "no supported pre-compositor remapper detected",
             Vec::new(),
+            Checked::new(
+                EvidenceTier::LiveQuery,
+                [
+                    "running processes and default configuration paths of keyd, kanata, kmonad, input-remapper, xremap and swhkd",
+                ],
+            ),
         );
     }
     let mut details = detection_details(detections);
@@ -436,6 +469,7 @@ fn resolve_detections(
             LayerId::Remapper,
             format!("no remapper rule changes {shown}"),
             details,
+            rules_checked(detections),
         ),
         [(detection, Verdict::Definite(finding))] => {
             definite(detection, finding, &shown, layout_us, details)
@@ -1805,7 +1839,7 @@ mod tests {
         assert_eq!(unbound.tier, Some(EvidenceTier::ConfigFile));
         assert_eq!(
             inspect_detections(&query("f5"), None, &[], false).tier,
-            None
+            Some(EvidenceTier::LiveQuery)
         );
     }
 

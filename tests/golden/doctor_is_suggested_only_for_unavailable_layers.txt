@@ -5,13 +5,16 @@ Ctrl+T
 
 Route
   1  Remapper      v  none detected
-  2  Hyprland      v  no binding
+  2  Hyprland      v  no binding                                      live query
   3  Kitty         v  no Kitty binding; forwarded to the terminal input
+                      live query
   4  Input method  v  none detected
   5  TTY driver    ?  terminal byte encoding is unknown; TTY signal checks
                       unevaluated
   6  Multiplexer   -  not inspected
   7  Shell input   ?  terminal byte encoding is unknown; shell line editing
                       unevaluated
+
+Confidence  live query: no layer reported a binding.
 
 More  whykey ctrl+t -v  -  whykey listen

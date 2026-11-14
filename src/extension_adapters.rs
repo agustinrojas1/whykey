@@ -257,8 +257,11 @@ pub fn inspect_with_report(
         LayerId::Compositor,
         format!("{} has no binding for {key}", adapter.display),
         vec![format!("manifest: {}", adapter.manifest_path.display())],
+        crate::layers::Checked::new(
+            crate::layers::EvidenceTier::ConfigFile,
+            [format!("manifest {}", adapter.manifest_path.display())],
+        ),
     )
-    .with_tier(crate::layers::EvidenceTier::ConfigFile)
 }
 
 pub fn focused_pid(adapter: &ExtensionAdapter) -> Result<u32, String> {

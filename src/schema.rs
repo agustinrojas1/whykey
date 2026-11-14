@@ -78,6 +78,9 @@ pub fn path(layers: &[LayerResult], observation: Option<&ObservedKey>) -> Vec<Va
                     "text": detail,
                 })).collect::<Vec<_>>(),
             });
+            if let Some(checked) = layer.pass_evidence() {
+                entry["checked"] = json!(checked);
+            }
             if let Some(binding) = &layer.binding {
                 entry["binding"] = json!(binding);
             }
@@ -92,6 +95,30 @@ pub fn path(layers: &[LayerResult], observation: Option<&ObservedKey>) -> Vec<Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pass_carries_what_it_checked_in_v2_and_other_outcomes_do_not() {
+        let layers = [
+            LayerResult::pass(
+                "Hyprland",
+                crate::layers::LayerId::Compositor,
+                "no binding",
+                vec![],
+                crate::layers::Checked::new(
+                    crate::layers::EvidenceTier::LiveQuery,
+                    ["hyprctl binds"],
+                ),
+            ),
+            LayerResult::consumed("Kitty", crate::layers::LayerId::Terminal, "bound", vec![]),
+        ];
+        let entries = path(&layers, None);
+        assert_eq!(entries[0]["checked"]["tier"], "live_query");
+        assert_eq!(entries[0]["checked"]["sources"][0], "hyprctl binds");
+        assert!(entries[1].get("checked").is_none());
+        // Schema v1 serializes the layer directly and stays as it was.
+        let v1 = serde_json::to_value(&layers[0]).unwrap();
+        assert!(v1.get("checked").is_none());
+    }
 
     #[test]
     fn defaults_to_legacy_schema() {

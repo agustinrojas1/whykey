@@ -10,7 +10,7 @@ Route
   4  Input method  v  none detected
   5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected
-  7  Readline      v  no binding
+  7  Readline      v  no binding                                      live query
 
 Confidence  incomplete: Hyprland could not be inspected, and no other layer
             reported a binding.

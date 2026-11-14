@@ -12,6 +12,8 @@ pub mod capabilities;
 pub mod capture;
 pub mod command;
 pub mod conflicts;
+#[cfg(test)]
+mod defaults_fixtures;
 pub mod diff;
 pub mod doctor;
 pub mod environment;

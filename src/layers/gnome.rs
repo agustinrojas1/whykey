@@ -11,8 +11,8 @@ use crate::command;
 use crate::key::{KeyCombo, modifier_mask};
 use crate::layers::gsettings::quoted_values;
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome,
-    SourceLocation,
+    BindingEvidence, BindingRecord, BindingScope, Checked, EvidenceTier, LayerId, LayerResult,
+    Outcome, SourceLocation,
 };
 
 const LAYER: &str = "GNOME";
@@ -207,8 +207,11 @@ fn inspect_alone(key: &KeyCombo, overlay: Result<Option<String>, String>) -> Lay
             LayerId::Compositor,
             format!("no GNOME lone-key shortcut uses {shown}"),
             details,
-        )
-        .with_tier(EvidenceTier::LiveQuery);
+            Checked::new(
+                EvidenceTier::LiveQuery,
+                ["gsettings org.gnome.mutter overlay-key"],
+            ),
+        );
     }
     details.push(format!(
         "binding: org.gnome.mutter overlay-key = '{overlay}' (mutter opens the Activities overview when it is pressed and released alone)"
@@ -265,6 +268,23 @@ struct Loaded {
     read_extensions: Vec<String>,
 }
 
+/// What a GNOME pass rests on: every keybinding schema mutter, GNOME Shell
+/// and gnome-settings-daemon read, and the settings of each enabled
+/// extension that registers keys.
+fn gnome_checked(read_extensions: &[String]) -> Checked {
+    Checked::new(
+        EvidenceTier::LiveQuery,
+        SCHEMAS
+            .iter()
+            .map(|source| format!("gsettings {}", source.schema))
+            .chain(
+                read_extensions
+                    .iter()
+                    .map(|extension| format!("GNOME Shell extension {extension}")),
+            ),
+    )
+}
+
 fn inspect(
     loaded: Result<Loaded, String>,
     key: &KeyCombo,
@@ -317,8 +337,8 @@ fn inspect(
             LayerId::Compositor,
             "no GNOME global shortcut uses this key",
             details,
-        )
-        .with_tier(EvidenceTier::LiveQuery);
+            gnome_checked(&loaded.read_extensions),
+        );
     }
     // A daemon-owned binding grabs the key only while its daemon owns its bus
     // name; a configured shortcut whose daemon is not running does nothing.
@@ -390,8 +410,8 @@ fn inspect(
             LayerId::Compositor,
             "GNOME shortcut is configured but its daemon is not running",
             details,
-        )
-        .with_tier(EvidenceTier::LiveQuery);
+            gnome_checked(&loaded.read_extensions),
+        );
     };
     details.push(
         "not active while the focused window holds a keyboard-shortcuts inhibitor that the user allowed"

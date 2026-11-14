@@ -393,6 +393,10 @@ const RAW_INPUT_ALLOWED: &[(&str, &str)] = &[
         "live probes: the focus and key probes read the session",
     ),
     (
+        "src/defaults_fixtures.rs",
+        "test-only: reads lab/defaults fixtures, never the session",
+    ),
+    (
         "src/hyprland_capture.rs",
         "live capture: Hyprland socket2, used by listen",
     ),

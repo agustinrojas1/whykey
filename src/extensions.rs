@@ -244,10 +244,36 @@ fn to_layer(program: &str, result: ExtensionResult) -> LayerResult {
     let tier = result.tier.as_deref().and_then(parse_tier);
     let mut details = vec![format!("extension: {program}")];
     details.extend(result.details);
+    let outcome = Outcome::from_parts(&status, &propagation);
+    if outcome == Outcome::Pass {
+        // "Found nothing" is evidence only with a tier that says what the
+        // extension looked at; without one the claim is not reported as a pass.
+        return match tier {
+            Some(tier) => LayerResult::pass(
+                "External extension",
+                crate::layers::LayerId::Diagnostic,
+                result.summary,
+                details,
+                crate::layers::Checked::new(tier, [format!("extension {program}")]),
+            ),
+            None => {
+                details.push(
+                    "the extension reported no match but no evidence tier, so this is not reported as a pass"
+                        .into(),
+                );
+                LayerResult::uncertain_continues(
+                    "External extension",
+                    crate::layers::LayerId::Diagnostic,
+                    result.summary,
+                    details,
+                )
+            }
+        };
+    }
     LayerResult::new(
         "External extension",
         crate::layers::LayerId::Diagnostic,
-        Outcome::from_parts(&status, &propagation),
+        outcome,
         result.summary,
         details,
     )

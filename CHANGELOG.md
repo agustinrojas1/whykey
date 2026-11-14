@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [2.5.0] - 2026-11-13
+
+whykey no longer reports a key as passing through a layer it did not fully
+check. A user's Ctrl+Alt+P was taken by Fcitx5's `TogglePreedit` hotkey while
+whykey blamed bash; an audit then found the same mistake in the input method,
+terminal, GNOME, X11, tmux, TTY and compositor layers. Each now reads the
+missing source or says it is uncertain. New: Fcitx5 addon and IBus hotkeys,
+terminal built-in shortcuts, GNOME Shell extension shortcuts, swhkd, tmux copy
+mode, and one route order with the input method where the key meets it.
 
 ### Added
 
@@ -28,9 +36,62 @@
   remapper row, before the compositor. A `~`, mode, `ignore`d or
   `swallow`-mode case stays uncertain. It is listed as unverified: no lab
   scenario runs swhkd yet.
+- A logo (`docs/assets/logo/`), shown at the top of the README. On
+  crates.io the README's diagrams and logo follow the viewer's light or dark
+  theme, and the two mermaid diagrams are drawn as SVGs (crates.io drew them
+  unreadable in dark mode).
+- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
+  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
+  `foot-default-font-increase`, `alacritty-default-font-decrease` and
+  `konsole-default-fullscreen`. The `terminals` lab environment gains a
+  `term_sh` action that runs a command on the terminal's tty.
+
+### Changed
+
+- The "Supported environments" table in the README is generated from
+  `support-matrix.json` (`programs`), so it cannot claim more than the lab has
+  shown. ✅ means a lab scenario for that program matched exactly and nothing
+  weakens it; 🟡 that some scenarios pass only as honest uncertainty (PASS~,
+  now recorded per entry as `lab_tolerated`), only the X11 grab probe or a hand
+  check backs it, or a documented limit applies (a `partial` note citing
+  L-011/L-017); ⚪ that nothing does. Vim, Helix, Kakoune and Micro now have
+  their own matrix entry (`editor.terminal-apps`) and Neovim and Emacs are
+  credited through `cli.extensions`, so their lab scenarios count. Programs
+  moved from ✅ to 🟡: Cinnamon, Xfce, MATE, Openbox, AwesomeWM, Qtile,
+  XMonad, xbindkeys (grab-probe verdicts), GNOME, KDE Plasma, Wayfire, Fcitx5
+  and IBus (limits in L-011), Ghostty, Zellij, Niri, kmonad, input-remapper.
+  SUPPORT_MATRIX.md lists the same programs with their scenario counts.
+- README: the page now goes from the problem and the demo to one install line
+  (mise) and Quick start; the other install methods (Homebrew, distribution
+  packages, Cargo, release binaries) moved to "Other ways to install" near the
+  end. The claim about uncertainty no longer promises that whykey never guesses:
+  it says where whykey reports "uncertain" or "unknown", and that it can still
+  be wrong, with pointers to the support table and the defect register.
+- `PLAN_VISUAL.md` moved to `docs/internal/`, which the published crate
+  excludes.
 
 ### Fixed
 
+- The default-binding tables whykey embeds are checked against the programs
+  themselves. `tools/dump_defaults.py` dumps bash Readline (`bind -p`), kitty
+  (`definition.iter_all_maps()`), foot (its packaged `foot.ini`), Ghostty
+  (`+list-keybinds --default`) and Fcitx5 (its D-Bus configuration) to
+  `lab/defaults/<program>-<version>.txt`, and unit tests compare each embedded
+  table with its fixture (no Docker needed to run them). That found Fcitx5's
+  `ActivateKeys`/`DeactivateKeys` defaults (Hangul_Hanja/Hangul_Romaja) missing
+  and five rows in Ghostty's performable list that are not defaults. Alacritty
+  and Konsole cannot list their defaults, and their table docs say so.
+- A "no binding" answer can no longer be reported without saying what was
+  checked. Every pass records its evidence tier and the sources it read
+  (`--verbose` shows them; schema-v2 and NDJSON path entries of passes carry
+  an additive `checked` object). Places that returned a pass without having
+  looked at everything now report uncertain-continues with the gap named:
+  Ghostty from a configuration file without `ghostty +list-keybinds`, labwc
+  with its built-in keybinds on, MATE with an unreadable schema, a remote
+  session's compositor row, an input method whose hotkeys could not be read,
+  and an extension that reports no match without an evidence tier. The TTY
+  driver row now looks at every byte of a key sequence (Ctrl+Alt+C is ESC and
+  the interrupt byte).
 - The first key of a Ghostty key sequence (`keybind = ctrl+a>n=new_window`) is
   reported as held by Ghostty (handled, uncertain) instead of "no binding,
   forwarded to the terminal". Ghostty consumes it until the next key arrives.
@@ -70,7 +131,6 @@
   applicable adapter too, reports a binding the selected one lacks, names the
   others in the details, and downgrades a no-match to uncertain when another
   adapter could not be checked.
-
 - A Konsole keytab entry that names an application action
   (`key F11 +Ctrl : toggleFullScreen`) is no longer reported as "Konsole
   consumes the key": Konsole's keytab only defines `Erase` and the `Scroll*`
@@ -151,14 +211,6 @@
 - Without a kitty, foot or Alacritty configuration file the answer now comes
   from the built-in shortcuts (default tier) instead of "no config file was
   found" with no answer.
-
-### Added
-
-- Lab scenarios with a stock configuration: `kitty-default-new-os-window`,
-  `kitty-clear-all-shortcuts`, `kitty-mod-include-map`,
-  `foot-default-font-increase`, `alacritty-default-font-decrease` and
-  `konsole-default-fullscreen`. The `terminals` lab environment gains a
-  `term_sh` action that runs a command on the terminal's tty.
 
 ## [2.4.1] - 2026-10-16
 

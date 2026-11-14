@@ -5,7 +5,7 @@ Ctrl+Shift+C
 
 Route
   1  Remapper          v  none detected
-  2  Hyprland          v  no binding
+  2  Hyprland          v  no binding                                  live query
   3  Unknown terminal  ?  terminal key bindings are unknown; the key most likely
                           continues
   4  Input method      v  none detected
@@ -13,5 +13,7 @@ Route
   6  Multiplexer       -  not inspected
   7  Shell input       ?  terminal byte encoding is unknown; shell line editing
                           unevaluated
+
+Confidence  live query: no layer reported a binding.
 
 More  whykey ctrl+shift+c -v  -  whykey listen

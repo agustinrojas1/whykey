@@ -36,7 +36,7 @@ use std::thread;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 use crate::probe::x11::{Connection, GrabCheck, GrabStatus};
 
 const LAYER: &str = "X11 key grab";
@@ -400,9 +400,21 @@ fn x11_result(mut adapter: LayerResult, observation: Observation) -> LayerResult
             adapter
                 .verbose_details
                 .extend(std::mem::take(&mut adapter.details));
-            LayerResult::pass(adapter.layer, LayerId::Compositor, FREE, details)
-                .with_verbose_details(adapter.verbose_details)
-                .with_tier(EvidenceTier::LiveQuery)
+            let mut sources = vec![
+                "X server passive key grabs (core GrabKey) on the root window and the focused window's path"
+                    .to_owned(),
+            ];
+            if checks.iter().all(|check| check.xi2_conflicts.is_some()) {
+                sources.push("X server XInput2 passive grabs, same windows".to_owned());
+            }
+            LayerResult::pass(
+                adapter.layer,
+                LayerId::Compositor,
+                FREE,
+                details,
+                Checked::new(EvidenceTier::LiveQuery, sources),
+            )
+            .with_verbose_details(adapter.verbose_details)
         }
     }
 }
@@ -616,7 +628,13 @@ mod tests {
     #[test]
     fn free_key_with_no_claim_still_passes_and_states_the_coverage() {
         let result = x11_result(
-            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            LayerResult::pass(
+                "i3",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
         );
         assert_eq!(result.outcome, Outcome::Pass);
@@ -628,7 +646,13 @@ mod tests {
     #[test]
     fn unclaimed_grab_is_not_attributed_to_the_adapter() {
         let result = x11_result(
-            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            LayerResult::pass(
+                "i3",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             Observation::Checked(vec![check(Vec::new(), Some(vec![64]))]),
         );
         assert_eq!(result.layer, LAYER);
@@ -660,7 +684,15 @@ mod tests {
 
     #[test]
     fn xwayland_grab_is_only_a_conditional_note() {
-        let sway = || LayerResult::pass("Sway", LayerId::Compositor, "no binding", Vec::new());
+        let sway = || {
+            LayerResult::pass(
+                "Sway",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            )
+        };
         let result = xwayland_result(sway(), Observation::Checked(vec![check(vec![64], None)]));
         assert_eq!(result.layer, "Sway");
         assert_eq!(result.outcome, Outcome::Pass);
@@ -743,12 +775,24 @@ mod tests {
             Some(EvidenceTier::ConfigFile)
         );
         let free = x11_result(
-            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            LayerResult::pass(
+                "i3",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
         );
         assert_eq!(free.tier, Some(EvidenceTier::LiveQuery));
         let unclaimed = x11_result(
-            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            LayerResult::pass(
+                "i3",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             Observation::Checked(vec![check(vec![64], None)]),
         );
         assert_eq!(unclaimed.tier, Some(EvidenceTier::LiveQuery));
@@ -761,7 +805,13 @@ mod tests {
     #[test]
     fn free_verdict_names_the_root_window_scope() {
         let result = x11_result(
-            LayerResult::pass("i3", LayerId::Compositor, "no binding", Vec::new()),
+            LayerResult::pass(
+                "i3",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             Observation::Checked(vec![check(Vec::new(), Some(Vec::new()))]),
         );
         assert!(result.summary.contains("root window"));
@@ -815,7 +865,13 @@ mod tests {
         // The same grab with nothing claiming the key is reported under the
         // neutral layer, never attributed to Cinnamon.
         let unclaimed = x11_result(
-            LayerResult::pass("Cinnamon", LayerId::Compositor, "no binding", Vec::new()),
+            LayerResult::pass(
+                "Cinnamon",
+                LayerId::Compositor,
+                "no binding",
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            ),
             Observation::Checked(path),
         );
         assert_eq!(unclaimed.layer, LAYER);
