@@ -43,6 +43,14 @@ mode, and one route order with the input method where the key meets it.
   XMonad, xbindkeys (grab-probe verdicts), GNOME, KDE Plasma, Wayfire, Fcitx5
   and IBus (limits in L-011), Ghostty, Zellij, Niri, kmonad, input-remapper.
   SUPPORT_MATRIX.md lists the same programs with their scenario counts.
+- README: the page now goes from the problem and the demo to one install line
+  (mise) and Quick start; the other install methods (Homebrew, distribution
+  packages, Cargo, release binaries) moved to "Other ways to install" near the
+  end. The claim about uncertainty no longer promises that whykey never guesses:
+  it says where whykey reports "uncertain" or "unknown", and that it can still
+  be wrong, with pointers to the support table and the defect register.
+- `PLAN_VISUAL.md` moved to `docs/internal/`, which the published crate
+  excludes.
 
 ### Fixed
 
