@@ -1,7 +1,6 @@
 Ctrl+T
 
-? Nothing claims Ctrl+T before the input method, which whykey could not verify.
-  What those layers do with it is unknown.
+? Whykey found nothing that takes Ctrl+T, but could not check everything - press it: `whykey listen`
 
 Route
   1  Remapper      v  none detected
@@ -13,6 +12,4 @@ Route
   6  Multiplexer   -  not inspected
   7  Shell         -  not inspected
 
-Confidence  live query: no layer reported a binding.
-
-More  whykey ctrl+t -v  -  whykey listen
+More  whykey ctrl+t -v

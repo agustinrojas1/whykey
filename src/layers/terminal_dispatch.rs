@@ -54,6 +54,15 @@ impl TerminalAnalysis {
         }
     }
 
+    /// The bindings of the terminal `whykey <key>` would inspect, for
+    /// `whykey bindings`; `None` when the terminal is not one whykey reads.
+    pub fn binding_inventory() -> Option<Result<Vec<crate::layers::BindingRecord>, String>> {
+        if terminal_app::detected_name().is_some() {
+            return Some(terminal_app::binding_inventory());
+        }
+        ghostty::is_active().then(|| ghostty::Ghostty::default().binding_inventory())
+    }
+
     /// Terminal identity named by both text reports and schema context.
     pub fn identity() -> Option<&'static str> {
         crate::layers::terminal_identity()
