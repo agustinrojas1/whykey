@@ -273,6 +273,11 @@ pub fn current_with_environment(environment: &crate::environment::Environment) -
                 format!("detected terminal adapter: {name}")
             }),
         ),
+        implemented(
+            "editor.terminal-apps",
+            "editor",
+            "Vim, Helix, Kakoune and Micro keymaps are read for the queried key when one of them runs in the terminal; mode, context and plugins stay conditional",
+        ),
         available(
             "shell.runtime-snapshot",
             "shell",

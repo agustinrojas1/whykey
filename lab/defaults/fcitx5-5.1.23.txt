@@ -1,0 +1,27 @@
+# whykey default-bindings fixture; regenerate with tools/dump_defaults.py
+# program: fcitx5
+# version: 5.1.23
+# source: docker whykey-lab-wayland
+# command: dbus-run-session -- python3 -c 'import sys; exec(sys.stdin.read())'
+global/TriggerKeys	Control+space Zenkaku_Hankaku Hangul
+global/ActivateKeys	Hangul_Hanja
+global/DeactivateKeys	Hangul_Romaja
+global/AltTriggerKeys	Shift_L
+global/EnumerateForwardKeys	
+global/EnumerateBackwardKeys	
+global/EnumerateGroupForwardKeys	Super+space
+global/EnumerateGroupBackwardKeys	Shift+Super+space
+global/PrevPage	Up
+global/NextPage	Down
+global/PrevCandidate	Shift+Tab
+global/NextCandidate	Tab
+global/TogglePreedit	Control+Alt+P
+quickphrase/TriggerKey	Super+grave Super+semicolon
+clipboard/TriggerKey	Control+semicolon
+clipboard/PastePrimaryKey	
+unicode/TriggerKey	Control+Alt+Shift+U
+unicode/DirectUnicodeMode	Control+Shift+U
+imselector/TriggerKey	
+imselector/TriggerKeyLocal	
+imselector/SwitchKey	
+imselector/SwitchKeyLocal	

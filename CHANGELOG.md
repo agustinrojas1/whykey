@@ -28,8 +28,41 @@ mode, and one route order with the input method where the key meets it.
   `konsole-default-fullscreen`. The `terminals` lab environment gains a
   `term_sh` action that runs a command on the terminal's tty.
 
+### Changed
+
+- The "Supported environments" table in the README is generated from
+  `support-matrix.json` (`programs`), so it cannot claim more than the lab has
+  shown. ✅ means a lab scenario for that program matched exactly and nothing
+  weakens it; 🟡 that some scenarios pass only as honest uncertainty (PASS~,
+  now recorded per entry as `lab_tolerated`), only the X11 grab probe or a hand
+  check backs it, or a documented limit applies (a `partial` note citing
+  L-011/L-017); ⚪ that nothing does. Vim, Helix, Kakoune and Micro now have
+  their own matrix entry (`editor.terminal-apps`) and Neovim and Emacs are
+  credited through `cli.extensions`, so their lab scenarios count. Programs
+  moved from ✅ to 🟡: Cinnamon, Xfce, MATE, Openbox, AwesomeWM, Qtile,
+  XMonad, xbindkeys (grab-probe verdicts), GNOME, KDE Plasma, Wayfire, Fcitx5
+  and IBus (limits in L-011), Ghostty, Zellij, Niri, kmonad, input-remapper.
+  SUPPORT_MATRIX.md lists the same programs with their scenario counts.
+- README: the page now goes from the problem and the demo to one install line
+  (mise) and Quick start; the other install methods (Homebrew, distribution
+  packages, Cargo, release binaries) moved to "Other ways to install" near the
+  end. The claim about uncertainty no longer promises that whykey never guesses:
+  it says where whykey reports "uncertain" or "unknown", and that it can still
+  be wrong, with pointers to the support table and the defect register.
+- `PLAN_VISUAL.md` moved to `docs/internal/`, which the published crate
+  excludes.
+
 ### Fixed
 
+- The default-binding tables whykey embeds are checked against the programs
+  themselves. `tools/dump_defaults.py` dumps bash Readline (`bind -p`), kitty
+  (`definition.iter_all_maps()`), foot (its packaged `foot.ini`), Ghostty
+  (`+list-keybinds --default`) and Fcitx5 (its D-Bus configuration) to
+  `lab/defaults/<program>-<version>.txt`, and unit tests compare each embedded
+  table with its fixture (no Docker needed to run them). That found Fcitx5's
+  `ActivateKeys`/`DeactivateKeys` defaults (Hangul_Hanja/Hangul_Romaja) missing
+  and five rows in Ghostty's performable list that are not defaults. Alacritty
+  and Konsole cannot list their defaults, and their table docs say so.
 - "To confirm" targets the layer the verdict is about: an uncertain input
   method, terminal or TTY suggests `whykey listen`, and `shell-init` is
   suggested only when the open question is the shell's (`whykey ctrl+alt+p` on

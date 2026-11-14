@@ -12,13 +12,26 @@
 //! listed. A newer or older release may differ, which is why every match found
 //! here carries the `Default` evidence tier.
 //!
-//! * kitty 0.50.0: `kitty/options/definition.py` (`map(...)` entries)
+//! * kitty 0.50.0: `kitty/options/definition.py` (`map(...)` entries).
+//!   Checked against the binary's own `definition.iter_all_maps()`
+//!   (`lab/defaults/kitty-*.txt`, `python3 tools/dump_defaults.py dump kitty`).
+//!   The lab image carries kitty 0.47.1, not 0.50.0, so the check proves the
+//!   table is a faithful 0.47.1 default set; a difference introduced by
+//!   0.48 to 0.50 would need that binary in the lab.
 //! * Alacritty 0.17.0: `alacritty/src/config/bindings.rs` (`default_key_bindings`,
-//!   `common_keybindings`)
-//! * foot 1.28.0: `config.c` (`add_default_key_bindings`) and `foot.ini(5)`
+//!   `common_keybindings`). Not checked against the binary: Alacritty has no
+//!   command that lists its built-in bindings (they are compiled in; `migrate`
+//!   and `--print-events` do not print them), so this table is the one that
+//!   can drift unseen.
+//! * foot 1.28.0: `config.c` (`add_default_key_bindings`) and `foot.ini(5)`.
+//!   Checked against the `[key-bindings]` block of the `foot.ini` that the
+//!   1.28.0 package installs (`lab/defaults/foot-*.txt`, dumped with `--source
+//!   host`: the lab image has foot 1.27.0).
 //! * Konsole 26.08.3: `MainWindow.cpp`, `ViewManager.cpp` and
 //!   `SessionController.cpp` (`setDefaultShortcut`, where `Konsole::ACCEL` is
-//!   Ctrl+Shift on Linux)
+//!   Ctrl+Shift on Linux). Not checked against the binary: the shortcuts are
+//!   set in C++, there is no listing command and Konsole does not start
+//!   without a display.
 
 use super::{Binding, TerminalKind};
 use crate::key::KeyCombo;
@@ -50,10 +63,10 @@ const KITTY: &[(&str, &str)] = &[
     ("kitty_mod+s", "paste_from_selection"),
     ("shift+insert", "paste_from_selection"),
     ("kitty_mod+o", "pass_selection_to_program"),
-    ("kitty_mod+up", "scroll_line_up"),
-    ("kitty_mod+k", "scroll_line_up"),
-    ("kitty_mod+down", "scroll_line_down"),
-    ("kitty_mod+j", "scroll_line_down"),
+    ("kitty_mod+up", "scroll_line_up smooth"),
+    ("kitty_mod+k", "scroll_line_up smooth"),
+    ("kitty_mod+down", "scroll_line_down smooth"),
+    ("kitty_mod+j", "scroll_line_down smooth"),
     ("kitty_mod+page_up", "scroll_page_up"),
     ("kitty_mod+page_down", "scroll_page_down"),
     ("kitty_mod+home", "scroll_home"),
@@ -322,6 +335,72 @@ mod tests {
 
     /// Every row must parse: a row that does not is silently absent from the
     /// answer, which is the failure these tables exist to prevent.
+    fn own(rows: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
+        rows.collect()
+    }
+
+    /// The foot table is the `[key-bindings]` defaults of the real foot.
+    #[test]
+    fn foot_defaults_equal_the_dump_of_the_real_foot() {
+        let Some(fixture) = crate::defaults_fixtures::load("foot") else {
+            return;
+        };
+        assert_eq!(fixture.version, FOOT_VERSION);
+        let embedded = own(FOOT
+            .iter()
+            .map(|(action, keys)| ((*action).to_owned(), keys.join(" "))));
+        crate::defaults_fixtures::assert_same_rows("foot defaults", &embedded, &fixture);
+    }
+
+    /// The kitty table is the binary's `map` defaults without the macOS keys
+    /// (`cmd`); the multi-key defaults are the two `key_sequence_prefix` rows,
+    /// whose description lists the continuations.
+    #[test]
+    fn kitty_defaults_equal_the_dump_of_the_real_kitty() {
+        let Some(fixture) = crate::defaults_fixtures::load("kitty") else {
+            return;
+        };
+        let linux = |key: &str| !key.split('+').any(|part| part == "cmd");
+        let (sequences, singles): (Vec<_>, Vec<_>) = fixture
+            .rows
+            .iter()
+            .filter(|(key, _)| linux(key))
+            .cloned()
+            .partition(|(key, _)| key.contains('>'));
+        let (prefixes, plain): (Vec<_>, Vec<_>) = KITTY
+            .iter()
+            .map(|(key, action)| ((*key).to_owned(), (*action).to_owned()))
+            .partition(|(_, action)| action.starts_with("key_sequence_prefix"));
+        let single_fixture = crate::defaults_fixtures::Fixture {
+            version: fixture.version.clone(),
+            rows: singles,
+        };
+        crate::defaults_fixtures::assert_same_rows("kitty defaults", &plain, &single_fixture);
+
+        // Every continuation the binary has is named by its prefix row, and
+        // the prefix rows name nothing else.
+        let continuation = |key: &str| {
+            let (first, rest) = key.split_once('>').unwrap();
+            (
+                first.to_owned(),
+                format!("{}>{rest}", first.rsplit('+').next().unwrap()),
+            )
+        };
+        let mut real: Vec<_> = sequences.iter().map(|(key, _)| continuation(key)).collect();
+        let mut named = Vec::new();
+        for (prefix, description) in &prefixes {
+            let listed = description
+                .split_once(": ")
+                .unwrap()
+                .1
+                .trim_end_matches(')');
+            named.extend(listed.split(", ").map(|c| (prefix.clone(), c.to_owned())));
+        }
+        real.sort();
+        named.sort();
+        assert_eq!(named, real, "kitty key_sequence_prefix rows vs the binary");
+    }
+
     #[test]
     fn every_default_row_parses_to_a_key() {
         assert_eq!(kitty("ctrl+shift").len(), KITTY.len());
