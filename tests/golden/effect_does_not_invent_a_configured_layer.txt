@@ -6,11 +6,13 @@ Ctrl+T
 Route
   1  Remapper      v  none detected
   2  Compositor    -  not inspected
-  3  Kitty         v  no Kitty binding
+  3  Kitty         v  no Kitty binding                                live query
   4  Input method  ?  an active input method may transform this input before
                       text is committed
   5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected
   7  Shell         -  not inspected
+
+Confidence  live query: no layer reported a binding.
 
 More  whykey ctrl+t -v  -  whykey listen

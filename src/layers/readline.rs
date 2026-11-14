@@ -2,8 +2,8 @@ use crate::recording::PathInputs;
 use std::path::{Path, PathBuf};
 
 use crate::layers::{
-    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, SourceLocation,
-    TerminalInput, UncertaintyReason, format_bytes, terminal,
+    BindingEvidence, BindingScope, Checked, EvidenceTier, LayerId, LayerResult, Outcome,
+    SourceLocation, TerminalInput, UncertaintyReason, format_bytes, terminal,
 };
 
 const LAYER: &str = "Bash / Readline";
@@ -390,8 +390,18 @@ fn render(keymap: &Keymap, pending: &[u8], last: &TerminalInput) -> LayerResult 
         details.push(alias.into());
     }
     if keymap.origin == Origin::Snapshot {
-        return LayerResult::new(LAYER, LayerId::Shell, outcome, summary, details)
-            .with_optional_tier(tier);
+        return LayerResult::decided(
+            LAYER,
+            LayerId::Shell,
+            outcome,
+            Checked::new(
+                tier.unwrap_or(EvidenceTier::LiveQuery),
+                ["the live bash keymap (`bind -p` snapshot from shell-init)"],
+            ),
+            summary,
+            details,
+        )
+        .with_optional_tier(tier);
     }
     // Without the live `bind` snapshot, startup files can rebind any key
     // (fzf binds \C-r and \C-t with `bind -x`), so no answer is definitive.

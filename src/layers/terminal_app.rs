@@ -4,7 +4,9 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput, format_bytes};
+use crate::layers::{
+    Checked, EvidenceTier, LayerId, LayerResult, Outcome, TerminalInput, format_bytes,
+};
 use crate::util::unquote;
 
 mod defaults;
@@ -239,6 +241,7 @@ fn inspect_loaded(kind: TerminalKind, key: &KeyCombo, loaded: &Loaded) -> LayerR
         }
         if layer.outcome == Outcome::Pass && !loaded.caveats.is_empty() {
             layer.outcome = Outcome::UncertainContinues;
+            layer.checked = None;
             layer.summary = format!("no {kind} binding found, but {}", loaded.caveats[0]);
             layer.details.extend(loaded.caveats.iter().skip(1).cloned());
         }
@@ -247,13 +250,31 @@ fn inspect_loaded(kind: TerminalKind, key: &KeyCombo, loaded: &Loaded) -> LayerR
         } else {
             EvidenceTier::Default
         };
-        return layer.with_tier(tier);
+        return with_default_table(layer.with_tier(tier), kind);
     };
     let tier = match binding.origin {
         Origin::Default => EvidenceTier::Default,
         Origin::Config => loaded.tier,
     };
-    layer.with_tier(tier)
+    with_default_table(layer.with_tier(tier), kind)
+}
+
+/// A pass also rests on the built-in default bindings the answer was
+/// resolved against.
+fn with_default_table(mut layer: LayerResult, kind: TerminalKind) -> LayerResult {
+    if let (Some(checked), Some(version)) = (&mut layer.checked, defaults::version(kind)) {
+        checked
+            .sources
+            .push(format!("{kind} {version} default bindings"));
+    }
+    layer
+}
+
+/// What a pass from the bindings read from `source` rests on. The tier is a
+/// placeholder: [`inspect_loaded`] sets the real one and names the built-in
+/// default table as a second source.
+fn checked(source: &str) -> Checked {
+    Checked::new(EvidenceTier::ConfigFile, [source])
 }
 
 fn resolve_bindings(
@@ -267,23 +288,23 @@ fn resolve_bindings(
         .rev()
         .find(|binding| &binding.trigger == key)
     else {
-        return LayerResult::new(
+        return LayerResult::pass(
             kind.layer_name(),
             LayerId::Terminal,
-            Outcome::Pass,
             format!("no {kind} binding; forwarded to the terminal input"),
             vec![source.into()],
+            checked(source),
         );
     };
 
     let mut details = vec![source.into(), format!("binding: {}", binding.description)];
     if binding.unmaps {
-        return LayerResult::new(
+        return LayerResult::pass(
             kind.layer_name(),
             LayerId::Terminal,
-            Outcome::Pass,
             format!("{kind} configuration unmaps the key; forwarded to the terminal input"),
             details,
+            checked(source),
         );
     }
     if kind == TerminalKind::WezTerm
@@ -318,10 +339,11 @@ fn resolve_bindings(
                 format!("{kind} binding rewrites the key to a sequence for the PTY"),
             )
         };
-        return LayerResult::new(
+        return LayerResult::decided(
             kind.layer_name(),
             LayerId::Terminal,
             outcome,
+            checked(source),
             summary,
             details,
         );

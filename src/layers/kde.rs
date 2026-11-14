@@ -12,8 +12,8 @@ use std::process::Command;
 
 use crate::key::{KeyCombo, modifier_mask, normalize_key_str};
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome,
-    SourceLocation, UncertaintyReason,
+    BindingEvidence, BindingRecord, BindingScope, Checked, EvidenceTier, LayerId, LayerResult,
+    Outcome, SourceLocation, UncertaintyReason,
 };
 
 const LAYER: &str = "KDE Plasma";
@@ -138,6 +138,7 @@ impl Kde {
                     "Qt key sequences cannot express this key or modifier, so kglobalaccel cannot bind it"
                         .into(),
                 ],
+                Checked::new(EvidenceTier::Default, ["Qt key sequence encoding"]),
             );
         };
         match runtime_matches(&codes) {
@@ -215,20 +216,20 @@ fn inspect_alone(key: &KeyCombo, kwinrc: Result<Option<(PathBuf, String)>, Strin
                 LayerId::Compositor,
                 format!("KWin has no modifier-only shortcut for {shown}"),
                 vec!["KWin's [ModifierOnlyShortcuts] covers Shift, Control, Alt and Meta".into()],
+                Checked::new(EvidenceTier::Default, ["KWin [ModifierOnlyShortcuts] keys"]),
             );
         }
     };
     let (path, content) = match kwinrc {
         Ok(Some(found)) => found,
         Ok(None) => {
-            return LayerResult::new(
+            return LayerResult::pass(
                 LAYER,
                 LayerId::Compositor,
-                Outcome::Pass,
                 format!("no modifier-only shortcut configured for {shown}"),
                 vec!["kwinrc was not found; KWin then defines no [ModifierOnlyShortcuts]".into()],
-            )
-            .with_tier(EvidenceTier::ConfigFile);
+                Checked::new(EvidenceTier::ConfigFile, ["kwinrc (not present)"]),
+            );
         }
         Err(error) => {
             return LayerResult::unavailable(
@@ -248,8 +249,11 @@ fn inspect_alone(key: &KeyCombo, kwinrc: Result<Option<(PathBuf, String)>, Strin
             LayerId::Compositor,
             format!("no modifier-only shortcut configured for {shown}"),
             details,
-        )
-        .with_tier(EvidenceTier::ConfigFile);
+            Checked::new(
+                EvidenceTier::ConfigFile,
+                [format!("{} [ModifierOnlyShortcuts]", path.display())],
+            ),
+        );
     };
     let fields: Vec<&str> = value.split(',').map(str::trim).collect();
     let action = match fields.as_slice() {
@@ -339,6 +343,15 @@ fn runtime_matches(codes: &[i32]) -> Result<Vec<RuntimeMatch>, String> {
     Ok(matches)
 }
 
+fn kglobalaccel_checked() -> Checked {
+    Checked::new(
+        EvidenceTier::LiveQuery,
+        [format!(
+            "kglobalaccel D-Bus ({SERVICE} globalShortcutsByKey)"
+        )],
+    )
+}
+
 fn inspect_runtime(
     matches: &[RuntimeMatch],
     wayland_owner: Option<&str>,
@@ -371,8 +384,8 @@ fn inspect_runtime(
                 LayerId::Compositor,
                 "KDE global shortcut is registered, but KWin does not read Wayland keys",
                 details,
-            )
-            .with_tier(EvidenceTier::LiveQuery);
+                kglobalaccel_checked(),
+            );
         }
     }
     let Some(active) = matches.iter().find(|found| found.active) else {
@@ -385,8 +398,8 @@ fn inspect_runtime(
                 "KDE global shortcut registered but inactive"
             },
             details,
-        )
-        .with_tier(EvidenceTier::LiveQuery);
+            kglobalaccel_checked(),
+        );
     };
     details.push(
         "kglobalaccel reports activity per component (isActive); a single action its application released while others stay registered still looks active"

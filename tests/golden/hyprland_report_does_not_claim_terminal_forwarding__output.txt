@@ -39,4 +39,5 @@ Technical evidence
        summary: active binding found
        binding
          binding: __lua 285; Herdr
+       checked (live query): test fixture
 

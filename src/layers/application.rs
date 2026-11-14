@@ -4,7 +4,8 @@ use std::process::Command;
 use crate::command;
 use crate::key::KeyCombo;
 use crate::layers::{
-    BindingEvidence, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome, UncertaintyReason,
+    BindingEvidence, BindingScope, Checked, EvidenceTier, LayerId, LayerResult, Outcome,
+    UncertaintyReason,
 };
 
 const MAX_ANCESTORS: usize = 16;
@@ -37,24 +38,30 @@ fn inspect_for_pid_with_source_inner(
             details.push(format!("target selection source: {source}"));
         }
         details.push("selected target is a shell".into());
-        return LayerResult::new(
+        return LayerResult::pass(
             "Interactive application",
             LayerId::Application,
-            Outcome::Pass,
             "selected process is a shell",
             details,
+            Checked::new(
+                EvidenceTier::LiveQuery,
+                [format!("process {target_pid} (/proc)")],
+            ),
         );
     }
 
     let Some((name, command, application_pid)) = interactive_ancestor_from(target_pid) else {
         if !is_explicit_target {
             let details = vec![format!("target pid: {target_pid}")];
-            return LayerResult::new(
+            return LayerResult::pass(
                 "Interactive application",
                 LayerId::Application,
-                Outcome::Pass,
                 "no known interactive editor ancestor detected for target process",
                 details,
+                Checked::new(
+                    EvidenceTier::LiveQuery,
+                    [format!("process ancestry of {target_pid} (/proc)")],
+                ),
             );
         }
         let Some((_parent, command)) = process_info(target_pid) else {

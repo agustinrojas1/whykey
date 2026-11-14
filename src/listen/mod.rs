@@ -1641,19 +1641,19 @@ xkb_symbols "pc" {
         // whykey's own: an unbound key keeps its pass verdict and the layers
         // below, and only gains a detail about the hold.
         let mut results = vec![
-            LayerResult::new(
+            LayerResult::pass(
                 "Hyprland",
                 LayerId::Compositor,
-                Outcome::Pass,
                 "no active binding found",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
-            LayerResult::new(
+            LayerResult::pass(
                 "Ghostty",
                 LayerId::Terminal,
-                Outcome::Pass,
                 "not applicable to the current terminal",
                 vec![],
+                crate::layers::Checked::fixture(),
             ),
         ];
         super::output::note_suppressed_hold(&mut results);

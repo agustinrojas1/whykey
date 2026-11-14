@@ -11,8 +11,8 @@ use std::process::Command;
 
 use crate::key::{KeyCombo, normalize_key_str};
 use crate::layers::{
-    BindingEvidence, BindingRecord, BindingScope, EvidenceTier, LayerId, LayerResult, Outcome,
-    SourceLocation, UncertaintyReason,
+    BindingEvidence, BindingRecord, BindingScope, Checked, EvidenceTier, LayerId, LayerResult,
+    Outcome, SourceLocation, UncertaintyReason,
 };
 
 const DEFAULT_MODE: &str = "default";
@@ -1154,9 +1154,22 @@ pub(crate) fn inspect(
 
     // The running compositor answered get_config, whether or not its binding
     // mode could be read.
-    let result = LayerResult::new(family.layer, LayerId::Compositor, outcome, summary, details)
-        .with_verbose_details(parsed.notes.clone())
-        .with_tier(EvidenceTier::LiveQuery);
+    let result = LayerResult::decided(
+        family.layer,
+        LayerId::Compositor,
+        outcome,
+        Checked::new(
+            EvidenceTier::LiveQuery,
+            [format!(
+                "{} IPC get_config (bindsym/bindcode lines)",
+                family.layer
+            )],
+        ),
+        summary,
+        details,
+    )
+    .with_verbose_details(parsed.notes.clone())
+    .with_tier(EvidenceTier::LiveQuery);
     match primary {
         Some(binding) => {
             let mut evidence = BindingEvidence::action(

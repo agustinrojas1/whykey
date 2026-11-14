@@ -12,6 +12,8 @@ Route
   5  TTY driver    -  not inspected
   6  Multiplexer   -  not inspected
   7  Readline      v  not bound in the current Readline keymap; Readline rings
-                      the bell and inserts "A"
+                      the bell and inserts "A"                        live query
+
+Confidence  live query: no layer reported a binding.
 
 More  whykey ctrl+a -v

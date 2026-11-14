@@ -2,7 +2,7 @@ use std::process::Command;
 
 use crate::command;
 use crate::key::KeyCombo;
-use crate::layers::{BindingRecord, EvidenceTier, LayerId, LayerResult, Outcome};
+use crate::layers::{BindingRecord, Checked, EvidenceTier, LayerId, LayerResult, Outcome};
 
 /// One normalized GSettings shortcut: the key plus the exact inspect detail
 /// line the owning adapter formats for it at load time.
@@ -59,8 +59,13 @@ pub(crate) fn inspect(
                 .iter()
                 .map(|line| line.to_string())
                 .collect(),
-        )
-        .with_tier(EvidenceTier::LiveQuery);
+            Checked::new(
+                EvidenceTier::LiveQuery,
+                meta.source_details
+                    .iter()
+                    .map(|line| line.trim_start_matches("source: ")),
+            ),
+        );
     }
     let mut details: Vec<String> = meta
         .source_details
