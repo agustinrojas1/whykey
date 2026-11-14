@@ -3,7 +3,7 @@
 %global __requires_exclude ^/usr/bin/python3$
 
 Name:           whykey
-Version:        2.5.0
+Version:        2.6.0
 Release:        1%{?dist}
 Summary:        Explain where a Linux key combination is handled
 License:        MIT AND (MIT OR Apache-2.0) AND (MIT OR Unlicense) AND Unicode-3.0
@@ -94,6 +94,9 @@ install -Dpm0644 support-matrix.json %{buildroot}%{_docdir}/%{name}/support-matr
 %doc %{_docdir}/%{name}/support-matrix.json
 
 %changelog
+* Sat Nov 14 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.6.0-1
+- Evidence-backed passes, listen says where a key died, clearer report
+
 * Fri Nov 13 2026 Agustín Rojas <agustinrojas1@users.noreply.github.com> - 2.5.0-1
 - No more confident passes for unchecked sources; Fcitx5/IBus hotkeys,
   terminal defaults, GNOME extensions, swhkd, tmux copy mode
