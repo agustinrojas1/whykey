@@ -157,6 +157,7 @@ fn delivered_key(event: &ProbeEvent, event_type: KeyEventType) -> ObservedKey {
     let chord = event.modmask & !LOCK_BITS;
     ObservedKey {
         disposition: CaptureDisposition::ObservedOnly,
+        onward: None,
         combo: KeyCombo::from_parts(chord, &key),
         raw: Vec::new(),
         raw_display: Some(format!(
@@ -186,6 +187,7 @@ fn withheld_key(modmask: u32) -> ObservedKey {
     let names = modifier_names(modmask);
     ObservedKey {
         disposition: CaptureDisposition::NotDelivered,
+        onward: None,
         combo: KeyCombo::from_parts(modmask, ""),
         raw: Vec::new(),
         raw_display: Some(format!(

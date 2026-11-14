@@ -115,3 +115,37 @@ root window and the focused window's path (core and XInput2 passive grabs; activ
 
 Portals and extension capture can be added without changing report routing
 or the fallbacks.
+
+## Bisecting capture
+
+One backend leads a capture, but a key's route has more than one place where
+it can be seen. `src/listen/bisect.rs` reads a second point beside the leader
+so a key that dies is located instead of timing out:
+
+| Leader | Also watched | Verdict when the second point never sees the key |
+| --- | --- | --- |
+| Hyprland hook | the terminal's tty (always); evdev (when readable) | "taken between Hyprland and the terminal"; evdev saw it and the hook did not: "between the keyboard and Hyprland" |
+| Terminal | evdev | "taken between the keyboard and the terminal" |
+| Probe window | evdev | "taken between the keyboard and the probe window", or a confirmed lone modifier tap |
+
+Rules that keep the verdict honest:
+
+- Everything is read-only: the tty is read in the raw mode `listen` already
+  holds, evdev devices are opened read-only and skipped silently when they
+  cannot be opened, and the compositor hook is restored exactly as before.
+- A missing key is only a verdict after a grace window (300 ms for the
+  compositor after evdev, 400 ms for the terminal after the compositor), and
+  for the terminal only when the terminal running whykey is the focused
+  window. A route that already has a consumer for the key (a Hyprland
+  binding) is confirmed instead; nothing else is blamed.
+- Backends that do not report every key (Sway reports bound keys only) and
+  `--suppress` (which holds the key on purpose) are not bisected.
+- The result is `ObservedKey::onward` (`Onward { point, name, reached,
+  waited_ms, candidates }`), serialized only when a second point was watched.
+  `ObservedKey::source` stays the last point that saw the key. Candidates
+  come from the static route (the layers between the two points); the layers
+  after the last candidate are dropped from the route because the key never
+  reached them.
+- A key that arrives marks the layers it passed `observed` and turns an
+  uncertain or consuming finding on them into a forwarded one.
+

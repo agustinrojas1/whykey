@@ -8,6 +8,7 @@ use crate::schema;
 use crate::style::{self, RenderOptions};
 use serde::Serialize;
 
+mod lost;
 mod view;
 
 #[derive(Serialize)]
@@ -162,8 +163,7 @@ pub fn render_ndjson(
         },
         assessment: NdjsonAssessment {
             confidence: observation_confidence(layers, observed),
-            terminal_reached: observed
-                .is_some_and(|observation| observation.source.confirms_terminal()),
+            terminal_reached: observed.is_some_and(|observation| observation.reached_terminal()),
         },
         observation: observed.and_then(observation_value_v2),
         path: layers
@@ -213,7 +213,7 @@ fn render_json_v2(
         "input": input,
         "assessment": {
             "confidence": observation_confidence(layers, observed),
-            "terminal_reached": observed.is_some_and(|observation| observation.source.confirms_terminal()),
+            "terminal_reached": observed.is_some_and(|observation| observation.reached_terminal()),
         },
         "observation": observed.and_then(observation_value_v2),
         "path": schema::path(layers, observed),
@@ -249,6 +249,12 @@ fn observation_value_v2(observed: &ObservedKey) -> Option<serde_json::Value> {
         }
     }
     Some(value)
+}
+
+/// Whether a static report ends unsure: the verdict is a guess a capture
+/// could settle. `whykey KEY` offers to capture the key then.
+pub fn needs_confirmation(key: &KeyCombo, layers: &[LayerResult]) -> bool {
+    view::is_unsure(key, layers)
 }
 
 pub fn render(key: &KeyCombo, layers: &[LayerResult], verbose: bool) -> String {
@@ -299,8 +305,12 @@ fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> Strin
     output.push_str(&options.bold(format!("{modifiers}+<key not delivered>")));
     output.push_str(&options.accent(" · Listen"));
     output.push_str("\n\n");
-    let diagnosis = format!(
+    let confirmed = lost::withheld_text(observed);
+    let diagnosis = confirmed.as_ref().map_or_else(
+        || format!(
         "{modifiers} was pressed and released and no other key reached this window: either the key you pressed with {modifiers} was consumed by the compositor/desktop or an input method, or {modifiers} was pressed alone (or with the mouse)."
+        ),
+        |(diagnosis, _)| diagnosis.clone(),
     );
     for line in style::wrap_hanging(&diagnosis, options.width, "", "  ") {
         output.push_str(&options.bold(line));
@@ -317,8 +327,11 @@ fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> Strin
     output.push('\n');
     output.push_str(&options.accent("Effect"));
     output.push('\n');
-    let effect = format!(
+    let effect = confirmed.map_or_else(
+        || format!(
         "Only modifier changes reached the focused probe window. From inside the window, a key consumed above it and {modifiers} pressed alone or with the mouse look the same."
+        ),
+        |(_, effect)| effect,
     );
     for line in style::wrap_hanging(&effect, options.width, "  ", "  ") {
         output.push_str(&line);
@@ -1874,7 +1887,7 @@ fn observation_confidence(layers: &[LayerResult], observed: Option<&ObservedKey>
     }
     confidence_label(
         layers,
-        observed.is_some_and(|observation| observation.source.confirms_terminal()),
+        observed.is_some_and(|observation| observation.reached_terminal()),
     )
 }
 
@@ -2216,6 +2229,7 @@ mod tests {
             alternate_key: None,
             source: crate::listen::CaptureSource::Terminal,
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
+            onward: None,
         };
         let layers = [
             LayerResult::new(
@@ -2267,6 +2281,7 @@ mod tests {
                 path: "/dev/input/event0".into(),
             },
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
+            onward: None,
         };
         let layers = [LayerResult::pass(
             "Hyprland",
@@ -2304,6 +2319,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::PassedThrough,
+            onward: None,
         };
         let layers = [LayerResult::pass(
             "Hyprland",
@@ -2362,6 +2378,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2399,6 +2416,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::pass(
             "Hyprland",
@@ -2438,6 +2456,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::new(
             "Hyprland",
@@ -2479,6 +2498,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let universal = BindingEvidence {
             scope: crate::layers::BindingScope::Submap("default".into()),
@@ -2745,6 +2765,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         }
     }
 
@@ -2821,6 +2842,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::Suppressed,
+            onward: None,
         };
         let layers = [LayerResult::pass(
             "Hyprland",
@@ -3166,6 +3188,7 @@ mod tests {
                 backend: "Hyprland".into(),
             },
             disposition: crate::listen::CaptureDisposition::PassedThrough,
+            onward: None,
         };
         let layer = LayerResult::new(
             "Hyprland",
@@ -3747,6 +3770,7 @@ mod tests {
             alternate_key: None,
             source: crate::listen::CaptureSource::ProbeWindow,
             disposition: crate::listen::CaptureDisposition::ObservedOnly,
+            onward: None,
         }
     }
 

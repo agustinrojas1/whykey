@@ -168,6 +168,7 @@ fn observed_binding(
         .to_owned();
     Ok(Some(ObservedKey {
         disposition: CaptureDisposition::PassedThrough,
+        onward: None,
         combo,
         raw: Vec::new(),
         raw_display: Some(format!("Sway binding event: {action}")),

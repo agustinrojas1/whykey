@@ -148,6 +148,8 @@ pub(crate) struct InspectArguments {
     pub target_pid: Option<u32>,
     pub focused: bool,
     pub instance: Option<String>,
+    /// `--no-prompt`: never offer to capture the key after an uncertain report.
+    pub no_prompt: bool,
 }
 
 pub(crate) fn parse_inspect_arguments(
@@ -158,10 +160,12 @@ pub(crate) fn parse_inspect_arguments(
     let mut focused = false;
     let mut instance = None;
     let mut alone = false;
+    let mut no_prompt = false;
     let mut arguments = arguments.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--alone" => alone = true,
+            "--no-prompt" => no_prompt = true,
             "--pid" => {
                 let value = take_value(&mut arguments, "--pid", "a positive process id")?;
                 let pid = match value.parse::<u32>() {
@@ -230,6 +234,7 @@ pub(crate) fn parse_inspect_arguments(
         target_pid,
         focused,
         instance,
+        no_prompt,
     })
 }
 
@@ -613,7 +618,11 @@ pub(crate) fn dispatch(
     }
     let rest: Vec<String> = arguments.collect();
     alone |= rest.iter().any(|extra| extra == "--alone");
-    if rest.iter().any(|extra| extra != "--alone") {
+    let no_prompt = rest.iter().any(|extra| extra == "--no-prompt");
+    if rest
+        .iter()
+        .any(|extra| extra != "--alone" && extra != "--no-prompt")
+    {
         eprintln!(
             "error: expected one key combination\n\n{}",
             help::help_text()
@@ -653,6 +662,16 @@ pub(crate) fn dispatch(
                 whykey::style::RenderOptions::cli(color, verbose),
                 key_symbol.as_deref(),
             )
+        );
+    }
+    if unavailable == ExitCode::SUCCESS {
+        crate::offer::offer_capture(
+            &whykey::key::KeySequence::single(key),
+            &[results],
+            crate::offer::CaptureOffer::detect(no_prompt, json),
+            color,
+            verbose,
+            schema_version,
         );
     }
     unavailable
@@ -989,6 +1008,10 @@ pub(crate) mod help {
             OptionValue::Text("ID"),
             "select a Hyprland instance explicitly",
         ),
+        OptionSpec::switch(
+            "--no-prompt",
+            "never offer to capture the key after an uncertain report",
+        ),
     ];
     const LISTEN_OPTIONS: &[OptionSpec] = &[
         OptionSpec::switch("--repeat", "keep listening").short("-r"),
@@ -1248,7 +1271,7 @@ pub(crate) mod help {
             let _ = writeln!(output, "  {}\n    {}", usage(command.name), command.summary);
         }
         output.push_str(
-            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey super --alone\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. --ascii (or a non-UTF-8 locale) replaces glyphs such as the route marks with ASCII. JSON, NDJSON, shell-init, and completion output are always plain.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
+            "\nExamples:\n  whykey ctrl+left\n  whykey ctrl+z\n  whykey super+c\n  whykey super --alone\n  whykey inspect ctrl+x ctrl+s\n\nHuman-readable reports lead with a diagnosis and keep the relevant evidence nearby. Add --verbose for the complete route, raw events, and configuration details. --color=auto is the default and respects NO_COLOR, non-TTY output, and TERM=dumb; --color=always and --color=never take precedence over those environment checks. --ascii (or a non-UTF-8 locale) replaces glyphs such as the route marks with ASCII. JSON, NDJSON, shell-init, and completion output are always plain.\n\nWhen the answer for a key is uncertain and stdin and stdout are terminals, whykey offers to capture the key so you can see where it stops; --no-prompt, WHYKEY_NO_PROMPT=1, and CI turn the offer off. --json never prompts.\n\nwhykey does not edit configuration or execute shortcuts. Native compositor listen supports Hyprland suppression and Hyprland/Sway pass-through-only capture; temporary compositor state is restored when capture ends.",
         );
         output
     }
