@@ -179,6 +179,7 @@ pub(crate) fn decode_bytes(bytes: Vec<u8>) -> Result<ObservedKey, io::Error> {
         alternate_key,
         source: CaptureSource::Terminal,
         disposition: CaptureDisposition::ObservedOnly,
+        onward: None,
     })
 }
 
