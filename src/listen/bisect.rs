@@ -300,6 +300,7 @@ pub(super) fn apply_reached(
         reached: true,
         waited_ms: None,
         candidates: Vec::new(),
+        seen_key: None,
     });
 }
 
@@ -371,6 +372,7 @@ pub(super) fn apply_lost(
             reached: false,
             waited_ms: Some(waited_ms),
             candidates: Vec::new(),
+            seen_key: None,
         });
         return;
     }
@@ -404,6 +406,7 @@ pub(super) fn apply_lost(
         reached: false,
         waited_ms: Some(waited_ms),
         candidates,
+        seen_key: None,
     });
 }
 
@@ -441,7 +444,17 @@ mod tests {
     }
 
     fn layer(id: LayerId, name: &'static str, outcome: Outcome) -> LayerResult {
-        LayerResult::new(name, id, outcome, format!("{name} summary"), Vec::new())
+        let summary = format!("{name} summary");
+        if outcome == Outcome::Pass {
+            return LayerResult::pass(
+                name,
+                id,
+                summary,
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            );
+        }
+        LayerResult::new(name, id, outcome, summary, Vec::new())
     }
 
     fn seen_by_hyprland() -> ObservedKey {

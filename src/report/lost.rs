@@ -77,6 +77,25 @@ pub(super) fn reached_text(key: &KeyCombo, observation: &ObservedKey) -> Option<
     })
 }
 
+/// A probe window that received only modifiers while the physical keyboard
+/// produced a key with them: the diagnosis and effect that replace the
+/// "consumed or a lone modifier tap" ambiguity.
+pub(super) fn withheld_text(observation: &ObservedKey) -> Option<(String, String)> {
+    let onward = onward(observation)?;
+    let key = onward.seen_key.as_deref()?;
+    let mut effect = "The physical keyboard produced the key, so this is a consumed key, not a lone modifier tap.".to_owned();
+    if !onward.candidates.is_empty() {
+        effect.push_str(&format!(
+            " Candidates above the window: {}.",
+            onward.candidates.join(", ")
+        ));
+    }
+    Some((
+        format!("{key} was pressed and never reached {}.", onward.name),
+        effect,
+    ))
+}
+
 /// A line for the observation when a later point was watched and the report
 /// is not the "taken between" verdict.
 pub(super) fn also_line(observation: &ObservedKey) -> Option<String> {
@@ -134,6 +153,15 @@ mod tests {
     use crate::listen::{CaptureDisposition, KeyEventType, WatchPoint};
 
     fn layer(id: LayerId, name: &'static str, outcome: Outcome, summary: &str) -> LayerResult {
+        if outcome == Outcome::Pass {
+            return LayerResult::pass(
+                name,
+                id,
+                summary,
+                Vec::new(),
+                crate::layers::Checked::fixture(),
+            );
+        }
         LayerResult::new(name, id, outcome, summary, Vec::new())
     }
 
@@ -165,6 +193,7 @@ mod tests {
             reached: false,
             waited_ms: Some(400),
             candidates: candidates.iter().map(|name| (*name).to_owned()).collect(),
+            seen_key: None,
         }
     }
 
@@ -220,6 +249,7 @@ mod tests {
             reached: true,
             waited_ms: None,
             candidates: Vec::new(),
+            seen_key: None,
         });
         let layers = [
             layer(LayerId::Compositor, "Hyprland", Outcome::Pass, "no binding"),
@@ -262,5 +292,28 @@ mod tests {
         let json = render_listen_json(&observation.combo, &lost_route(), Some(&observation), 2);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(value["observation"].get("onward").is_none());
+    }
+
+    #[test]
+    fn a_probe_window_that_only_got_modifiers_is_confirmed_by_the_keyboard() {
+        let mut observation = observed(Onward {
+            point: WatchPoint::ProbeWindow,
+            name: "the probe window".into(),
+            reached: false,
+            waited_ms: None,
+            candidates: vec!["Hyprland".into()],
+            seen_key: Some("Super+Return".into()),
+        });
+        observation.disposition = CaptureDisposition::NotDelivered;
+        let output = render_observed(&observation, &[], false);
+        let flat = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Super+Return was pressed and never reached the probe window."));
+        assert!(flat.contains("not a lone modifier tap"));
+        assert!(flat.contains("Candidates above the window: Hyprland."));
+        // Without the keyboard the report keeps its honest ambiguity.
+        observation.onward = None;
+        let plain = render_observed(&observation, &[], false);
+        assert!(plain.contains("or"), "{plain}");
+        assert!(!plain.contains("not a lone modifier tap"));
     }
 }

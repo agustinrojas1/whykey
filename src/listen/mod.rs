@@ -297,6 +297,10 @@ pub struct Onward {
     /// route already names a consumer.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<String>,
+    /// For a probe window that received only modifiers: the key the physical
+    /// keyboard produced with them, which the window never got.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seen_key: Option<String>,
 }
 
 impl Onward {

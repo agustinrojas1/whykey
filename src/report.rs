@@ -305,8 +305,12 @@ fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> Strin
     output.push_str(&options.bold(format!("{modifiers}+<key not delivered>")));
     output.push_str(&options.accent(" · Listen"));
     output.push_str("\n\n");
-    let diagnosis = format!(
+    let confirmed = lost::withheld_text(observed);
+    let diagnosis = confirmed.as_ref().map_or_else(
+        || format!(
         "{modifiers} was pressed and released and no other key reached this window: either the key you pressed with {modifiers} was consumed by the compositor/desktop or an input method, or {modifiers} was pressed alone (or with the mouse)."
+        ),
+        |(diagnosis, _)| diagnosis.clone(),
     );
     for line in style::wrap_hanging(&diagnosis, options.width, "", "  ") {
         output.push_str(&options.bold(line));
@@ -323,8 +327,11 @@ fn render_not_delivered(observed: &ObservedKey, options: RenderOptions) -> Strin
     output.push('\n');
     output.push_str(&options.accent("Effect"));
     output.push('\n');
-    let effect = format!(
+    let effect = confirmed.map_or_else(
+        || format!(
         "Only modifier changes reached the focused probe window. From inside the window, a key consumed above it and {modifiers} pressed alone or with the mouse look the same."
+        ),
+        |(_, effect)| effect,
     );
     for line in style::wrap_hanging(&effect, options.width, "  ", "  ") {
         output.push_str(&line);

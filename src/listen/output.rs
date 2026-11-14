@@ -942,23 +942,20 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
             .map_err(ListenError::Message)?;
         witness.drain();
         let mut lost_point = None;
+        let mut withheld_key = None;
         let observed = match (next, watch_point) {
             (Some(observed), Some(WatchPoint::ProbeWindow))
                 if observed.disposition == CaptureDisposition::NotDelivered =>
             {
                 // Only modifiers reached the window. The keyboard knows if a
                 // key was pressed with them: then it was taken above the
-                // window; otherwise this was a modifier tap.
-                match witness
+                // window; otherwise this was a modifier tap. The window's own
+                // observation stays the capture: the keyboard is evidence
+                // about it, never a delivery to the window.
+                withheld_key = witness
                     .press_since(armed_at)
-                    .map(|(_, press)| press.clone())
-                {
-                    Some(press) => {
-                        lost_point = watch_point;
-                        press
-                    }
-                    None => observed,
-                }
+                    .map(|(_, press)| press.clone());
+                observed
             }
             (Some(observed), _) => observed,
             (None, Some(WatchPoint::Terminal)) => {
@@ -994,6 +991,24 @@ pub(super) fn run_observed_loop<B: CaptureBackend>(
         } else {
             snapshot.inspect(&observed, terminal_termios.as_ref())
         };
+        if let Some(press) = withheld_key {
+            // Name the candidates from the key the keyboard produced, and
+            // keep it on the not-delivered observation as what was taken.
+            let mut keyed = press.clone();
+            results = snapshot.inspect(&keyed, terminal_termios.as_ref());
+            let name = point_name(&results, WatchPoint::ProbeWindow, "the compositor");
+            apply_lost(
+                &mut results,
+                &mut keyed,
+                WatchPoint::ProbeWindow,
+                name,
+                TERMINAL_GRACE,
+            );
+            observed.onward = keyed.onward.map(|onward| Onward {
+                seen_key: Some(crate::style::human_key(&press.combo)),
+                ..onward
+            });
+        }
         if let Some(point) = lost_point {
             let name = point_name(&results, point, "the compositor");
             if !judge_lost(
